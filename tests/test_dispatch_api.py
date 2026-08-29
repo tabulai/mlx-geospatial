@@ -1,0 +1,429 @@
+"""Deep tests for backend dispatch (_dispatch.py) and the public API surface.
+
+Covers:
+- ``resolve_backend``: auto threshold, explicit pass-through, env var
+  precedence (requested= wins over ``MLX_SPATIAL_BACKEND``), invalid values.
+- End-to-end backend routing: env-forced CPU on a workload that would
+  otherwise auto-dispatch to the GPU, auto-CPU below the threshold, explicit
+  GPU on tiny workloads. Routing is observed by monkeypatching the kernel
+  entry point ``mlx_spatial.join.pip_pairs`` at test time (no library code is
+  modified on disk).
+- ``contains_matrix`` chunking equivalence (tiny chunk_bytes == default,
+  bitwise).
+- Degenerate sizes: zero points, zero candidate pairs, a single point.
+- Public API: ``__all__`` resolves with docstrings, ``__version__`` matches
+  pyproject.toml, clean import in a fresh subprocess, GPU_MIN_CANDIDATE_PAIRS
+  sanity.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+import numpy as np
+import mlx.core as mx
+import pytest
+import shapely
+
+import mlx_spatial as ms
+import mlx_spatial._dispatch as _dispatch
+from mlx_spatial._dispatch import (
+    GPU_MIN_CANDIDATE_PAIRS,
+    metal_available,
+    resolve_backend,
+)
+from mlx_spatial._pip import pip_dense, pip_pairs
+
+from conftest import make_convex_polygons, make_grid_polygons, reference_assign
+
+requires_metal = pytest.mark.skipif(
+    not metal_available(), reason="Metal GPU not available"
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def _clean_backend_env(monkeypatch):
+    """Isolate every test from an ambient MLX_SPATIAL_BACKEND setting."""
+    monkeypatch.delenv("MLX_SPATIAL_BACKEND", raising=False)
+
+
+@pytest.fixture(scope="module")
+def grid_workload():
+    """8x8 unit-square tiling + 50k strictly-interior points.
+
+    Enough candidate pairs (~3.5 per point) to exceed GPU_MIN_CANDIDATE_PAIRS,
+    so 'auto' would pick the GPU. Points stay >= 0.05 from every edge --
+    far outside the fp32 tolerance band -- so GPU and CPU answers are both
+    exactly the golden STRtree assignment.
+    """
+    rng = np.random.default_rng(987654321)
+    polys = make_grid_polygons(8, 8, cell=1.0)
+    polyset = ms.PolygonSet(polys)
+    index = ms.GridIndex(polyset)
+    n = 50_000
+    ij = rng.integers(0, 8, size=(n, 2)).astype(np.float64)
+    offs = rng.uniform(0.05, 0.95, size=(n, 2))
+    pts = ij + offs
+    ref = reference_assign(pts, polys)
+    return polys, polyset, index, pts, ref
+
+
+# ---------------------------------------------------------------------------
+# resolve_backend unit behavior
+# ---------------------------------------------------------------------------
+
+
+@requires_metal
+def test_auto_threshold_boundary():
+    """'auto' switches to GPU exactly at GPU_MIN_CANDIDATE_PAIRS (>= rule)."""
+    assert resolve_backend(None, GPU_MIN_CANDIDATE_PAIRS) == "gpu"
+    assert resolve_backend(None, GPU_MIN_CANDIDATE_PAIRS - 1) == "cpu"
+    assert resolve_backend(None, 0) == "cpu"
+    assert resolve_backend("auto", GPU_MIN_CANDIDATE_PAIRS + 1) == "gpu"
+    assert resolve_backend("auto", 1) == "cpu"
+
+
+def test_explicit_passthrough_ignores_workload_size():
+    assert resolve_backend("cpu", 10**9) == "cpu"
+    assert resolve_backend("cpu", 0) == "cpu"
+    if metal_available():
+        assert resolve_backend("gpu", 0) == "gpu"
+        assert resolve_backend("gpu", 1) == "gpu"
+
+
+def test_resolve_backend_never_returns_auto():
+    for n in (0, GPU_MIN_CANDIDATE_PAIRS - 1, GPU_MIN_CANDIDATE_PAIRS, 10**9):
+        assert resolve_backend(None, n) in ("gpu", "cpu")
+        assert resolve_backend("auto", n) in ("gpu", "cpu")
+
+
+def test_requested_is_case_insensitive():
+    assert resolve_backend("CPU", 10**9) == "cpu"
+    assert resolve_backend("Cpu", 10**9) == "cpu"
+    if metal_available():
+        assert resolve_backend("GPU", 1) == "gpu"
+        assert resolve_backend("Auto", 10**9) == "gpu"
+
+
+def test_invalid_requested_raises_valueerror_with_value():
+    with pytest.raises(ValueError) as ei:
+        resolve_backend("tpu", 10)
+    assert "tpu" in str(ei.value)
+    with pytest.raises(ValueError) as ei:
+        resolve_backend("metal", 10**9)
+    assert "metal" in str(ei.value)
+
+
+def test_env_var_respected(monkeypatch):
+    monkeypatch.setenv("MLX_SPATIAL_BACKEND", "cpu")
+    assert resolve_backend(None, 10**9) == "cpu"
+    if metal_available():
+        monkeypatch.setenv("MLX_SPATIAL_BACKEND", "gpu")
+        assert resolve_backend(None, 1) == "gpu"
+
+
+def test_env_var_case_insensitive(monkeypatch):
+    monkeypatch.setenv("MLX_SPATIAL_BACKEND", "CPU")
+    assert resolve_backend(None, 10**9) == "cpu"
+
+
+def test_requested_overrides_env(monkeypatch):
+    monkeypatch.setenv("MLX_SPATIAL_BACKEND", "cpu")
+    if metal_available():
+        assert resolve_backend("gpu", 1) == "gpu"
+        # explicit 'auto' also takes precedence over the env var
+        assert resolve_backend("auto", 10**9) == "gpu"
+    monkeypatch.setenv("MLX_SPATIAL_BACKEND", "gpu")
+    assert resolve_backend("cpu", 10**9) == "cpu"
+
+
+def test_invalid_env_raises_valueerror_with_value(monkeypatch):
+    monkeypatch.setenv("MLX_SPATIAL_BACKEND", "quantum")
+    with pytest.raises(ValueError) as ei:
+        resolve_backend(None, 10)
+    assert "quantum" in str(ei.value)
+    # a valid requested= never even consults the (broken) env var
+    assert resolve_backend("cpu", 10) == "cpu"
+
+
+def test_metal_unavailable_fallback(monkeypatch):
+    """Without Metal: 'auto' degrades to cpu, explicit 'gpu' raises."""
+    monkeypatch.setattr(_dispatch, "metal_available", lambda: False)
+    assert _dispatch.resolve_backend(None, 10**9) == "cpu"
+    assert _dispatch.resolve_backend("auto", 10**9) == "cpu"
+    assert _dispatch.resolve_backend("cpu", 1) == "cpu"
+    with pytest.raises(RuntimeError):
+        _dispatch.resolve_backend("gpu", 10**9)
+
+
+def test_metal_available_returns_bool():
+    assert isinstance(metal_available(), bool)
+
+
+def test_gpu_min_candidate_pairs_sane():
+    assert isinstance(GPU_MIN_CANDIDATE_PAIRS, int)
+    assert not isinstance(GPU_MIN_CANDIDATE_PAIRS, bool)
+    assert 0 < GPU_MIN_CANDIDATE_PAIRS < 2**31
+    assert "GPU_MIN_CANDIDATE_PAIRS" in _dispatch.__all__
+
+
+# ---------------------------------------------------------------------------
+# End-to-end backend routing
+# ---------------------------------------------------------------------------
+
+
+@requires_metal
+def test_env_cpu_forces_cpu_path_end_to_end(grid_workload, monkeypatch):
+    """MLX_SPATIAL_BACKEND=cpu must route a large workload off the GPU."""
+    polys, polyset, index, pts, ref = grid_workload
+    total_pairs = index._candidates(np.asarray(pts, dtype=np.float64))[2]
+    # This workload would auto-dispatch to the GPU...
+    assert total_pairs >= GPU_MIN_CANDIDATE_PAIRS
+
+    monkeypatch.setenv("MLX_SPATIAL_BACKEND", "cpu")
+
+    def _boom(*args, **kwargs):  # pragma: no cover - only on failure
+        raise AssertionError("GPU kernel invoked despite MLX_SPATIAL_BACKEND=cpu")
+
+    monkeypatch.setattr("mlx_spatial.join.pip_pairs", _boom)
+    got = ms.point_in_polygon(pts, polyset, index=index)
+    assert got.shape == (len(pts),)
+    np.testing.assert_array_equal(got, ref)
+
+
+@requires_metal
+def test_auto_uses_gpu_above_threshold_end_to_end(grid_workload, monkeypatch):
+    """Same workload, no env override: the pair kernel actually runs."""
+    polys, polyset, index, pts, ref = grid_workload
+    calls: list[int] = []
+
+    def _spy(points_local, polyset_, pair_point, pair_poly, **kwargs):
+        calls.append(int(pair_point.shape[0]))
+        return pip_pairs(points_local, polyset_, pair_point, pair_poly, **kwargs)
+
+    monkeypatch.setattr("mlx_spatial.join.pip_pairs", _spy)
+    got = ms.point_in_polygon(pts, polyset, index=index)
+    assert calls, "auto dispatch above the threshold never launched the kernel"
+    np.testing.assert_array_equal(got, ref)
+
+
+def test_auto_small_workload_takes_cpu_path(rng, monkeypatch):
+    """Below the threshold, auto must use the STRtree fallback (no kernel)."""
+    polys = make_grid_polygons(4, 4, cell=1.0)
+    polyset = ms.PolygonSet(polys)
+    index = ms.GridIndex(polyset)
+    ij = rng.integers(0, 4, size=(500, 2)).astype(np.float64)
+    pts = ij + rng.uniform(0.05, 0.95, size=(500, 2))
+    total_pairs = index._candidates(pts)[2]
+    assert total_pairs < GPU_MIN_CANDIDATE_PAIRS
+
+    def _boom(*args, **kwargs):  # pragma: no cover - only on failure
+        raise AssertionError("GPU kernel invoked below the auto threshold")
+
+    monkeypatch.setattr("mlx_spatial.join.pip_pairs", _boom)
+    got = ms.point_in_polygon(pts, polyset, index=index)
+    np.testing.assert_array_equal(got, reference_assign(pts, polys))
+
+
+@requires_metal
+def test_explicit_gpu_small_workload_uses_kernel(rng, monkeypatch):
+    """backend='gpu' forces the kernel even far below the threshold."""
+    polys = make_grid_polygons(4, 4, cell=1.0)
+    polyset = ms.PolygonSet(polys)
+    index = ms.GridIndex(polyset)
+    ij = rng.integers(0, 4, size=(200, 2)).astype(np.float64)
+    pts = ij + rng.uniform(0.05, 0.95, size=(200, 2))
+    calls: list[int] = []
+
+    def _spy(points_local, polyset_, pair_point, pair_poly, **kwargs):
+        calls.append(int(pair_point.shape[0]))
+        return pip_pairs(points_local, polyset_, pair_point, pair_poly, **kwargs)
+
+    monkeypatch.setattr("mlx_spatial.join.pip_pairs", _spy)
+    got = ms.point_in_polygon(pts, polyset, index=index, backend="gpu")
+    assert calls, "backend='gpu' did not launch the kernel"
+    np.testing.assert_array_equal(got, reference_assign(pts, polys))
+
+
+def test_invalid_env_propagates_from_point_in_polygon(monkeypatch):
+    monkeypatch.setenv("MLX_SPATIAL_BACKEND", "banana")
+    with pytest.raises(ValueError) as ei:
+        ms.point_in_polygon([[0.5, 0.5]], [shapely.box(0, 0, 1, 1)])
+    assert "banana" in str(ei.value)
+
+
+def test_invalid_backend_argument_propagates():
+    with pytest.raises(ValueError) as ei:
+        ms.point_in_polygon(
+            [[0.5, 0.5]], [shapely.box(0, 0, 1, 1)], backend="npu"
+        )
+    assert "npu" in str(ei.value)
+
+
+# ---------------------------------------------------------------------------
+# contains_matrix chunking
+# ---------------------------------------------------------------------------
+
+
+def test_contains_matrix_tiny_chunks_bitwise_equal(rng):
+    """chunk_bytes=1 forces one point per chunk; result must be identical."""
+    polys = make_convex_polygons(20, rng, radius_frac=0.25)
+    polyset = ms.PolygonSet(polys)
+    pts = np.column_stack(
+        [rng.uniform(-1.1, 1.1, 137), rng.uniform(-1.1, 1.1, 137)]
+    )
+    default = np.array(ms.contains_matrix(pts, polyset))
+    assert default.shape == (137, 20)
+    assert default.any(), "degenerate all-False matrix; chunk test is vacuous"
+
+    tiny = np.array(ms.contains_matrix(pts, polyset, chunk_bytes=1))
+    np.testing.assert_array_equal(tiny, default)
+
+    # A middling chunk size that does not divide 137 evenly (ragged last chunk).
+    n_edges = int(polyset.edges.edges.shape[0])
+    mid = np.array(
+        ms.contains_matrix(pts, polyset, chunk_bytes=7 * n_edges * 4 * 5)
+    )
+    np.testing.assert_array_equal(mid, default)
+
+
+# ---------------------------------------------------------------------------
+# Degenerate sizes: zero points, zero pairs, single point
+# ---------------------------------------------------------------------------
+
+
+def test_pip_pairs_zero_pairs():
+    polyset = ms.PolygonSet([shapely.box(0, 0, 1, 1)])
+    _, pts_local = polyset.recenter_points(np.array([[0.5, 0.5]]))
+    out = pip_pairs(
+        pts_local,
+        polyset,
+        mx.array(np.empty(0, dtype=np.int32)),
+        mx.array(np.empty(0, dtype=np.int32)),
+    )
+    assert out.shape == (0,)
+    assert out.dtype == mx.uint8
+
+
+def test_pip_dense_zero_points():
+    polyset = ms.PolygonSet([shapely.box(0, 0, 1, 1), shapely.box(2, 2, 3, 3)])
+    _, pts_local = polyset.recenter_points(np.empty((0, 2)))
+    out = pip_dense(pts_local, polyset)
+    assert out.shape == (0, 2)
+    assert out.dtype == mx.bool_
+
+
+def test_contains_matrix_zero_points():
+    polyset = ms.PolygonSet([shapely.box(0, 0, 1, 1), shapely.box(2, 2, 3, 3)])
+    out = ms.contains_matrix(np.empty((0, 2)), polyset)
+    assert out.shape == (0, 2)
+    assert out.dtype == mx.bool_
+
+
+def test_point_in_polygon_zero_points():
+    polys = [shapely.box(0, 0, 1, 1)]
+    backends = ["cpu"] + (["gpu"] if metal_available() else [])
+    for backend in backends:
+        res = ms.point_in_polygon(np.empty((0, 2)), polys, backend=backend)
+        assert res.shape == (0,)
+        pt_idx, poly_idx = ms.point_in_polygon(
+            np.empty((0, 2)), polys, all_matches=True, backend=backend
+        )
+        assert len(pt_idx) == 0
+        assert len(poly_idx) == 0
+
+
+@requires_metal
+def test_gpu_zero_candidate_pairs():
+    """Points entirely outside the grid extent: zero pairs, all -1."""
+    polys = [shapely.box(0, 0, 1, 1)]
+    pts = np.array([[100.0, 100.0], [-50.0, 3.0], [0.5, 99.0]])
+    res = ms.point_in_polygon(pts, polys, backend="gpu")
+    np.testing.assert_array_equal(res, [-1, -1, -1])
+    pt_idx, poly_idx = ms.point_in_polygon(
+        pts, polys, all_matches=True, backend="gpu"
+    )
+    assert len(pt_idx) == 0
+    assert len(poly_idx) == 0
+
+
+def test_point_in_polygon_single_point():
+    polyset = ms.PolygonSet([shapely.box(0, 0, 1, 1), shapely.box(2, 2, 3, 3)])
+    backends = ["cpu"] + (["gpu"] if metal_available() else [])
+    for backend in backends:
+        # 1-D (x, y) list is promoted to a single-row point array
+        got = ms.point_in_polygon([0.5, 0.5], polyset, backend=backend)
+        assert got.shape == (1,)
+        assert got[0] == 0
+        # a bare shapely Point works too
+        got = ms.point_in_polygon(shapely.Point(2.5, 2.5), polyset, backend=backend)
+        np.testing.assert_array_equal(got, [1])
+        # single miss
+        got = ms.point_in_polygon(np.array([[5.0, 5.0]]), polyset, backend=backend)
+        np.testing.assert_array_equal(got, [-1])
+
+
+# ---------------------------------------------------------------------------
+# Public API surface
+# ---------------------------------------------------------------------------
+
+
+def test_all_names_resolve_with_docstrings():
+    assert ms.__doc__ and ms.__doc__.strip()
+    for name in ms.__all__:
+        obj = getattr(ms, name)  # AttributeError -> broken __all__
+        if callable(obj):  # functions and classes
+            assert obj.__doc__ and obj.__doc__.strip(), (
+                f"{name} is public but has no docstring"
+            )
+
+
+def test_all_covers_expected_surface():
+    expected = {
+        "__version__",
+        "PolygonSet",
+        "as_point_array",
+        "from_shapely",
+        "contains_matrix",
+        "R_EARTH_M",
+        "haversine",
+        "haversine_cross",
+        "haversine_knn",
+        "GridIndex",
+        "point_in_polygon",
+        "sjoin",
+    }
+    assert set(ms.__all__) == expected
+    assert len(ms.__all__) == len(set(ms.__all__)), "duplicates in __all__"
+
+
+def test_constants_have_sane_values():
+    assert isinstance(ms.__version__, str) and ms.__version__
+    assert isinstance(ms.R_EARTH_M, float)
+    assert 6.3e6 < ms.R_EARTH_M < 6.4e6  # meters, mean Earth radius
+
+
+def test_version_matches_pyproject():
+    tomllib = pytest.importorskip("tomllib")  # stdlib from 3.11; package supports 3.10
+
+    with open(REPO_ROOT / "pyproject.toml", "rb") as f:
+        data = tomllib.load(f)
+    assert data["project"]["version"] == ms.__version__
+
+
+def test_fresh_subprocess_import():
+    """The package must import cleanly outside this process."""
+    res = subprocess.run(
+        [sys.executable, "-c", "import mlx_spatial; print(mlx_spatial.__version__)"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        cwd=str(Path(__file__).resolve().parent),
+    )
+    assert res.returncode == 0, f"import failed:\n{res.stderr}"
+    assert res.stdout.strip() == ms.__version__
+    assert "Traceback" not in res.stderr
