@@ -62,6 +62,21 @@ fill semantics only for valid polygons; on self-intersections or overlapping
 multipolygon parts the GPU (even-odd) and the CPU fallback (GEOS) diverge —
 `PolygonSet(geoms, validate=True)` rejects such input at ingestion.
 
+## k-nearest neighbors
+
+`haversine_knn` with `k <= 32` on Metal runs a fused selection kernel: one
+thread per query streams the reference set, computes the haversine `h` term
+inline (~10 flops, no asin/sqrt in the loop — `h` is monotone in distance),
+and keeps its k best in registers with an insertion that costs one compare
+per candidate. No `(N, M)` matrix, no sort. Selected survivors then get
+their distances recomputed through the exact `_hav` graph, so reported
+distances are bit-identical to `haversine_cross`, and a final `(distance,
+index)` sort fixes tie order. Techniques adapted from mlxlearn's neighbor
+index (`mlxlearn/_kernels/distance.py`): rank by a cheap monotone surrogate,
+refine survivors exactly, keep selection on-device end to end. The composed
+fallback (chunked matrix + `mx.argpartition`, which in MLX costs a full
+sort) remains for `k > 32` and non-Metal.
+
 ## Grid-indexed join
 
 Uniform grid over polygon bounds (cell ≈ median polygon bbox side, coarsened

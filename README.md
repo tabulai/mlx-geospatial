@@ -119,20 +119,23 @@ inside the timed region, lands within ~5-25% of warm):
 | 10M pts × 260 zones | **828 ms** | 6.8 s (8.2x) | 11.1 s (13.4x) | 6.4 s (7.8x) |
 | 1M pts × 10k zones | **89 ms** | 973 ms (10.9x) | 708 ms (7.9x) | 521 ms (5.8x) |
 
-**Haversine** (fused via `mx.compile`):
+**Haversine** (`mx.compile`-fused distances; kNN via a fused selection kernel):
 
 | workload | mlx-spatial | numpy float64 | scikit-learn |
 | --- | --- | --- | --- |
 | cross 20k × 20k | **19 ms** | 2.64 s (139x) | 3.91 s (206x) |
-| knn 1M queries × 10k refs, k=10 | **2.7 s** | — | BallTree 4.5 s (1.7x) |
-| knn 200k queries × 200k refs, k=10 | 19.6 s | — | **BallTree 1.2 s** — trees win 17x |
+| knn 1M queries × 10k refs, k=10 | **144 ms** | — | BallTree 4.3 s (30x) |
+| knn 200k queries × 200k refs, k=10 | **520 ms** | — | BallTree 1.1 s (2.2x) |
+| knn 1M queries × 200k refs, k=10 | **2.5 s** | — | BallTree 5.7 s (2.3x) |
 
-Honesty notes: `haversine_knn` is brute force (O(N·M) plus a per-chunk sort
-for top-k). It wins when the reference set is moderate (up to roughly 10-20k
-references — the nearest-facility/POI pattern) and loses to a CPU BallTree's
-O(N log M) on very large reference sets; the benchmark shows both sides of
-that crossover. Below ~1e5 candidate pairs the join auto-dispatches to
-shapely, because kernel-launch overhead dominates at small sizes.
+Honesty notes: `haversine_knn` is exact brute force. For `k <= 32` it runs a
+fused Metal selection kernel — one thread per query keeps its k best in
+registers, so no (N, M) matrix is materialized and nothing is sorted — which
+beats a CPU BallTree even at 200k references. With `k > 32` (or without
+Metal) it falls back to a chunked distance-matrix + `argpartition` path that
+is sort-bound; at large reference sets a BallTree can win there. Below ~1e5
+candidate pairs the join auto-dispatches to shapely, because kernel-launch
+overhead dominates at small sizes.
 
 ## Limitations (v0.1)
 

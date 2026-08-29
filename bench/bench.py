@@ -263,11 +263,11 @@ def main():
     if args.all:
         report("haversine_cross 20k x 20k", bench_haversine(20_000, 20_000, rng))
         report(
-            "haversine_knn 1M queries, 10k refs, k=10 (brute-force sweet spot)",
+            "haversine_knn 1M queries, 10k refs, k=10",
             bench_knn(1_000_000, 10_000, 10, rng),
         )
         report(
-            "haversine_knn 200k queries, 200k refs, k=10 (large M: trees win)",
+            "haversine_knn 200k queries, 200k refs, k=10",
             bench_knn(200_000, 200_000, 10, rng),
         )
         for n in (100_000, 1_000_000, 10_000_000):

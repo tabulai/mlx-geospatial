@@ -68,6 +68,103 @@ def _hav(lon1, lat1, lon2, lat2, radius: float) -> mx.array:
     return _hav_fused(lon1, lat1, lon2, lat2, mx.array(radius, dtype=mx.float32))
 
 
+# ---------------------------------------------------------------------------
+# Fused k-nearest-neighbor selection kernel
+#
+# The composed path (distance matrix + mx.argpartition) sorts all N*M
+# distances to keep k of them — mx.argpartition costs a full sort. This
+# kernel gives each query one thread that streams the reference set and
+# maintains its k best in registers: no (N, M) matrix, no sort, one compare
+# per candidate. Techniques borrowed from mlxlearn's neighbor index: rank by
+# a cheap monotone surrogate (the haversine `h` term — no asin/sqrt in the
+# inner loop, as mlxlearn ranks by squared distance), then recompute the
+# survivors' distances with the exact _hav arithmetic so reported distances
+# are bit-identical to haversine_cross.
+# ---------------------------------------------------------------------------
+
+_KNN_KERNEL_MAX_K = 32  # k register slots per thread; beyond this, occupancy suffers
+
+_KNN_SELECT_SOURCE = """
+    uint tid = thread_position_in_grid.x;
+    int n_q = shape[0];
+    if (tid >= (uint)n_q) return;
+    int m = shape[1];
+    float qlon = q[2 * (size_t)tid + 0];
+    float qlat = q[2 * (size_t)tid + 1];
+    float qc = qcos[tid];
+
+    float best_h[K];
+    int best_i[K];
+    for (int s = 0; s < K; ++s) { best_h[s] = INFINITY; best_i[s] = -1; }
+
+    for (int j = 0; j < m; ++j) {
+        float sdlat = metal::precise::sin((r[2 * (size_t)j + 1] - qlat) * 0.5f);
+        float sdlon = metal::precise::sin((r[2 * (size_t)j + 0] - qlon) * 0.5f);
+        float h = sdlat * sdlat + qc * rcos[j] * sdlon * sdlon;
+        // Strict < plus strict shift keeps earlier reference indices on
+        // exact ties (matching a stable sort's tie-break).
+        if (h < best_h[K - 1]) {
+            int s = K - 1;
+            while (s > 0 && best_h[s - 1] > h) {
+                best_h[s] = best_h[s - 1];
+                best_i[s] = best_i[s - 1];
+                --s;
+            }
+            best_h[s] = h;
+            best_i[s] = j;
+        }
+    }
+    for (int s = 0; s < K; ++s) {
+        out_h[(size_t)tid * K + s] = best_h[s];
+        out_i[(size_t)tid * K + s] = best_i[s];
+    }
+"""
+
+_knn_select_kernel = None
+
+
+def _get_knn_select_kernel():
+    global _knn_select_kernel
+    if _knn_select_kernel is None:
+        _knn_select_kernel = mx.fast.metal_kernel(
+            name="mlx_spatial_knn_select",
+            input_names=["q", "qcos", "r", "rcos", "shape"],
+            output_names=["out_h", "out_i"],
+            source=_KNN_SELECT_SOURCE,
+        )
+    return _knn_select_kernel
+
+
+def _knn_fused(q: mx.array, r: mx.array, k: int, radius: float, *, threadgroup: int = 128):
+    """Fused-select path: q/r are (N, 2)/(M, 2) float32 radians."""
+    n, m = int(q.shape[0]), int(r.shape[0])
+    kernel = _get_knn_select_kernel()
+    qcos = mx.cos(q[:, 1])
+    rcos = mx.cos(r[:, 1])
+    grid_x = ((n + threadgroup - 1) // threadgroup) * threadgroup
+    out_h, out_i = kernel(
+        inputs=[q, qcos, r, rcos, mx.array([n, m], dtype=mx.int32)],
+        template=[("K", k)],
+        grid=(grid_x, 1, 1),
+        threadgroup=(threadgroup, 1, 1),
+        output_shapes=[(n, k), (n, k)],
+        output_dtypes=[mx.float32, mx.int32],
+    )
+    # Recompute the survivors with the exact _hav arithmetic (mlxlearn's
+    # refine step): reported distances match haversine_cross bit-for-bit.
+    # A slot can stay -1 only when fewer than k references have finite
+    # coordinates (NaN rows never win a comparison); keep it -1 with inf
+    # distance rather than letting the negative index wrap the gather.
+    safe_i = mx.maximum(out_i, 0)
+    ref_sel = mx.take(r, safe_i, axis=0)  # (n, k, 2)
+    d = _hav(q[:, 0:1], q[:, 1:2], ref_sel[..., 0], ref_sel[..., 1], radius)
+    d = mx.where(out_i < 0, mx.array(np.inf, dtype=mx.float32), d)
+    order = mx.argsort(d, axis=1)
+    d = mx.take_along_axis(d, order, axis=1)
+    idx = mx.take_along_axis(out_i, order, axis=1)
+    return d, idx
+
+
 def haversine(a, b, *, radius: float = R_EARTH_M, degrees: bool = True) -> mx.array:
     """Elementwise (broadcasting) great-circle distance between ``a`` and ``b``."""
     a = _prep(a, degrees)
@@ -118,10 +215,16 @@ def haversine_knn(
     row. Ties near the k-th neighbor may resolve either way at fp32
     (~meter-scale) distance resolution.
 
-    Brute force, O(N·M): fastest when the reference set is moderate (up to
-    roughly 10-20k references). For very large reference sets a CPU tree
-    (e.g. sklearn ``BallTree(metric="haversine")``) is algorithmically better.
+    Exact brute force. On Metal with ``k <= 32`` this runs a fused
+    selection kernel (one thread per query keeps its k best in registers —
+    no ``(N, M)`` matrix, no sort), which stays competitive with tree methods
+    even for reference sets in the hundreds of thousands. Otherwise a
+    chunked distance-matrix + ``argpartition`` fallback runs; that fallback
+    is sort-bound, so for large reference sets with ``k > 32`` a CPU tree
+    (sklearn ``BallTree(metric="haversine")``) may win.
     """
+    from ._dispatch import metal_available
+
     q = _prep(query, degrees)
     r = _prep(reference, degrees)
     if q.ndim != 2 or r.ndim != 2:
@@ -134,6 +237,16 @@ def haversine_knn(
             mx.zeros((0, k), dtype=mx.float32),
             mx.zeros((0, k), dtype=mx.int32),
         )
+    if metal_available() and k <= _KNN_KERNEL_MAX_K:
+        d, idx = _knn_fused(q, r, k, radius)
+        mx.eval(d, idx)
+        return d, idx
+    return _knn_composed(q, r, k, radius, chunk_bytes)
+
+
+def _knn_composed(q: mx.array, r: mx.array, k: int, radius: float, chunk_bytes: int):
+    """Chunked distance-matrix + argpartition fallback (no Metal, or k > 32)."""
+    n, m = q.shape[0], r.shape[0]
     lon2 = r[:, 0][None, :]
     lat2 = r[:, 1][None, :]
     rows_per_chunk = max(1, chunk_bytes // max(m * 4 * 4, 1))
