@@ -109,15 +109,15 @@ materialization all included; best of 3. Reproduce with
 `python bench/bench.py --all` (methodology in `bench/README.md`).
 
 **Point-in-polygon join** (uniform random points × convex zones, NYC-like
-extent; mlx-spatial numbers use a warm index — cold, with the index built
-inside the timed region, lands within ~5-25% of warm):
+extent; mlx-spatial numbers use a warm index; the benchmark harness also
+reports cold runs with polygon ingestion and index construction included):
 
 | workload | mlx-spatial | shapely STRtree | GeoPandas sjoin | DuckDB spatial |
 | --- | --- | --- | --- | --- |
-| 100k pts × 260 zones | **8.9 ms** | 66 ms (7.4x) | 33 ms (3.7x) | 129 ms (14x) |
-| 1M pts × 260 zones | **82 ms** | 666 ms (8.1x) | 654 ms (7.9x) | 550 ms (6.7x) |
-| 10M pts × 260 zones | **828 ms** | 6.8 s (8.2x) | 11.1 s (13.4x) | 6.4 s (7.8x) |
-| 1M pts × 10k zones | **89 ms** | 973 ms (10.9x) | 708 ms (7.9x) | 521 ms (5.8x) |
+| 100k pts × 260 zones | **2.2 ms** | 63 ms (29x) | 41 ms (19x) | 126 ms (57x) |
+| 1M pts × 260 zones | **13 ms** | 648 ms (50x) | 690 ms (53x) | 547 ms (42x) |
+| 10M pts × 260 zones | **136 ms** | 6.8 s (50x) | 11.1 s (82x) | 6.4 s (47x) |
+| 1M pts × 10k zones | **12 ms** | 1.06 s (88x) | 786 ms (65x) | 554 ms (46x) |
 
 **Haversine** (`mx.compile`-fused distances; kNN via a fused selection kernel):
 
@@ -143,7 +143,8 @@ overhead dominates at small sizes.
   distance-to-polygon (backlog).
 - Uniform grid index; heavily skewed polygon sizes may want the quadtree
   planned for v0.2.
-- Candidate-pair expansion runs in numpy on the CPU (fast, but not GPU).
+- `all_matches=True` still expands candidate pairs in numpy; ordinary
+  first-match queries traverse the grid CSR directly in a Metal kernel.
 - `sjoin` implements point-`within`-polygon with first-match (lowest polygon
   index) semantics; use `all_matches=True` on `point_in_polygon` for
   multi-match joins.

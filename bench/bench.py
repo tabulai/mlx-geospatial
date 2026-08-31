@@ -272,7 +272,16 @@ def _bench_duckdb_join(pts: np.ndarray, zones: np.ndarray) -> float | None:
 
 def report(title: str, rows: list[tuple[str, float | None]]):
     print(f"\n### {title}")
-    ours = rows[0][1]
+    # Join reports cold first but external baselines are comparable to its
+    # reused-index row. Other operations keep their primary result first.
+    ours = next(
+        (
+            secs
+            for name, secs in rows
+            if name.startswith("mlx-spatial") and "warm index" in name
+        ),
+        rows[0][1],
+    )
     width = max(len(name) for name, _ in rows)
     for name, secs in rows:
         speedup = ""

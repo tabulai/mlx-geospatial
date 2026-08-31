@@ -1,10 +1,13 @@
 """Point-in-polygon predicates (even-odd / crossing-number rule).
 
-Two GPU paths share identical semantics:
+Three GPU paths share identical semantics:
 
 - :func:`pip_pairs` — a custom Metal kernel, one thread per (point, polygon)
-  candidate pair, looping that polygon's rings serially. Used by the
-  grid-indexed join, where candidates are ragged.
+  candidate pair, looping that polygon's rings serially. Used for all-match
+  joins and as a fallback for pathological candidate lists.
+- :func:`pip_first_match` — a point-centric custom Metal kernel. One thread
+  walks a point's grid-cell candidates in ascending polygon order, performs
+  bbox + parity tests, and returns immediately on the first hit.
 - :func:`pip_dense` — a custom 2-D Metal kernel, one thread per output cell,
   with adjacent lanes sharing a polygon while evaluating contiguous points.
   Used for dense ``(N, M)`` containment matrices.
@@ -27,7 +30,7 @@ import mlx.core as mx
 from ._dispatch import metal_available
 from ._ingest import PolygonSet
 
-__all__ = ["pip_pairs", "pip_dense", "contains_matrix"]
+__all__ = ["pip_pairs", "pip_first_match", "pip_dense", "contains_matrix"]
 
 _PAIR_KERNEL_SOURCE = """
     // Keep every float op individually rounded: with contraction enabled the
@@ -116,8 +119,60 @@ _DENSE_KERNEL_SOURCE = """
     inside[out_idx] = (crossings & 1) != 0;
 """
 
+_FIRST_MATCH_KERNEL_SOURCE = """
+    // Match pip_pairs operation-for-operation, but traverse one grid cell's
+    // sorted polygon list per point and stop at the minimum-index hit.
+    #pragma clang fp contract(off)
+    uint pt = thread_position_in_grid.x;
+    int n_points = shape[0];
+    if (pt >= (uint)n_points) return;
+
+    match[pt] = -1;
+    int cell = point_cell[pt];
+    if (cell < 0) return;
+
+    float px = points[2 * (size_t)pt + 0];
+    float py = points[2 * (size_t)pt + 1];
+    long candidate_begin = cell_offsets[cell];
+    long candidate_end = cell_offsets[cell + 1];
+    for (long candidate = candidate_begin; candidate < candidate_end; ++candidate) {
+        int pg = cell_poly[candidate];
+        if (px < bboxes[4 * (size_t)pg + 0] ||
+            py < bboxes[4 * (size_t)pg + 1] ||
+            px > bboxes[4 * (size_t)pg + 2] ||
+            py > bboxes[4 * (size_t)pg + 3]) {
+            continue;
+        }
+
+        int crossings = 0;
+        long r_begin = geom_ring_offsets[pg];
+        long r_end = geom_ring_offsets[pg + 1];
+        for (long r = r_begin; r < r_end; ++r) {
+            long v_begin = ring_offsets[r];
+            long v_end = ring_offsets[r + 1];
+            for (long v = v_begin; v + 1 < v_end; ++v) {
+                float y1 = coords[2 * v + 1];
+                float y2 = coords[2 * v + 3];
+                if ((y1 > py) != (y2 > py)) {
+                    float x1 = coords[2 * v + 0];
+                    float x2 = coords[2 * v + 2];
+                    float xint = x1 + (py - y1) / (y2 - y1) * (x2 - x1);
+                    if (px < xint) {
+                        crossings += 1;
+                    }
+                }
+            }
+        }
+        if (crossings & 1) {
+            match[pt] = pg;
+            return;
+        }
+    }
+"""
+
 _pair_kernel = None
 _dense_kernel = None
+_first_match_kernel = None
 
 
 def _crossed_graph(px, py, x1, y1, x2, y2):
@@ -174,6 +229,28 @@ def _get_dense_kernel():
     return _dense_kernel
 
 
+def _get_first_match_kernel():
+    global _first_match_kernel
+    if _first_match_kernel is None:
+        _first_match_kernel = mx.fast.metal_kernel(
+            name="mlx_spatial_pip_first_match",
+            input_names=[
+                "points",
+                "point_cell",
+                "cell_offsets",
+                "cell_poly",
+                "coords",
+                "ring_offsets",
+                "geom_ring_offsets",
+                "bboxes",
+                "shape",
+            ],
+            output_names=["match"],
+            source=_FIRST_MATCH_KERNEL_SOURCE,
+        )
+    return _first_match_kernel
+
+
 def pip_pairs(
     points_local: mx.array,
     polygons: PolygonSet,
@@ -215,8 +292,51 @@ def pip_pairs(
         threadgroup=(threadgroup, 1, 1),
         output_shapes=[(n_pairs,)],
         output_dtypes=[mx.uint8],
+        stream=mx.gpu,
     )
     return inside
+
+
+def pip_first_match(
+    points_local: mx.array,
+    polygons: PolygonSet,
+    point_cell: mx.array,
+    cell_offsets: mx.array,
+    cell_poly: mx.array,
+    *,
+    threadgroup: int = 256,
+) -> mx.array:
+    """First containing polygon for each point from grid-cell CSR candidates.
+
+    ``point_cell`` contains one grid cell ID per point, or ``-1`` for points
+    outside the grid. Each cell's polygon list must be sorted ascending; the
+    kernel's early return then preserves the public minimum-index semantics.
+    ``cell_offsets`` is int64 and ``cell_poly`` is int32.
+    """
+    n_points = int(points_local.shape[0])
+    if n_points == 0:
+        return mx.zeros((0,), dtype=mx.int32)
+    kernel = _get_first_match_kernel()
+    threadgroup = min(threadgroup, n_points)
+    (match,) = kernel(
+        inputs=[
+            points_local,
+            point_cell,
+            cell_offsets,
+            cell_poly,
+            polygons.coords,
+            polygons.ring_offsets,
+            polygons.geom_ring_offsets,
+            polygons.bboxes_local,
+            mx.array([n_points], dtype=mx.int32),
+        ],
+        grid=(n_points, 1, 1),
+        threadgroup=(threadgroup, 1, 1),
+        output_shapes=[(n_points,)],
+        output_dtypes=[mx.int32],
+        stream=mx.gpu,
+    )
+    return match
 
 
 def _pip_dense_composed(

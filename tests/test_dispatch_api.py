@@ -6,7 +6,7 @@ Covers:
 - End-to-end backend routing: env-forced CPU on a workload that would
   otherwise auto-dispatch to the GPU, auto-CPU below the threshold, explicit
   GPU on tiny workloads. Routing is observed by monkeypatching the kernel
-  entry point ``mlx_spatial.join.pip_pairs`` at test time (no library code is
+  entry points in ``mlx_spatial.join`` at test time (no library code is
   modified on disk).
 - ``contains_matrix`` chunking equivalence (tiny chunk_bytes == default,
   bitwise).
@@ -34,7 +34,12 @@ from mlx_spatial._dispatch import (
     metal_available,
     resolve_backend,
 )
-from mlx_spatial._pip import _pip_dense_composed, pip_dense, pip_pairs
+from mlx_spatial._pip import (
+    _pip_dense_composed,
+    pip_dense,
+    pip_first_match,
+    pip_pairs,
+)
 
 from conftest import make_convex_polygons, make_grid_polygons, reference_assign
 
@@ -189,6 +194,7 @@ def test_env_cpu_forces_cpu_path_end_to_end(grid_workload, monkeypatch):
     def _boom(*args, **kwargs):  # pragma: no cover - only on failure
         raise AssertionError("GPU kernel invoked despite MLX_SPATIAL_BACKEND=cpu")
 
+    monkeypatch.setattr("mlx_spatial.join.pip_first_match", _boom)
     monkeypatch.setattr("mlx_spatial.join.pip_pairs", _boom)
     got = ms.point_in_polygon(pts, polyset, index=index)
     assert got.shape == (len(pts),)
@@ -197,15 +203,22 @@ def test_env_cpu_forces_cpu_path_end_to_end(grid_workload, monkeypatch):
 
 @requires_metal
 def test_auto_uses_gpu_above_threshold_end_to_end(grid_workload, monkeypatch):
-    """Same workload, no env override: the pair kernel actually runs."""
+    """Same workload, no env override: the fused first-match kernel runs."""
     polys, polyset, index, pts, ref = grid_workload
     calls: list[int] = []
 
-    def _spy(points_local, polyset_, pair_point, pair_poly, **kwargs):
-        calls.append(int(pair_point.shape[0]))
-        return pip_pairs(points_local, polyset_, pair_point, pair_poly, **kwargs)
+    def _spy(points_local, polyset_, point_cell, cell_offsets, cell_poly, **kwargs):
+        calls.append(int(points_local.shape[0]))
+        return pip_first_match(
+            points_local,
+            polyset_,
+            point_cell,
+            cell_offsets,
+            cell_poly,
+            **kwargs,
+        )
 
-    monkeypatch.setattr("mlx_spatial.join.pip_pairs", _spy)
+    monkeypatch.setattr("mlx_spatial.join.pip_first_match", _spy)
     got = ms.point_in_polygon(pts, polyset, index=index)
     assert calls, "auto dispatch above the threshold never launched the kernel"
     np.testing.assert_array_equal(got, ref)
@@ -224,6 +237,7 @@ def test_auto_small_workload_takes_cpu_path(rng, monkeypatch):
     def _boom(*args, **kwargs):  # pragma: no cover - only on failure
         raise AssertionError("GPU kernel invoked below the auto threshold")
 
+    monkeypatch.setattr("mlx_spatial.join.pip_first_match", _boom)
     monkeypatch.setattr("mlx_spatial.join.pip_pairs", _boom)
     got = ms.point_in_polygon(pts, polyset, index=index)
     np.testing.assert_array_equal(got, reference_assign(pts, polys))
@@ -231,7 +245,7 @@ def test_auto_small_workload_takes_cpu_path(rng, monkeypatch):
 
 @requires_metal
 def test_explicit_gpu_small_workload_uses_kernel(rng, monkeypatch):
-    """backend='gpu' forces the kernel even far below the threshold."""
+    """backend='gpu' forces fused first-match even below the threshold."""
     polys = make_grid_polygons(4, 4, cell=1.0)
     polyset = ms.PolygonSet(polys)
     index = ms.GridIndex(polyset)
@@ -239,14 +253,41 @@ def test_explicit_gpu_small_workload_uses_kernel(rng, monkeypatch):
     pts = ij + rng.uniform(0.05, 0.95, size=(200, 2))
     calls: list[int] = []
 
+    def _spy(points_local, polyset_, point_cell, cell_offsets, cell_poly, **kwargs):
+        calls.append(int(points_local.shape[0]))
+        return pip_first_match(
+            points_local,
+            polyset_,
+            point_cell,
+            cell_offsets,
+            cell_poly,
+            **kwargs,
+        )
+
+    monkeypatch.setattr("mlx_spatial.join.pip_first_match", _spy)
+    got = ms.point_in_polygon(pts, polyset, index=index, backend="gpu")
+    assert calls, "backend='gpu' did not launch the kernel"
+    np.testing.assert_array_equal(got, reference_assign(pts, polys))
+
+
+@requires_metal
+def test_explicit_gpu_all_matches_retains_pair_kernel(rng, monkeypatch):
+    polys = make_grid_polygons(4, 4, cell=1.0)
+    index = ms.GridIndex(polys)
+    pts = rng.uniform(0.05, 3.95, size=(200, 2))
+    calls: list[int] = []
+
     def _spy(points_local, polyset_, pair_point, pair_poly, **kwargs):
         calls.append(int(pair_point.shape[0]))
         return pip_pairs(points_local, polyset_, pair_point, pair_poly, **kwargs)
 
+    def fused_must_not_run(*args, **kwargs):
+        raise AssertionError("all_matches launched the first-match kernel")
+
+    monkeypatch.setattr("mlx_spatial.join.pip_first_match", fused_must_not_run)
     monkeypatch.setattr("mlx_spatial.join.pip_pairs", _spy)
-    got = ms.point_in_polygon(pts, polyset, index=index, backend="gpu")
-    assert calls, "backend='gpu' did not launch the kernel"
-    np.testing.assert_array_equal(got, reference_assign(pts, polys))
+    index.query(pts, all_matches=True, backend="gpu")
+    assert calls, "all_matches no longer launched the explicit-pair kernel"
 
 
 def test_invalid_env_propagates_from_point_in_polygon(monkeypatch):
@@ -336,6 +377,20 @@ def test_pip_pairs_zero_pairs():
     )
     assert out.shape == (0,)
     assert out.dtype == mx.uint8
+
+
+def test_pip_first_match_zero_points():
+    polyset = ms.PolygonSet([shapely.box(0, 0, 1, 1)])
+    _, pts_local = polyset.recenter_points(np.empty((0, 2)))
+    out = pip_first_match(
+        pts_local,
+        polyset,
+        mx.array(np.empty(0, dtype=np.int32)),
+        mx.array(np.array([0, 1], dtype=np.int64)),
+        mx.array(np.array([0], dtype=np.int32)),
+    )
+    assert out.shape == (0,)
+    assert out.dtype == mx.int32
 
 
 def test_pip_dense_zero_points():
