@@ -87,9 +87,13 @@ Uniform grid over polygon bounds (cell ≈ median polygon bbox side, coarsened
 to fit cell/entry budgets). CSR cell→polygon lists built vectorized in numpy
 (ragged cartesian expansion via `repeat` + rank arithmetic; stable sort keeps
 per-cell lists ascending, making "first match = min polygon index"
-deterministic). Query: point → one cell → candidate pairs by prefix sums →
-Metal kernel refine → `np.minimum.at` reduction. Candidate expansion is
-CPU-side numpy in v0.1 (int ops, subsecond at 5e7 pairs); known non-GPU stage.
+deterministic). First-match query: float64 CPU cell assignment → one int32
+cell ID per point → point-centric Metal kernel traverses the cached grid
+CSR, performs bbox + parity tests, and returns on the first hit. This avoids
+all per-candidate query arrays and the host `minimum.at` reduction. Whole-point
+launches are split by the candidate-work budget; a cell that individually
+exceeds it uses the bounded explicit-pair fallback. `all_matches=True` retains
+the explicit-pair path until GPU count/scan/compaction is implemented.
 
 ## Dispatch
 

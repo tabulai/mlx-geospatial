@@ -11,10 +11,12 @@ import numpy as np
 import mlx.core as mx
 import pytest
 import shapely
-from shapely.geometry import Polygon
+from shapely.geometry import MultiPolygon, Polygon
 
+import mlx_spatial as ms
 import mlx_spatial._dispatch as dispatch
 from mlx_spatial._dispatch import metal_available
+from mlx_spatial._pip import pip_first_match
 from mlx_spatial.join import GridIndex
 
 from conftest import (
@@ -261,6 +263,101 @@ class TestBatching:
             np.tile(np.arange(17, dtype=np.int64), 2),
         )
 
+    def test_fused_whole_point_batches_avoid_pair_expansion(self, rng, monkeypatch):
+        polys = make_grid_polygons(10, 10)
+        pts = rng.uniform(-0.5, 10.5, size=(6000, 2))
+        index = GridIndex(polys)
+        expected = np.asarray(index.query(pts, backend="gpu"))
+        total_pairs = index._candidates(pts)[2]
+        calls: list[int] = []
+        candidate_work: list[int] = []
+
+        def fused_spy(points_local, polyset, point_cell, offsets, cell_poly, **kwargs):
+            calls.append(int(points_local.shape[0]))
+            cells = np.array(point_cell)
+            csr_offsets = np.array(offsets)
+            valid = cells >= 0
+            candidate_work.append(
+                int(
+                    np.sum(
+                        csr_offsets[cells[valid] + 1] - csr_offsets[cells[valid]]
+                    )
+                )
+            )
+            return pip_first_match(
+                points_local,
+                polyset,
+                point_cell,
+                offsets,
+                cell_poly,
+                **kwargs,
+            )
+
+        def pairs_must_not_run(*args, **kwargs):
+            raise AssertionError("ordinary first-match query expanded candidate pairs")
+
+        monkeypatch.setattr("mlx_spatial.join.pip_first_match", fused_spy)
+        monkeypatch.setattr("mlx_spatial.join.pip_pairs", pairs_must_not_run)
+        got = np.asarray(
+            index.query(pts, backend="gpu", max_pairs_per_batch=1000)
+        )
+        assert len(calls) > 1, "candidate-work cap did not split fused launches"
+        assert max(candidate_work) <= 1000
+        assert sum(candidate_work) == total_pairs
+        np.testing.assert_array_equal(got, expected)
+
+    def test_fused_matches_pair_reduction_on_mixed_geometry(self, monkeypatch):
+        donut = Polygon(
+            [(0, 0), (6, 0), (6, 6), (0, 6)],
+            holes=[[(2, 2), (4, 2), (4, 4), (2, 4)]],
+        )
+        multi = MultiPolygon(
+            [shapely.box(10, 0, 12, 2), shapely.box(14, 0, 16, 2)]
+        )
+        polys = np.array(
+            [
+                donut,
+                Polygon(),
+                shapely.box(2.5, 2.5, 3.5, 3.5),
+                shapely.box(1, -1, 5, 7),
+                multi,
+            ],
+            dtype=object,
+        )
+        pts = np.array(
+            [
+                [3, 3],
+                [1.5, 1.5],
+                [3.8, 3],
+                [11, 1],
+                [13, 1],
+                [15, 1],
+                [100, 100],
+                [np.nan, np.nan],
+                [np.nan, 1],
+                [2, 3],
+            ]
+        )
+        index = GridIndex(polys, cell_size=2.0)
+        counts, _, total_pairs, _ = index._candidates(pts)
+        assert total_pairs > 3 and counts.max() <= 3
+
+        pt_idx, poly_idx = index.query(pts, all_matches=True, backend="gpu")
+        reduced = np.full(len(pts), -1, dtype=np.int32)
+        if len(pt_idx):
+            first_pt, first_at = np.unique(pt_idx, return_index=True)
+            reduced[first_pt] = poly_idx[first_at].astype(np.int32)
+
+        def pairs_must_not_run(*args, **kwargs):
+            raise AssertionError("fused first-match expanded candidate pairs")
+
+        monkeypatch.setattr("mlx_spatial.join.pip_pairs", pairs_must_not_run)
+        fused = np.asarray(
+            index.query(pts, backend="gpu", max_pairs_per_batch=3)
+        )
+        np.testing.assert_array_equal(fused, reduced)
+        np.testing.assert_array_equal(fused, [2, 0, 3, 4, -1, 4, -1, -1, -1, 3])
+
 
 # ---------------------------------------------------------------------------
 # backend equivalence and dispatch
@@ -344,6 +441,43 @@ class TestBackends:
         monkeypatch.setenv("MLX_SPATIAL_BACKEND", "quantum")
         with pytest.raises(ValueError):
             index.query(pts)
+
+    def test_explicit_gpu_works_with_cpu_default_device(self):
+        """backend='gpu' selects a GPU stream even when MLX defaults to CPU."""
+        old_device = mx.default_device()
+        try:
+            mx.set_default_device(mx.cpu)
+            polys = np.array(
+                [shapely.box(0, 0, 2, 2), shapely.box(1, 1, 3, 3)],
+                dtype=object,
+            )
+            index = GridIndex(polys)
+            pts = np.array([[0.5, 0.5], [1.5, 1.5], [2.5, 2.5], [9.0, 9.0]])
+            np.testing.assert_array_equal(
+                index.query(pts, backend="gpu"), [0, 0, 1, -1]
+            )
+            pt_idx, poly_idx = index.query(pts, backend="gpu", all_matches=True)
+            np.testing.assert_array_equal(pt_idx, [0, 1, 1, 2])
+            np.testing.assert_array_equal(poly_idx, [0, 0, 1, 1])
+        finally:
+            mx.set_default_device(old_device)
+
+    def test_device_csr_is_lazy_and_reused(self):
+        index = GridIndex(
+            np.array([shapely.box(0, 0, 1, 1), shapely.box(1, 0, 2, 1)])
+        )
+        pts = np.array([[0.5, 0.5], [1.5, 0.5]])
+        assert index._cell_offsets_mx is None and index._cell_poly_mx is None
+        index.query(pts, backend="cpu")
+        assert index._cell_offsets_mx is None and index._cell_poly_mx is None
+
+        index.query(pts, backend="gpu")
+        offsets_mx = index._cell_offsets_mx
+        poly_mx = index._cell_poly_mx
+        assert offsets_mx is not None and poly_mx is not None
+        index.query(pts, backend="gpu")
+        assert index._cell_offsets_mx is offsets_mx
+        assert index._cell_poly_mx is poly_mx
 
 
 # ---------------------------------------------------------------------------
@@ -522,3 +656,32 @@ class TestGridMaxCorner:
         np.testing.assert_array_equal(
             np.asarray(index.query(outside, backend="gpu")), [-1, -1]
         )
+
+
+@needs_metal
+def test_fused_join_uses_float64_planned_cell_at_rounding_boundary():
+    """The fused kernel must consume the CPU-planned cell, not recompute it.
+
+    The point lies just left of x=1 in float64, but rounds to exactly x=1 in
+    the kernel's local float32 coordinates. Recomputing its cell on Metal
+    would incorrectly expose the right-hand polygon as a candidate.
+    """
+    polys = np.array(
+        [shapely.box(0.0, 0.0, 0.5, 1.0), shapely.box(1.0, 0.0, 2.0, 1.0)],
+        dtype=object,
+    )
+    polyset = ms.PolygonSet(polys, origin=(0.0, 0.0))
+    index = GridIndex(polyset, cell_size=1.0)
+    x = 1.0 - float(np.finfo(np.float32).eps) / 4.0
+    pts = np.array([[x, 0.5]])
+    assert x < 1.0 and np.float32(x) == np.float32(1.0)
+    counts, starts, total, point_cell = index._candidates(pts)
+    assert total == counts[0] == 1 and point_cell[0] == 0
+    np.testing.assert_array_equal(
+        index._cell_poly[starts[0] : starts[0] + counts[0]], [0]
+    )
+
+    first = np.asarray(index.query(pts, backend="gpu"))
+    pt_idx, poly_idx = index.query(pts, backend="gpu", all_matches=True)
+    assert len(pt_idx) == len(poly_idx) == 0
+    np.testing.assert_array_equal(first, [-1])

@@ -3,9 +3,10 @@
 The index is a uniform grid over the polygon set's bounds. Each cell holds
 the (sorted) list of polygons whose bbox intersects it, in CSR form. A query
 point maps to exactly one cell; its candidate polygons are that cell's list,
-so candidate pairs expand with plain prefix sums and the Metal crossing-number
-kernel refines them. Grid planning runs in float64 on original coordinates,
-so cell assignment can never disagree with the (widened-bbox) kernel test.
+so the first-match Metal kernel walks that list directly and returns on its
+first containment hit. All-match queries retain bounded explicit candidate
+pairs. Grid planning runs in float64 on original coordinates, so cell
+assignment can never disagree with the (widened-bbox) kernel test.
 
 Small workloads (fewer candidate pairs than
 ``mlx_spatial._dispatch.GPU_MIN_CANDIDATE_PAIRS``) automatically fall back to
@@ -20,7 +21,7 @@ import shapely
 
 from ._dispatch import resolve_backend
 from ._ingest import PolygonSet, as_point_array
-from ._pip import pip_pairs
+from ._pip import pip_first_match, pip_pairs
 
 __all__ = ["GridIndex", "point_in_polygon", "sjoin"]
 
@@ -40,6 +41,8 @@ class GridIndex:
     ):
         polyset = polygons if isinstance(polygons, PolygonSet) else PolygonSet(polygons)
         self.polygons = polyset
+        self._cell_poly_mx = None
+        self._cell_offsets_mx = None
 
         bboxes = polyset.bboxes  # (M, 4) float64, original coordinates
         finite = np.isfinite(bboxes).all(axis=1)
@@ -130,9 +133,8 @@ class GridIndex:
             f"entries={len(self._cell_poly)}, polygons={self.polygons.n_polygons})"
         )
 
-    def _candidates(self, pts64: np.ndarray):
-        """Cell lookup: per-point candidate counts and CSR start offsets."""
-        n = len(pts64)
+    def _candidates(self, pts64: np.ndarray, *, include_starts: bool = True):
+        """Cell lookup: candidate counts, CSR starts, total, and cell IDs."""
         x, y = pts64[:, 0], pts64[:, 1]
         # NaN coordinates (empty points) compare False everywhere -> not in grid.
         in_grid = (x >= self.x0) & (x <= self.x1) & (y >= self.y0) & (y <= self.y1)
@@ -146,7 +148,18 @@ class GridIndex:
             self._cell_offsets[cell_id + 1] - self._cell_offsets[cell_id],
             0,
         )
-        return counts, self._cell_offsets[cell_id], int(counts.sum()), n
+        point_cell = np.where(in_grid, cell_id, -1).astype(np.int32)
+        cand_starts = self._cell_offsets[cell_id] if include_starts else None
+        return counts, cand_starts, int(counts.sum()), point_cell
+
+    def _device_csr(self) -> tuple[mx.array, mx.array]:
+        """Lazily cache the grid CSR arrays for point-centric GPU queries."""
+        if self._cell_offsets_mx is None:
+            # Offsets remain int64: max_entries is caller-adjustable, so an
+            # unconditional int32 cast would silently narrow the index domain.
+            self._cell_offsets_mx = mx.array(self._cell_offsets)
+            self._cell_poly_mx = mx.array(self._cell_poly)
+        return self._cell_offsets_mx, self._cell_poly_mx
 
     def query(
         self,
@@ -190,15 +203,103 @@ class GridIndex:
                 f"max_pairs_per_batch must be in [1, 2**31), got {max_pairs_per_batch}"
             )
 
-        counts, cand_starts, total_pairs, _ = self._candidates(pts64)
+        counts, cand_starts, total_pairs, point_cell = self._candidates(
+            pts64, include_starts=all_matches
+        )
         chosen = resolve_backend(backend, total_pairs)
         if chosen == "cpu":
+            del point_cell
             return self._query_cpu(pts64, all_matches=all_matches, predicate=predicate)
 
         if total_pairs == 0:
             if all_matches:
                 return (np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64))
             return np.full(n, -1, dtype=np.int32)
+
+        if not all_matches and int(counts.max(initial=0)) <= max_pairs_per_batch:
+            return self._query_gpu_first_match(
+                pts_local,
+                point_cell,
+                counts,
+                total_pairs=total_pairs,
+                max_pairs_per_batch=max_pairs_per_batch,
+            )
+
+        # all_matches requires compaction of every hit. A first-match query
+        # also uses this bounded legacy path when one point alone has more
+        # candidates than max_pairs_per_batch and therefore cannot fit in a
+        # whole-point fused launch.
+        if cand_starts is None:
+            cand_starts = self._cell_offsets[np.maximum(point_cell, 0)]
+        return self._query_gpu_pairs(
+            pts_local,
+            counts,
+            cand_starts,
+            total_pairs=total_pairs,
+            all_matches=all_matches,
+            max_pairs_per_batch=max_pairs_per_batch,
+        )
+
+    def _query_gpu_first_match(
+        self,
+        pts_local: mx.array,
+        point_cell: np.ndarray,
+        counts: np.ndarray,
+        *,
+        total_pairs: int,
+        max_pairs_per_batch: int,
+    ) -> np.ndarray:
+        """Point-centric CSR traversal, batched by candidate-work budget."""
+        cell_offsets_mx, cell_poly_mx = self._device_csr()
+        point_cell_mx = mx.array(point_cell)
+        n = len(point_cell)
+
+        if total_pairs <= max_pairs_per_batch:
+            return np.array(
+                pip_first_match(
+                    pts_local,
+                    self.polygons,
+                    point_cell_mx,
+                    cell_offsets_mx,
+                    cell_poly_mx,
+                )
+            )
+
+        # Whole-point batches preserve the public hard cap on candidate work
+        # per launch. The caller has already routed any individually oversized
+        # point to the splittable explicit-pair path.
+        cum = np.concatenate([[0], np.cumsum(counts)])
+        result = np.empty(n, dtype=np.int32)
+        point0 = 0
+        while point0 < n:
+            pair_limit = int(cum[point0]) + max_pairs_per_batch
+            point1 = int(np.searchsorted(cum, pair_limit, side="right")) - 1
+            if point1 <= point0:  # defensive: counts.max() was checked above
+                raise RuntimeError("could not form a bounded fused point batch")
+            result[point0:point1] = np.array(
+                pip_first_match(
+                    pts_local[point0:point1],
+                    self.polygons,
+                    point_cell_mx[point0:point1],
+                    cell_offsets_mx,
+                    cell_poly_mx,
+                )
+            )
+            point0 = point1
+        return result
+
+    def _query_gpu_pairs(
+        self,
+        pts_local: mx.array,
+        counts: np.ndarray,
+        cand_starts: np.ndarray,
+        *,
+        total_pairs: int,
+        all_matches: bool,
+        max_pairs_per_batch: int,
+    ):
+        """Bounded explicit-pair GPU path for all hits and heavy cells."""
+        n = len(counts)
 
         # Expand candidate pairs in contiguous ranges of the conceptual flat
         # pair array. Chunking by pair rank (rather than only by point ranges)
@@ -234,7 +335,7 @@ class GridIndex:
             flags = np.array(
                 pip_pairs(
                     pts_local,
-                    polyset,
+                    self.polygons,
                     mx.array(pair_point.astype(np.int32)),
                     mx.array(pair_poly.astype(np.int32)),
                 )
