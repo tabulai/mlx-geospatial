@@ -2,10 +2,10 @@
 
 Targets the classic ray-casting failure modes (rays through vertices, points
 sharing y with vertices, horizontal edges, slivers, degenerate rings, holes
-touching shells, sub-tolerance geometry) and cross-validates the two GPU
-paths (``pip_pairs`` Metal kernel vs ``pip_dense`` composed-MLX) against each
-other exactly, and against shapely float64 outside the documented
-``boundary_tolerance`` band.
+touching shells, sub-tolerance geometry) and cross-validates the pair and
+direct-dense Metal kernels against the retained composed-MLX oracle exactly,
+and against shapely float64 outside the documented ``boundary_tolerance``
+band.
 
 Everything here is deterministic; coordinates in the exact-y tests are chosen
 to be exactly representable in float32 after re-centering.
@@ -21,7 +21,7 @@ from shapely.geometry import MultiPolygon, Polygon
 
 import mlx_spatial as ms
 from mlx_spatial._dispatch import metal_available
-from mlx_spatial._pip import pip_pairs
+from mlx_spatial._pip import _pip_dense_composed, pip_pairs
 from conftest import make_grid_polygons, near_boundary_mask, reference_assign
 
 pytestmark = pytest.mark.skipif(
@@ -48,11 +48,20 @@ def _dense_matrix(pts: np.ndarray, polyset: ms.PolygonSet) -> np.ndarray:
     return np.array(ms.contains_matrix(pts, polyset)).astype(np.uint8)
 
 
+def _composed_matrix(pts: np.ndarray, polyset: ms.PolygonSet) -> np.ndarray:
+    _, pts_local = polyset.recenter_points(pts)
+    return np.array(_pip_dense_composed(pts_local, polyset)).astype(np.uint8)
+
+
 def _paths_agree(pts, polyset: ms.PolygonSet) -> np.ndarray:
-    """Assert pair-kernel == dense path exactly; return the matrix."""
+    """Assert pair, direct-dense, and composed paths agree exactly."""
     pts = np.asarray(pts, dtype=np.float64)
     dense = _dense_matrix(pts, polyset)
+    composed = _composed_matrix(pts, polyset)
     pairs = _pair_matrix(pts, polyset)
+    np.testing.assert_array_equal(
+        dense, composed, err_msg="direct pip_dense and composed oracle disagree"
+    )
     np.testing.assert_array_equal(
         dense, pairs, err_msg="pip_dense and pip_pairs disagree"
     )
@@ -225,8 +234,8 @@ def test_horizontal_edges_comb():
     matrix = _paths_agree(pts, polyset)
     _join_matches_matrix(pts, polyset, matrix)
 
-    # the chunked dense path must be identical to the single-chunk result
-    # (chunk_bytes=1 forces one point-row per chunk through the cumsum logic)
+    # chunk_bytes remains behaviorally compatible on the direct Metal path;
+    # forced composed-fallback chunking is covered in test_dispatch_api.
     chunked = np.array(ms.contains_matrix(pts, polyset, chunk_bytes=1)).astype(np.uint8)
     np.testing.assert_array_equal(chunked, matrix)
 
@@ -380,14 +389,24 @@ def test_empty_polygons_in_set():
     """Empty polygons (NaN bounds) mixed with a real one: rejected everywhere."""
     polys = np.array([Polygon(), shapely.box(0, 0, 2, 2), Polygon()], dtype=object)
     polyset = ms.PolygonSet(polys)
-    pts = np.array([[1.0, 1.0], [3.0, 3.0], [0.5, 1.5], [-1.0, 1.0]])
+    pts = np.array(
+        [
+            [1.0, 1.0],
+            [3.0, 3.0],
+            [0.5, 1.5],
+            [-1.0, 1.0],
+            [np.nan, np.nan],
+            [np.nan, 1.0],
+            [1.0, np.nan],
+        ]
+    )
 
     matrix = _paths_agree(pts, polyset)
     assert not matrix[:, 0].any() and not matrix[:, 2].any(), (
         "empty polygons must contain nothing"
     )
     got = _join_matches_matrix(pts, polyset, matrix)
-    np.testing.assert_array_equal(got, [1, -1, 1, -1])
+    np.testing.assert_array_equal(got, [1, -1, 1, -1, -1, -1, -1])
 
 
 def test_lattice_sweep_shared_edges_grid_join():

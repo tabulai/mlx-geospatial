@@ -51,9 +51,12 @@ Two paths, identical semantics, cross-validated in tests:
 - `pip_pairs`: custom Metal kernel via `mx.fast.metal_kernel`, one thread per
   candidate (point, polygon) pair; bbox pre-test then serial crossing loop
   over that polygon's rings. Used by the join.
-- `pip_dense`: composed MLX ops over the flat edge list; per-geometry crossing
-  counts recovered with `cumsum` + gather at geometry boundaries (edges are
-  geometry-grouped, so no scatter). Used for small M and as a test oracle.
+- `pip_dense`: custom 2-D Metal kernel, one thread per `(point, polygon)`
+  output. Points occupy the x-axis and polygons the y-axis, so a SIMDgroup
+  reads contiguous points while sharing polygon metadata and edge addresses.
+  It writes the final boolean matrix directly, avoiding the former `N x E`
+  crossing matrix and cumulative sum. The composed MLX implementation remains
+  the non-Metal fallback and an independent arithmetic oracle in tests.
 
 Boundary semantics: the half-open crossing rule avoids double-counting ray
 crossings at vertices. Within the tolerance band — including every exact
