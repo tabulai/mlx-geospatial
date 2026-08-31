@@ -17,7 +17,7 @@ import mlx_spatial as ms
 import mlx_spatial._dispatch as dispatch
 from mlx_spatial._dispatch import metal_available
 from mlx_spatial._pip import pip_all_matches, pip_first_match
-from mlx_spatial.join import GridIndex
+from mlx_spatial.join import GridIndex, _grid_csr_strategy
 
 from conftest import (
     make_convex_polygons,
@@ -145,6 +145,207 @@ class TestCandidateCompleteness:
         got = restrict(set(zip(gpt.tolist(), gpg.tolist())), keep)
         assert ref - got == set()
         assert got - ref == set()
+
+
+# ---------------------------------------------------------------------------
+# GridIndex construction contract
+# ---------------------------------------------------------------------------
+
+
+class TestGridConstructionContract:
+    @pytest.mark.parametrize(
+        ("total", "n_polygons", "n_cells", "expected"),
+        [
+            (65_535, 1, 1, "stable"),
+            (65_536, 8193, 1, "stable"),
+            (65_536, 8192, 131_073, "packed"),
+            (65_536, 257, 131_072, "packed"),
+            (65_536, 256, 131_073, "packed"),
+            (65_536, 256, 131_072, "direct"),
+        ],
+    )
+    def test_adaptive_csr_strategy_boundaries(
+        self, total, n_polygons, n_cells, expected
+    ):
+        assert _grid_csr_strategy(total, n_polygons, n_cells) == expected
+
+    def test_exact_sorted_csr_is_deterministic_and_boundary_inclusive(self):
+        """Pin row-major CSR, original polygon ids, and closed bbox spans."""
+        polys = np.array(
+            [
+                shapely.box(0.0, 0.0, 0.8, 0.8),
+                Polygon(),
+                shapely.box(0.5, 0.5, 1.0, 1.0),
+                shapely.box(1.0, 0.2, 1.8, 0.8),
+                shapely.box(2.1, 1.1, 3.0, 2.0),
+            ],
+            dtype=object,
+        )
+        expected_offsets = np.array([0, 2, 4, 4, 5, 6, 7], dtype=np.int64)
+        expected_poly = np.array([0, 2, 2, 3, 2, 2, 4], dtype=np.int32)
+
+        first = GridIndex(polys, cell_size=1.0, max_entries=7)
+        second = GridIndex(polys, cell_size=1.0, max_entries=7)
+        assert (first.nx, first.ny) == (3, 2)
+        np.testing.assert_array_equal(first._cell_offsets, expected_offsets)
+        np.testing.assert_array_equal(first._cell_poly, expected_poly)
+        np.testing.assert_array_equal(second._cell_offsets, expected_offsets)
+        np.testing.assert_array_equal(second._cell_poly, expected_poly)
+        for cell in range(first.n_cells):
+            lo, hi = expected_offsets[cell : cell + 2]
+            assert np.all(np.diff(expected_poly[lo:hi]) > 0)
+
+        # A bbox ending exactly at x=1 or y=1 is conservatively present on
+        # both sides; a bbox beginning there starts only in the right cell.
+        counts, starts, _, cells = first._candidates(
+            np.array([[1.0 - 1e-6, 0.5], [1.0, 0.5], [0.5, 1.0]])
+        )
+        np.testing.assert_array_equal(cells, [0, 1, 3])
+        candidates = [
+            first._cell_poly[start : start + count]
+            for start, count in zip(starts, counts)
+        ]
+        np.testing.assert_array_equal(candidates[0], [0, 2])
+        np.testing.assert_array_equal(candidates[1], [2, 3])
+        np.testing.assert_array_equal(candidates[2], [2])
+
+    def test_max_entries_budget_is_inclusive_then_coarsens(self):
+        polygon = shapely.box(0.0, 0.0, 4.0, 1.0)
+
+        exact = GridIndex([polygon], cell_size=1.0, max_entries=4)
+        assert exact.cell_size == 1.0
+        assert (exact.nx, exact.ny) == (4, 1)
+        np.testing.assert_array_equal(exact._cell_offsets, [0, 1, 2, 3, 4])
+        np.testing.assert_array_equal(exact._cell_poly, [0, 0, 0, 0])
+
+        coarsened = GridIndex([polygon], cell_size=1.0, max_entries=3)
+        assert coarsened.cell_size == 2.0
+        assert (coarsened.nx, coarsened.ny) == (2, 1)
+        np.testing.assert_array_equal(coarsened._cell_offsets, [0, 1, 2])
+        np.testing.assert_array_equal(coarsened._cell_poly, [0, 0])
+
+    def test_selector_metadata_is_cell_local_and_sums_edge_work(self):
+        def circle(cx, n_edges):
+            angle = np.linspace(0.0, 2.0 * np.pi, n_edges, endpoint=False)
+            return Polygon(np.column_stack([cx + np.cos(angle), np.sin(angle)]))
+
+        # Two individually short rings share cell 0, so aggregate work differs
+        # from either ring maximum. Cell 2 contains one long ring and remains
+        # distinguishable from that higher-total short-ring cell.
+        index = GridIndex(
+            [circle(0.0, 600), circle(0.0, 600), circle(20.0, 1031)],
+            cell_size=10.0,
+        )
+        assert (index.nx, index.ny) == (3, 1)
+        np.testing.assert_array_equal(index._cell_offsets, [0, 2, 2, 3])
+        np.testing.assert_array_equal(index._cell_poly, [0, 1, 2])
+        np.testing.assert_array_equal(index._cell_edge_work, [1200, 0, 1031])
+        np.testing.assert_array_equal(index._cell_max_ring_edges, [600, 0, 1031])
+        np.testing.assert_array_equal(index._cell_all_long_rings, [False, False, True])
+        assert index._max_cell_edge_work == 1200
+        assert index._max_cell_ring_edges == 1031
+        assert index._candidate_edge_bounds(np.array([0], dtype=np.int32)) == (
+            600,
+            1200,
+        )
+        assert index._first_match_ring_bound(np.array([0], dtype=np.int32)) == 0
+        assert index._first_match_ring_bound(np.array([2], dtype=np.int32)) == 1031
+
+    def test_selector_edge_work_saturates_instead_of_wrapping(self):
+        polygon = shapely.box(0.0, 0.0, 1.0, 1.0)
+        n_polygons = 16_384  # four edges each: 65,536 total
+        index = GridIndex([polygon] * n_polygons, max_entries=n_polygons)
+
+        assert (index.nx, index.ny) == (1, 1)
+        assert len(index._cell_poly) == n_polygons
+        assert np.all(np.diff(index._cell_poly) == 1)
+        assert int(index._cell_edge_work[0]) == np.iinfo(np.uint16).max
+        assert index._max_cell_edge_work == np.iinfo(np.uint16).max
+        assert index._candidate_edge_bounds(np.array([0], dtype=np.int32)) == (
+            0,
+            np.iinfo(np.uint16).max,
+        )
+
+    def test_wide_skew_crosses_chunk_boundary_without_losing_giant(self):
+        n_cells = 4097
+        positions = np.array([4096, 0, 2048, 17, 4095, 1, 3000, 511])
+        small = [
+            shapely.box(float(x) + 0.1, 0.2, float(x) + 0.9, 0.8) for x in positions
+        ]
+        giant_id = len(small)
+        index = GridIndex(
+            [*small, shapely.box(0.0, 0.0, float(n_cells), 1.0)],
+            cell_size=1.0,
+            max_entries=n_cells + len(small),
+        )
+
+        assert (index.nx, index.ny) == (n_cells, 1)
+        counts = np.diff(index._cell_offsets)
+        expected_counts = np.ones(n_cells, dtype=np.int64)
+        expected_counts[positions] += 1
+        np.testing.assert_array_equal(counts, expected_counts)
+        assert len(index._cell_poly) == n_cells + len(small)
+        for polygon_id, cell in enumerate(positions):
+            lo, hi = index._cell_offsets[cell : cell + 2]
+            np.testing.assert_array_equal(
+                index._cell_poly[lo:hi], [polygon_id, giant_id]
+            )
+        ordinary = 1234
+        assert ordinary not in positions
+        lo, hi = index._cell_offsets[ordinary : ordinary + 2]
+        np.testing.assert_array_equal(index._cell_poly[lo:hi], [giant_id])
+
+    def test_material_giant_bbox_builds_exact_direct_csr(self):
+        n = 257
+        small = shapely.box(0.1, 0.1, 0.9, 0.9)
+        giant = shapely.box(0.0, 0.0, float(n), float(n))
+        index = GridIndex(
+            [small, Polygon(), giant],
+            cell_size=1.0,
+            max_entries=n * n + 1,
+        )
+
+        assert (index.nx, index.ny) == (n, n)
+        assert _grid_csr_strategy(
+            len(index._cell_poly), 2, index.n_cells
+        ) == "direct"
+        counts = np.diff(index._cell_offsets)
+        assert counts[0] == 2
+        assert np.all(counts[1:] == 1)
+        np.testing.assert_array_equal(index._cell_poly[:2], [0, 2])
+        np.testing.assert_array_equal(index._cell_poly[2:], 2)
+
+    def test_moderate_overlap_builds_exact_packed_csr(self):
+        n_finite = 1024
+        polygon = shapely.box(0.0, 0.0, 8.0, 8.0)
+        polygons = [polygon] * 512 + [Polygon()] + [polygon] * 512
+        index = GridIndex(
+            polygons,
+            cell_size=1.0,
+            max_entries=8 * 8 * n_finite,
+        )
+
+        assert (index.nx, index.ny) == (8, 8)
+        assert _grid_csr_strategy(
+            len(index._cell_poly), n_finite, index.n_cells
+        ) == "packed"
+        np.testing.assert_array_equal(
+            np.diff(index._cell_offsets),
+            np.full(index.n_cells, n_finite, dtype=np.int64),
+        )
+        polygon_ids = np.concatenate(
+            [
+                np.arange(512, dtype=np.int32),
+                np.arange(513, 1025, dtype=np.int32),
+            ]
+        )
+        expected = np.broadcast_to(
+            polygon_ids,
+            (index.n_cells, n_finite),
+        )
+        np.testing.assert_array_equal(
+            index._cell_poly.reshape(index.n_cells, n_finite), expected
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -613,6 +814,16 @@ class TestEdgeGeometry:
     def test_all_empty_polygons_degenerate_grid(self):
         """All-empty sets build a degenerate grid: every query is unmatched."""
         index = GridIndex(np.array([Polygon(), Polygon()], dtype=object))
+        assert (index.nx, index.ny) == (1, 1)
+        assert (index.x0, index.y0, index.x1, index.y1) == (0.0, 0.0, -1.0, -1.0)
+        np.testing.assert_array_equal(index._cell_offsets, [0, 0])
+        assert index._cell_offsets.dtype == np.int64
+        assert index._cell_poly.shape == (0,)
+        assert index._cell_poly.dtype == np.int32
+        np.testing.assert_array_equal(index._cell_edge_work, [0])
+        assert index._cell_max_ring_edges is None
+        assert index._cell_all_long_rings is None
+        assert index._max_cell_ring_edges == index._max_cell_edge_work == 0
         pts = np.array([[0.0, 0.0], [0.5, 0.5], [np.nan, np.nan]])
         for backend in (["cpu", "gpu"] if metal_available() else ["cpu"]):
             np.testing.assert_array_equal(

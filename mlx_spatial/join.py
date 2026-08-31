@@ -33,6 +33,178 @@ from ._pip import (
 __all__ = ["GridIndex", "point_in_polygon", "sjoin"]
 
 _INT32_MAX = np.iinfo(np.int32).max
+_UINT32_MASK = np.uint64(np.iinfo(np.uint32).max)
+
+# Direct polygon-order filling avoids sorting entirely, but its Python loop and
+# two grid-wide cumulative sums are worthwhile only for material, dense
+# rectangle expansion. Low-coverage grids retain NumPy's fast stable integer
+# sort; moderately expanded grids use the lower-memory packed-key builder.
+_GRID_DIRECT_MIN_ENTRIES = 65_536
+_GRID_DIRECT_MIN_CELLS_PER_POLYGON = 256
+_GRID_PACKED_MIN_ENTRIES = 65_536
+_GRID_PACKED_MIN_CELLS_PER_POLYGON = 8
+
+
+def _grid_csr_strategy(total: int, n_polygons: int, n_cells: int) -> str:
+    """Choose stable, packed-key, or direct monotonic CSR construction."""
+    if (
+        total >= _GRID_DIRECT_MIN_ENTRIES
+        and total >= _GRID_DIRECT_MIN_CELLS_PER_POLYGON * n_polygons
+        and total * 2 >= n_cells
+    ):
+        return "direct"
+    if (
+        total >= _GRID_PACKED_MIN_ENTRIES
+        and total >= _GRID_PACKED_MIN_CELLS_PER_POLYGON * n_polygons
+    ):
+        return "packed"
+    return "stable"
+
+
+def _build_grid_csr_stable(
+    finite_idx: np.ndarray,
+    ix0: np.ndarray,
+    iy0: np.ndarray,
+    ix1: np.ndarray,
+    iy1: np.ndarray,
+    cells_per_poly: np.ndarray,
+    total: int,
+    nx: int,
+    ny: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build low-coverage CSR with NumPy's stable integer argsort."""
+    poly_rep = np.repeat(finite_idx.astype(np.int32), cells_per_poly)
+    starts = np.empty(cells_per_poly.size, dtype=np.int64)
+    starts[0] = 0
+    if starts.size > 1:
+        np.cumsum(cells_per_poly[:-1], out=starts[1:])
+    rank = np.arange(total, dtype=np.int64) - np.repeat(
+        starts, cells_per_poly
+    )
+    dy_rep = np.repeat(iy1 - iy0 + 1, cells_per_poly)
+    local_x = rank // dy_rep
+    local_y = rank % dy_rep
+    cell_id = (
+        (np.repeat(iy0, cells_per_poly) + local_y) * nx
+        + np.repeat(ix0, cells_per_poly)
+        + local_x
+    ).astype(np.int32)
+
+    order = np.argsort(cell_id, kind="stable")
+    cell_poly = poly_rep[order]
+    counts = np.bincount(cell_id, minlength=nx * ny)
+    return cell_poly, counts, _offsets_from_counts(counts)
+
+
+def _offsets_from_counts(counts: np.ndarray) -> np.ndarray:
+    offsets = np.empty(counts.size + 1, dtype=np.int64)
+    offsets[0] = 0
+    np.cumsum(counts, out=offsets[1:])
+    return offsets
+
+
+def _build_grid_csr_packed(
+    finite_idx: np.ndarray,
+    ix0: np.ndarray,
+    iy0: np.ndarray,
+    ix1: np.ndarray,
+    iy1: np.ndarray,
+    cells_per_poly: np.ndarray,
+    total: int,
+    nx: int,
+    ny: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build sorted cell CSR through unique packed ``(cell, polygon)`` keys."""
+    # Expand each bbox rectangle in original polygon order. Reuse the two
+    # entry-sized int64 work arrays in place to keep peak memory bounded.
+    polygon_starts = np.empty(cells_per_poly.size, dtype=np.int64)
+    polygon_starts[0] = 0
+    if polygon_starts.size > 1:
+        np.cumsum(cells_per_poly[:-1], out=polygon_starts[1:])
+    rank = np.arange(total, dtype=np.int64)
+    rank -= np.repeat(polygon_starts, cells_per_poly)
+    dy = np.repeat(iy1 - iy0 + 1, cells_per_poly)
+    local_y = np.remainder(rank, dy)
+    np.floor_divide(rank, dy, out=rank)
+    del dy
+
+    rank += np.repeat(ix0, cells_per_poly)
+    local_y += np.repeat(iy0, cells_per_poly)
+    local_y *= nx
+    local_y += rank
+    del rank
+
+    cell_id = local_y.astype(np.int32)
+    del local_y
+    counts = np.bincount(cell_id, minlength=nx * ny)
+    offsets = _offsets_from_counts(counts)
+
+    # Every polygon contributes at most one entry to a cell, so these keys are
+    # unique. An in-place unstable quicksort therefore still produces the exact
+    # required cell-major, ascending-polygon order without an int64 argsort
+    # permutation or a separate repeated polygon array.
+    keys = cell_id.astype(np.uint64)
+    del cell_id
+    keys <<= np.uint64(32)
+    keys |= np.repeat(finite_idx.astype(np.uint32), cells_per_poly)
+    keys.sort(kind="quicksort")
+    cell_poly = (keys & _UINT32_MASK).astype(np.int32)
+    return cell_poly, counts, offsets
+
+
+def _build_grid_csr_direct(
+    finite_idx: np.ndarray,
+    ix0: np.ndarray,
+    iy0: np.ndarray,
+    ix1: np.ndarray,
+    iy1: np.ndarray,
+    total: int,
+    nx: int,
+    ny: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build dense rectangle CSR without sorting, preserving polygon order."""
+    # Four-corner range updates recover exact per-cell candidate counts in
+    # O(polygons + cells), without materializing one cell id per entry.
+    count_grid = np.zeros((ny, nx), dtype=np.int64)
+    np.add.at(count_grid, (iy0, ix0), 1)
+    x_after = ix1 + 1
+    y_after = iy1 + 1
+    has_x_after = x_after < nx
+    has_y_after = y_after < ny
+    np.add.at(
+        count_grid,
+        (iy0[has_x_after], x_after[has_x_after]),
+        -1,
+    )
+    np.add.at(
+        count_grid,
+        (y_after[has_y_after], ix0[has_y_after]),
+        -1,
+    )
+    has_corner = has_x_after & has_y_after
+    np.add.at(
+        count_grid,
+        (y_after[has_corner], x_after[has_corner]),
+        1,
+    )
+    np.cumsum(count_grid, axis=0, out=count_grid)
+    np.cumsum(count_grid, axis=1, out=count_grid)
+    counts = count_grid.reshape(-1)
+    offsets = _offsets_from_counts(counts)
+
+    # Polygon ids arrive in ascending original order. Each polygon touches a
+    # cell only once, so advancing that cell's cursor writes the exact sorted
+    # segment directly and deterministically—no atomics or post-sort needed.
+    cell_poly = np.empty(total, dtype=np.int32)
+    cursor = offsets[:-1].copy()
+    for p in range(finite_idx.size):
+        xs = np.arange(ix0[p], ix1[p] + 1, dtype=np.int64)
+        row_starts = np.arange(iy0[p], iy1[p] + 1, dtype=np.int64) * nx
+        cell_id = (row_starts[:, None] + xs).reshape(-1)
+        destination = cursor[cell_id]
+        cell_poly[destination] = finite_idx[p]
+        cursor[cell_id] = destination + 1
+    return cell_poly, counts, offsets
 
 
 class GridIndex:
@@ -98,7 +270,9 @@ class GridIndex:
         for _ in range(64):
             nx = max(1, int(np.ceil(width / cell_size)) if width > 0 else 1)
             ny = max(1, int(np.ceil(height / cell_size)) if height > 0 else 1)
-            if nx * ny > max_cells:
+            # Cell ids are part of the public/internal int32 query contract.
+            # Coarsen even if a caller supplies a larger max_cells budget.
+            if nx * ny > max_cells or nx * ny > _INT32_MAX:
                 cell_size *= 2.0
                 continue
             ix0 = np.clip(np.floor((fb[:, 0] - self.x0) / cell_size), 0, nx - 1).astype(np.int64)
@@ -117,23 +291,38 @@ class GridIndex:
         self.cell_size = cell_size
         self.nx, self.ny = nx, ny
 
-        # Ragged cartesian expansion: every (polygon, covered-cell) entry.
-        poly_rep = np.repeat(finite_idx, cells_per_poly)
-        starts = np.concatenate([[0], np.cumsum(cells_per_poly)[:-1]])
-        rank = np.arange(total, dtype=np.int64) - np.repeat(starts, cells_per_poly)
-        dy = iy1 - iy0 + 1
-        dy_rep = np.repeat(dy, cells_per_poly)
-        local_x = rank // dy_rep
-        local_y = rank % dy_rep
-        cell_id = (np.repeat(iy0, cells_per_poly) + local_y) * nx + (
-            np.repeat(ix0, cells_per_poly) + local_x
-        )
-
-        # Stable sort by cell keeps polygon ids ascending within each cell.
-        order = np.argsort(cell_id, kind="stable")
-        self._cell_poly = poly_rep[order].astype(np.int32)
-        counts = np.bincount(cell_id[order], minlength=nx * ny)
-        self._cell_offsets = np.concatenate([[0], np.cumsum(counts)]).astype(np.int64)
+        # Keep low-coverage input on stable integer sort, pack moderately
+        # expanded unique keys in place, and remove sorting entirely when bbox
+        # rectangles densely cover a material fraction of the grid.
+        strategy = _grid_csr_strategy(total, finite_idx.size, nx * ny)
+        if strategy == "direct":
+            self._cell_poly, counts, self._cell_offsets = _build_grid_csr_direct(
+                finite_idx, ix0, iy0, ix1, iy1, total, nx, ny
+            )
+        elif strategy == "packed":
+            self._cell_poly, counts, self._cell_offsets = _build_grid_csr_packed(
+                finite_idx,
+                ix0,
+                iy0,
+                ix1,
+                iy1,
+                cells_per_poly,
+                total,
+                nx,
+                ny,
+            )
+        else:
+            self._cell_poly, counts, self._cell_offsets = _build_grid_csr_stable(
+                finite_idx,
+                ix0,
+                iy0,
+                ix1,
+                iy1,
+                cells_per_poly,
+                total,
+                nx,
+                ny,
+            )
 
         # Host selectors need the actual candidate complexity of each cell.
         # This avoids routing a query through a cooperative long-ring kernel
