@@ -251,6 +251,24 @@ class PolygonSet:
         # CPU-side planning copies.
         self._ring_offsets = ring_offsets
         self._geom_ring_offsets = geom_ring_offsets
+        edges_per_ring = np.maximum(np.diff(ring_offsets) - 1, 0)
+        self.max_edges_per_ring = int(edges_per_ring.max(initial=0))
+        geom_max_ring_edges = np.zeros(self.n_polygons, dtype=np.int64)
+        nonempty_geom = geom_ring_offsets[1:] > geom_ring_offsets[:-1]
+        if nonempty_geom.any():
+            # Filtering empty geometries before reduceat is essential: their
+            # duplicate ring offsets must not borrow the following geometry's
+            # first ring length.
+            geom_max_ring_edges[nonempty_geom] = np.maximum.reduceat(
+                edges_per_ring, geom_ring_offsets[:-1][nonempty_geom]
+            )
+        self._geom_max_ring_edges = geom_max_ring_edges
+        edge_cumulative = np.concatenate(
+            [np.zeros(1, dtype=np.int64), np.cumsum(edges_per_ring)]
+        )
+        self._geom_edge_offsets = edge_cumulative[geom_ring_offsets]
+        self._geom_edge_counts = np.diff(self._geom_edge_offsets)
+        self.max_edges_per_polygon = int(self._geom_edge_counts.max(initial=0))
 
         # Lazy caches.
         self._edge_data: EdgeData | None = None
@@ -284,9 +302,7 @@ class PolygonSet:
             edges = np.concatenate(
                 [coords[start_idx], coords[start_idx + 1]], axis=1
             ).astype(np.float32)
-            edges_per_ring = np.maximum(np.diff(ring_offsets) - 1, 0)
-            cum = np.concatenate([[0], np.cumsum(edges_per_ring)])
-            geom_offsets = cum[self._geom_ring_offsets].astype(np.int64)
+            geom_offsets = self._geom_edge_offsets
             self._edge_data = EdgeData(
                 edges=mx.array(edges),
                 geom_offsets_np=geom_offsets,

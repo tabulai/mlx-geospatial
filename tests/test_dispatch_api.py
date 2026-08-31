@@ -37,6 +37,7 @@ from mlx_spatial._dispatch import (
 from mlx_spatial._pip import (
     _all_matches_strategy,
     _pip_dense_composed,
+    _pip_long_polygon_strategy,
     pip_all_matches,
     pip_dense,
     pip_first_match,
@@ -56,6 +57,32 @@ def test_all_matches_strategy_accounts_for_max_point_skew():
     """One pathological point must not hide behind a low chunk average."""
     assert _all_matches_strategy(100_000, 199_999, 100_000) == "pair"
     assert _all_matches_strategy(100_000, 800_000, 8) == "point"
+    # Long candidate geometries force the candidate-parallel path even when
+    # candidate degree alone would favor the point-centric implementation.
+    assert _all_matches_strategy(100_000, 6_400_000, 64, 8191) == "point"
+    assert _all_matches_strategy(100_000, 6_400_000, 64, 8192) == "pair"
+    assert _all_matches_strategy(100_000, 6_400_000, 64, 1, 1024) == "pair"
+
+
+@pytest.mark.parametrize(
+    ("n_work", "max_ring_edges", "expected"),
+    [
+        (0, 100_000, "scalar"),
+        (1, 1023, "scalar"),
+        (1024, 1024, "threadgroup"),
+        (1025, 1024, "simdgroup"),
+        (4096, 1024, "simdgroup"),
+        (4097, 1024, "scalar"),
+        (4096, 4096, "threadgroup"),
+        (4097, 4096, "simdgroup"),
+        (16_384, 4096, "simdgroup"),
+        (16_385, 4096, "scalar"),
+    ],
+)
+def test_pip_long_polygon_strategy_boundaries(
+    n_work, max_ring_edges, expected
+):
+    assert _pip_long_polygon_strategy(n_work, max_ring_edges) == expected
 
 
 @pytest.fixture(autouse=True)
@@ -302,6 +329,39 @@ def test_explicit_gpu_all_matches_uses_gpu_compactor(rng, monkeypatch):
     monkeypatch.setattr("mlx_spatial.join.pip_pairs", other_kernel_must_not_run)
     index.query(pts, all_matches=True, backend="gpu")
     assert calls, "all_matches never launched the GPU compactor"
+
+
+@requires_metal
+def test_join_long_polygon_routing_is_limited_to_candidate_cells(monkeypatch):
+    """An unrelated long ring must not change a short-cell query's route."""
+    k = 1031
+    angles = np.linspace(0.0, 2.0 * np.pi, k, endpoint=False)
+    long_far_away = shapely.Polygon(
+        np.column_stack(
+            [100.0 + np.cos(angles), 100.0 + np.sin(angles)]
+        )
+    )
+    polyset = ms.PolygonSet([shapely.box(0.0, 0.0, 1.0, 1.0), long_far_away])
+    index = ms.GridIndex(polyset, cell_size=10.0)
+    pts = np.array([[0.25, 0.25], [0.75, 0.75]])
+    _, _, _, point_cell = index._candidates(pts)
+    assert index._candidate_edge_bounds(point_cell) == (4, 4)
+
+    def cooperative_must_not_run(*args, **kwargs):  # pragma: no cover
+        raise AssertionError("an unrelated long polygon forced cooperative PIP")
+
+    for name in (
+        "_pip_first_match_threadgroup",
+        "_pip_first_match_simdgroup",
+        "_get_all_matches_pair_threadgroup_count_kernel",
+        "_get_all_matches_pair_simdgroup_count_kernel",
+    ):
+        monkeypatch.setattr(f"mlx_spatial._pip.{name}", cooperative_must_not_run)
+
+    np.testing.assert_array_equal(index.query(pts, backend="gpu"), [0, 0])
+    point_idx, poly_idx = index.query(pts, all_matches=True, backend="gpu")
+    np.testing.assert_array_equal(point_idx, [0, 1])
+    np.testing.assert_array_equal(poly_idx, [0, 0])
 
 
 def test_invalid_env_propagates_from_point_in_polygon(monkeypatch):

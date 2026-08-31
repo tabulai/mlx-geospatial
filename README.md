@@ -91,6 +91,12 @@ structurally rather than hopefully:
   (self-intersections, overlapping multipolygon parts) even-odd differs from
   GEOS, and the CPU fallback will disagree with the GPU. Pass
   `PolygonSet(geoms, validate=True)` to reject invalid geometry up front.
+- **Long polygons are adaptive**: Metal containment chooses scalar traversal,
+  one 32-lane SIMDgroup, or one 128-thread group per predicate. Lanes evaluate
+  disjoint edges and XOR integer crossing parity, so the cooperative paths
+  preserve the scalar fp32 even-odd result exactly. They are enabled only for
+  rings with at least 1,024 edges and bounded work sizes; indexed first-match
+  stays scalar unless every candidate in every used cell has a long ring.
 - Haversine: absolute error ~1-2 m from fp32 differencing (relative ~1e-4 at
   10 km), far below the ~0.5% sphere-vs-ellipsoid modeling error any
   haversine implementation carries. One exception: within ~2° of the exact
@@ -150,8 +156,9 @@ because kernel-launch overhead dominates at small sizes.
 - Uniform grid index; heavily skewed polygon sizes may want the quadtree
   planned for v0.2.
 - `all_matches=True` uses bounded adaptive GPU count/scan/ordered compaction
-  without NumPy candidate-pair expansion; its returned arrays still require
-  memory proportional to the number of hits.
+  without NumPy candidate-pair expansion. A long-ring candidate or at least
+  8,192 candidate edges in one used grid cell selects the pair-parallel route;
+  its returned arrays still require memory proportional to the number of hits.
 - `sjoin` implements point-`within`-polygon with first-match (lowest polygon
   index) semantics; use `all_matches=True` on `point_in_polygon` for
   multi-match joins.

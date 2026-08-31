@@ -20,6 +20,7 @@ import shapely
 from shapely.geometry import MultiPolygon, Polygon
 
 import mlx_spatial as ms
+import mlx_spatial._pip as pip_impl
 from mlx_spatial._dispatch import metal_available
 from mlx_spatial._pip import _pip_dense_composed, pip_pairs
 from conftest import make_grid_polygons, near_boundary_mask, reference_assign
@@ -586,8 +587,46 @@ def test_multipolygon_parts_share_vertex():
     _join_matches_matrix(pts, polyset, matrix)
 
 
-def test_high_vertex_count_circle(rng):
+def test_high_vertex_count_circle(rng, monkeypatch):
     """10k-vertex circle: correctness outside the band, no crash, paths agree."""
+    route_calls = {
+        "pairs_threadgroup": 0,
+        "dense_threadgroup": 0,
+        "first_threadgroup": 0,
+        "all_threadgroup": 0,
+    }
+
+    def spy(name, original):
+        def wrapped(*args, **kwargs):
+            route_calls[name] += 1
+            return original(*args, **kwargs)
+
+        return wrapped
+
+    monkeypatch.setattr(
+        pip_impl,
+        "_pip_pairs_threadgroup",
+        spy("pairs_threadgroup", pip_impl._pip_pairs_threadgroup),
+    )
+    monkeypatch.setattr(
+        pip_impl,
+        "_pip_dense_threadgroup",
+        spy("dense_threadgroup", pip_impl._pip_dense_threadgroup),
+    )
+    monkeypatch.setattr(
+        pip_impl,
+        "_pip_first_match_threadgroup",
+        spy("first_threadgroup", pip_impl._pip_first_match_threadgroup),
+    )
+    monkeypatch.setattr(
+        pip_impl,
+        "_get_all_matches_pair_threadgroup_count_kernel",
+        spy(
+            "all_threadgroup",
+            pip_impl._get_all_matches_pair_threadgroup_count_kernel,
+        ),
+    )
+
     k = 10_000
     ang = np.linspace(0.0, 2.0 * np.pi, k, endpoint=False)
     circle = Polygon(np.column_stack([np.cos(ang), np.sin(ang)]))
@@ -608,6 +647,50 @@ def test_high_vertex_count_circle(rng):
     n_rand = len(random_pts)
     np.testing.assert_array_equal(got[n_rand:], ref[n_rand:])  # constructed pts: far from edges
     matrix = _paths_agree(pts, polyset)
+    _join_matches_matrix(pts, polyset, matrix)
+    assert all(count > 0 for count in route_calls.values())
+
+
+def test_long_horizontal_shell_and_hole_paths_agree():
+    """Cooperative traversal preserves ring parity and non-SIMD-width tails."""
+
+    def densified_box(x0, y0, x1, y1, per_side=257):
+        t = np.arange(per_side, dtype=np.float64) / per_side
+        return np.concatenate(
+            [
+                np.column_stack([x0 + (x1 - x0) * t, np.full_like(t, y0)]),
+                np.column_stack([np.full_like(t, x1), y0 + (y1 - y0) * t]),
+                np.column_stack([x1 - (x1 - x0) * t, np.full_like(t, y1)]),
+                np.column_stack([np.full_like(t, x0), y1 - (y1 - y0) * t]),
+            ]
+        )
+
+    shell = densified_box(0.0, 0.0, 10.0, 10.0)
+    # Consecutive duplicates are zero-length edges and make the tail non-32-wide.
+    shell = np.insert(shell, [1, 1], shell[0], axis=0)
+    hole = densified_box(3.0, 3.0, 7.0, 7.0)
+    polygon = Polygon(shell, holes=[hole])
+    polyset = ms.PolygonSet([polygon], origin=(0.0, 0.0))
+    assert polyset.max_edges_per_ring > 1024
+    assert polyset.max_edges_per_ring % 32 != 0
+
+    pts = np.array(
+        [
+            [1.0, 1.0],
+            [2.0, 5.0],
+            [5.0, 5.0],
+            [8.0, 5.0],
+            [11.0, 5.0],
+            [-1.0, 3.0],
+            [-1.0, 7.0],
+            [0.0, 5.0],
+            [3.0, 5.0],
+            [10.0, 10.0],
+        ],
+        dtype=np.float64,
+    )
+    matrix = _paths_agree(pts, polyset)
+    np.testing.assert_array_equal(matrix[:7, 0], [1, 1, 0, 1, 0, 0, 0])
     _join_matches_matrix(pts, polyset, matrix)
 
 

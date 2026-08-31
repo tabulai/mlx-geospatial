@@ -344,6 +344,23 @@ def test_empty_polygon_promoted_path():
     assert not cm[:, 0].any()
 
 
+def test_long_ring_metadata_distinguishes_many_short_rings_after_empty():
+    """Dispatch metadata is per geometry and measures ring and total edges."""
+    k = 1031
+    angles = np.linspace(0.0, 2.0 * np.pi, k, endpoint=False)
+    long_ring = Polygon(np.column_stack([np.cos(angles), np.sin(angles)]))
+    many_short_rings = MultiPolygon(
+        [shapely.box(3.0 * i, 10.0, 3.0 * i + 1.0, 11.0) for i in range(300)]
+    )
+
+    ps = ms.PolygonSet([Polygon(), long_ring, many_short_rings])
+
+    np.testing.assert_array_equal(ps._geom_max_ring_edges, [0, k, 4])
+    np.testing.assert_array_equal(ps._geom_edge_counts, [0, k, 1200])
+    assert ps.max_edges_per_ring == k
+    assert ps.max_edges_per_polygon == 1200
+
+
 def test_all_empty_set_ingests():
     ps = ms.PolygonSet([Polygon(), Polygon()])
     assert (ps.n_polygons, ps.n_rings, ps.n_vertices) == (2, 0, 0)
