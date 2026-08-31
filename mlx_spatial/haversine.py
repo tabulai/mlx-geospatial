@@ -89,20 +89,37 @@ def _hav(lon1, lat1, lon2, lat2, radius: float) -> mx.array:
 
 
 # ---------------------------------------------------------------------------
-# Fused k-nearest-neighbor selection kernel
+# Fused k-nearest-neighbor selection kernels
 #
 # The composed path (distance matrix + mx.argpartition) sorts all N*M
-# distances to keep k of them — mx.argpartition costs a full sort. This
-# kernel gives each query one thread that streams the reference set and
-# maintains its k best in registers: no (N, M) matrix, no sort, one compare
-# per candidate. Techniques borrowed from mlxlearn's neighbor index: rank by
-# a cheap monotone surrogate (the haversine `h` term — no asin/sqrt in the
-# inner loop, as mlxlearn ranks by squared distance), then recompute the
-# survivors' distances with the exact _hav arithmetic so reported distances
-# are bit-identical to haversine_cross.
+# distances to keep k of them — mx.argpartition costs a full sort. The scalar
+# kernel gives each query one thread. The SIMDgroup kernel gives each query 32
+# lanes, lets every lane maintain a local top-k, then performs an exact 32-way
+# merge with shuffle reductions. Both stream the reference set without an
+# (N, M) matrix and rank by the cheap monotone haversine `h` term (no
+# asin/sqrt in the inner loop). The survivors are recomputed with the exact
+# _hav arithmetic so reported distances are bit-identical to haversine_cross.
 # ---------------------------------------------------------------------------
 
 _KNN_KERNEL_MAX_K = 32  # k register slots per thread; beyond this, occupancy suffers
+_KNN_SIMDGROUP_WIDTH = 32
+# Maximum query counts for which 32 lanes/query beat one thread/query on an
+# M4-class GPU. The limits deliberately stay on the fast side of measured
+# crossovers; larger k consumes more registers and performs a longer merge.
+_KNN_SIMDGROUP_QUERY_LIMITS = (
+    (1, 32_768),
+    (5, 16_384),
+    (10, 8_192),
+    (16, 4_096),
+    (32, 2_048),
+)
+_KNN_SIMDGROUP_LARGE_REF_QUERY_LIMITS = (
+    (1, 65_536),
+    (5, 32_768),
+    (10, 16_384),
+    (16, 8_192),
+    (32, 2_048),
+)
 
 _KNN_SELECT_SOURCE = """
     uint tid = thread_position_in_grid.x;
@@ -135,12 +152,78 @@ _KNN_SELECT_SOURCE = """
         }
     }
     for (int s = 0; s < K; ++s) {
-        out_h[(size_t)tid * K + s] = best_h[s];
         out_i[(size_t)tid * K + s] = best_i[s];
     }
 """
 
+
+_KNN_SIMDGROUP_SELECT_SOURCE = """
+    uint tid = thread_position_in_grid.x;
+    uint lane = thread_index_in_simdgroup;
+    uint qid = tid / 32;
+    int n_q = shape[0];
+    // The launch is rounded to whole threadgroups. Since qid changes only at
+    // SIMDgroup boundaries, this return is uniform across every SIMDgroup.
+    if (qid >= (uint)n_q) return;
+    int m = shape[1];
+    float qlon = q[2 * (size_t)qid + 0];
+    float qlat = q[2 * (size_t)qid + 1];
+    float qc = qcos[qid];
+
+    // Each lane sees monotonically increasing reference indices. Strict
+    // insertion therefore keeps its local list ordered by (h, index).
+    float best_h[K];
+    int best_i[K];
+    for (int s = 0; s < K; ++s) { best_h[s] = INFINITY; best_i[s] = -1; }
+
+    for (int j = (int)lane; j < m; j += 32) {
+        float sdlat = metal::precise::sin(
+            (r[2 * (size_t)j + 1] - qlat) * 0.5f);
+        float sdlon = metal::precise::sin(
+            (r[2 * (size_t)j + 0] - qlon) * 0.5f);
+        float h = sdlat * sdlat + qc * rcos[j] * sdlon * sdlon;
+        if (h < best_h[K - 1]) {
+            int s = K - 1;
+            while (s > 0 && best_h[s - 1] > h) {
+                best_h[s] = best_h[s - 1];
+                best_i[s] = best_i[s - 1];
+                --s;
+            }
+            best_h[s] = h;
+            best_i[s] = j;
+        }
+    }
+
+    // The global top-k is contained in the union of the 32 local top-k
+    // lists. Merge their heads k times. The lexicographic comparator makes
+    // exact ties deterministic and identical to the scalar selector.
+    int cursor = 0;
+    for (int s = 0; s < K; ++s) {
+        float winner_h = cursor < K ? best_h[cursor] : INFINITY;
+        int winner_i = cursor < K ? best_i[cursor] : -1;
+        uint winner_lane = lane;
+        for (ushort delta = 16; delta > 0; delta >>= 1) {
+            float other_h = metal::simd_shuffle_down(winner_h, delta);
+            int other_i = metal::simd_shuffle_down(winner_i, delta);
+            uint other_lane = metal::simd_shuffle_down(winner_lane, delta);
+            bool other_wins = other_h < winner_h ||
+                (other_h == winner_h && other_i >= 0 &&
+                 (winner_i < 0 || other_i < winner_i));
+            if (other_wins) {
+                winner_h = other_h;
+                winner_i = other_i;
+                winner_lane = other_lane;
+            }
+        }
+        uint chosen_lane = metal::simd_broadcast(winner_lane, 0);
+        int chosen_i = metal::simd_broadcast(winner_i, 0);
+        if (lane == 0) out_i[(size_t)qid * K + s] = chosen_i;
+        if (lane == chosen_lane && cursor < K) ++cursor;
+    }
+"""
+
 _knn_select_kernel = None
+_knn_simdgroup_select_kernel = None
 
 
 def _get_knn_select_kernel():
@@ -149,41 +232,109 @@ def _get_knn_select_kernel():
         _knn_select_kernel = mx.fast.metal_kernel(
             name="mlx_spatial_knn_select",
             input_names=["q", "qcos", "r", "rcos", "shape"],
-            output_names=["out_h", "out_i"],
+            output_names=["out_i"],
             source=_KNN_SELECT_SOURCE,
         )
     return _knn_select_kernel
 
 
-def _knn_fused(q: mx.array, r: mx.array, k: int, radius: float, *, threadgroup: int = 128):
-    """Fused-select path: q/r are (N, 2)/(M, 2) float32 radians."""
-    radius = _check_radius(radius)
-    n, m = int(q.shape[0]), int(r.shape[0])
-    kernel = _get_knn_select_kernel()
-    qcos = mx.cos(q[:, 1])
-    rcos = mx.cos(r[:, 1])
-    grid_x = ((n + threadgroup - 1) // threadgroup) * threadgroup
-    out_h, out_i = kernel(
-        inputs=[q, qcos, r, rcos, mx.array([n, m], dtype=mx.int32)],
-        template=[("K", k)],
-        grid=(grid_x, 1, 1),
-        threadgroup=(threadgroup, 1, 1),
-        output_shapes=[(n, k), (n, k)],
-        output_dtypes=[mx.float32, mx.int32],
-    )
-    # Recompute the survivors with the exact _hav arithmetic (mlxlearn's
-    # refine step): reported distances match haversine_cross bit-for-bit.
+def _get_knn_simdgroup_select_kernel():
+    global _knn_simdgroup_select_kernel
+    if _knn_simdgroup_select_kernel is None:
+        _knn_simdgroup_select_kernel = mx.fast.metal_kernel(
+            name="mlx_spatial_knn_simdgroup_select",
+            input_names=["q", "qcos", "r", "rcos", "shape"],
+            output_names=["out_i"],
+            source=_KNN_SIMDGROUP_SELECT_SOURCE,
+        )
+    return _knn_simdgroup_select_kernel
+
+
+def _knn_refine(
+    q: mx.array, r: mx.array, out_i: mx.array, radius: float
+) -> tuple[mx.array, mx.array]:
+    """Recompute and stably order selected survivors with public arithmetic."""
     # A slot can stay -1 only when fewer than k references have finite
     # coordinates (NaN rows never win a comparison); keep it -1 with inf
     # distance rather than letting the negative index wrap the gather.
     safe_i = mx.maximum(out_i, 0)
-    ref_sel = mx.take(r, safe_i, axis=0)  # (n, k, 2)
+    ref_sel = mx.take(r, safe_i, axis=0)
     d = _hav(q[:, 0:1], q[:, 1:2], ref_sel[..., 0], ref_sel[..., 1], radius)
     d = mx.where(out_i < 0, mx.array(np.inf, dtype=mx.float32), d)
     order = mx.argsort(d, axis=1)
     d = mx.take_along_axis(d, order, axis=1)
     idx = mx.take_along_axis(out_i, order, axis=1)
     return d, idx
+
+
+def _knn_fused(q: mx.array, r: mx.array, k: int, radius: float, *, threadgroup: int = 128):
+    """Scalar fused-select path: one Metal thread per query."""
+    radius = _check_radius(radius)
+    n, m = int(q.shape[0]), int(r.shape[0])
+    kernel = _get_knn_select_kernel()
+    qcos = mx.cos(q[:, 1])
+    rcos = mx.cos(r[:, 1])
+    grid_x = ((n + threadgroup - 1) // threadgroup) * threadgroup
+    (out_i,) = kernel(
+        inputs=[q, qcos, r, rcos, mx.array([n, m], dtype=mx.int32)],
+        template=[("K", k)],
+        grid=(grid_x, 1, 1),
+        threadgroup=(threadgroup, 1, 1),
+        output_shapes=[(n, k)],
+        output_dtypes=[mx.int32],
+        stream=mx.gpu,
+    )
+    return _knn_refine(q, r, out_i, radius)
+
+
+def _knn_simdgroup(
+    q: mx.array, r: mx.array, k: int, radius: float, *, threadgroup: int = 128
+):
+    """Exact fused-select path: one 32-lane SIMDgroup per query."""
+    radius = _check_radius(radius)
+    if not _KNN_SIMDGROUP_WIDTH <= threadgroup <= 1024 or (
+        threadgroup % _KNN_SIMDGROUP_WIDTH
+    ):
+        raise ValueError(
+            "threadgroup must be a multiple of the SIMDgroup width (32) "
+            "between 32 and 1024"
+        )
+    n, m = int(q.shape[0]), int(r.shape[0])
+    kernel = _get_knn_simdgroup_select_kernel()
+    qcos = mx.cos(q[:, 1])
+    rcos = mx.cos(r[:, 1])
+    threads = n * _KNN_SIMDGROUP_WIDTH
+    grid_x = ((threads + threadgroup - 1) // threadgroup) * threadgroup
+    (out_i,) = kernel(
+        inputs=[q, qcos, r, rcos, mx.array([n, m], dtype=mx.int32)],
+        template=[("K", k)],
+        grid=(grid_x, 1, 1),
+        threadgroup=(threadgroup, 1, 1),
+        output_shapes=[(n, k)],
+        output_dtypes=[mx.int32],
+        stream=mx.gpu,
+    )
+    return _knn_refine(q, r, out_i, radius)
+
+
+def _knn_metal_strategy(n: int, m: int, k: int) -> str:
+    """Choose the faster exact Metal selector for an ``(n, m, k)`` shape."""
+    # A SIMDgroup also wins launch-bound workloads, but multiplying every
+    # query by 32 lanes stops paying once many short reference scans already
+    # fill the GPU. Keep that small-M/high-N corner on the scalar selector.
+    if n <= 1024:
+        return "simdgroup"
+    if m < 128:
+        return "scalar"
+    limits = (
+        _KNN_SIMDGROUP_LARGE_REF_QUERY_LIMITS
+        if m >= 65_536
+        else _KNN_SIMDGROUP_QUERY_LIMITS
+    )
+    for max_k, max_queries in limits:
+        if k <= max_k:
+            return "simdgroup" if n <= max_queries else "scalar"
+    return "scalar"
 
 
 def haversine(a, b, *, radius: float = R_EARTH_M, degrees: bool = True) -> mx.array:
@@ -244,13 +395,14 @@ def haversine_knn(
     index ``-1`` with distance ``inf``. Both execution paths below share this
     contract.
 
-    Exact brute force. On Metal with ``k <= 32`` this runs a fused
-    selection kernel (one thread per query keeps its k best in registers —
-    no ``(N, M)`` matrix, no sort), which stays competitive with tree methods
-    even for reference sets in the hundreds of thousands. Otherwise a
-    chunked distance-matrix + ``argpartition`` fallback runs; that fallback
-    is sort-bound, so for large reference sets with ``k > 32`` a CPU tree
-    (sklearn ``BallTree(metric="haversine")``) may win.
+    Exact brute force. On Metal with ``k <= 32`` this adaptively runs one of
+    two fused selection kernels: a 32-lane SIMDgroup cooperates on each query
+    when query parallelism is scarce, while one thread per query wins for
+    large query batches. Neither materializes an ``(N, M)`` matrix or sorts
+    the reference set. Otherwise a chunked distance-matrix +
+    ``argpartition`` fallback runs; that fallback is sort-bound, so for large
+    reference sets with ``k > 32`` a CPU tree (sklearn
+    ``BallTree(metric="haversine")``) may win.
     """
     from ._dispatch import metal_available
 
@@ -277,8 +429,15 @@ def haversine_knn(
             mx.zeros((0, k), dtype=mx.float32),
             mx.zeros((0, k), dtype=mx.int32),
         )
-    if metal_available() and k <= _KNN_KERNEL_MAX_K:
-        d, idx = _knn_fused(q, r, k, radius)
+    if (
+        metal_available()
+        and mx.default_device() == mx.gpu
+        and k <= _KNN_KERNEL_MAX_K
+    ):
+        if _knn_metal_strategy(n, m, k) == "simdgroup":
+            d, idx = _knn_simdgroup(q, r, k, radius)
+        else:
+            d, idx = _knn_fused(q, r, k, radius)
         mx.eval(d, idx)
         return d, idx
     return _knn_composed(q, r, k, radius, chunk_bytes)

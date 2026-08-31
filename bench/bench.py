@@ -2,7 +2,8 @@
 
 Honesty rules:
 - All timings are end-to-end from host-resident numpy/shapely inputs,
-  including ingestion, host<->device transfer, and result materialization.
+  including ingestion, host->device input transfer, device result evaluation,
+  and synchronization. MLX results are not copied back to numpy.
 - The explicitly labeled dense-PIP microbenchmark is the exception: it uses
   a pre-ingested PolygonSet and GPU-resident points to isolate the replacement
   kernel from its retained composed oracle.
@@ -311,6 +312,10 @@ def main():
 
     if args.all:
         report("haversine_cross 20k x 20k", bench_haversine(20_000, 20_000, rng))
+        report(
+            "haversine_knn 1k queries, 1M refs, k=10",
+            bench_knn(1_000, 1_000_000, 10, rng),
+        )
         report(
             "haversine_knn 1M queries, 10k refs, k=10",
             bench_knn(1_000_000, 10_000, 10, rng),
