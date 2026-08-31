@@ -68,18 +68,24 @@ diverge — `PolygonSet(geoms, validate=True)` rejects such input at ingestion.
 
 ## k-nearest neighbors
 
-`haversine_knn` with `k <= 32` on Metal runs a fused selection kernel: one
-thread per query streams the reference set, computes the haversine `h` term
-inline (~10 flops, no asin/sqrt in the loop — `h` is monotone in distance),
-and keeps its k best in registers with an insertion that costs one compare
-per candidate. No `(N, M)` matrix, no sort. Selected survivors then get
-their distances recomputed through the exact `_hav` graph, so reported
-distances are bit-identical to `haversine_cross`, and a final `(distance,
-index)` sort fixes tie order. Techniques adapted from mlxlearn's neighbor
-index (`mlxlearn/_kernels/distance.py`): rank by a cheap monotone surrogate,
-refine survivors exactly, keep selection on-device end to end. The composed
-fallback (chunked matrix + `mx.argpartition`, which in MLX costs a full
-sort) remains for `k > 32` and non-Metal.
+`haversine_knn` with `k <= 32` on Metal adaptively chooses between two fused
+selectors. The scalar kernel assigns one thread to each query. When query
+parallelism is scarce, the SIMDgroup kernel assigns 32 lanes to each query;
+every lane scans a strided slice of the reference set and retains a local
+top-k, then k shuffle reductions merge the 32 sorted list heads exactly. A
+lane can therefore contribute all k global winners. Both kernels compute the
+haversine `h` term inline (no asin/sqrt in the scan) and avoid both the
+`(N, M)` matrix and a full reference sort.
+
+Selected survivors get their distances recomputed through the exact `_hav`
+graph, so reported distances are bit-identical to `haversine_cross`, followed
+by a k-element distance sort. Exact `h` ties use the lower reference index;
+distinct `h` values that round to the same reported fp32 distance retain the
+documented near-tie ambiguity. Shape-aware dispatch retains the scalar kernel
+once query parallelism is sufficient or SIMDgroup merge/register pressure
+would dominate. The composed fallback (chunked matrix + `mx.argpartition`,
+which in MLX costs a full sort) remains for `k > 32`, non-Metal systems, and
+an active CPU default device.
 
 ## Grid-indexed join
 

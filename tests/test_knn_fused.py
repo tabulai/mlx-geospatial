@@ -7,13 +7,22 @@ the same fused ``_hav`` arithmetic.
 
 from __future__ import annotations
 
+import importlib
+
 import numpy as np
 import mlx.core as mx
 import pytest
 
 import mlx_spatial as ms
 from mlx_spatial._dispatch import metal_available
-from mlx_spatial.haversine import _KNN_KERNEL_MAX_K, _knn_composed, _knn_fused, _prep
+from mlx_spatial.haversine import (
+    _KNN_KERNEL_MAX_K,
+    _knn_composed,
+    _knn_fused,
+    _knn_metal_strategy,
+    _knn_simdgroup,
+    _prep,
+)
 
 pytestmark = pytest.mark.skipif(
     not metal_available(), reason="fused kNN kernel requires Metal"
@@ -52,8 +61,15 @@ def test_public_api_uses_fused_and_matches_bruteforce(rng):
     )
 
 
-def test_k_above_kernel_cap_falls_back(rng):
+def test_k_above_kernel_cap_falls_back(rng, monkeypatch):
     """k > 32 must still return correct results via the composed path."""
+    haversine_module = importlib.import_module("mlx_spatial.haversine")
+
+    def metal_must_not_run(*args, **kwargs):
+        raise AssertionError("k above the cap attempted to run a Metal selector")
+
+    monkeypatch.setattr(haversine_module, "_knn_simdgroup", metal_must_not_run)
+    monkeypatch.setattr(haversine_module, "_knn_fused", metal_must_not_run)
     q = city_cloud(rng, 50)
     r = city_cloud(rng, 200)
     k = _KNN_KERNEL_MAX_K + 1
@@ -108,3 +124,118 @@ def test_fused_radius_parameter(rng):
     np.testing.assert_allclose(
         np.array(d_m), np.array(d_u) * ms.R_EARTH_M, rtol=1e-6
     )
+
+
+@pytest.mark.parametrize(
+    ("n", "m", "k"),
+    [
+        (1, 1, 1),
+        (3, 31, 1),
+        (4, 32, 5),
+        (5, 33, 32),
+        (7, 63, 5),
+        (8, 64, 32),
+        (9, 65, 7),
+    ],
+)
+def test_simdgroup_matches_scalar_at_lane_and_launch_boundaries(rng, n, m, k):
+    q = city_cloud(rng, n)
+    r = city_cloud(rng, m)
+    if m > 1:
+        r[1] = r[0]  # exact tie in different lane strides
+    if m > k:
+        r[-1] = np.nan
+    q_mx, r_mx = _prep(q, True), _prep(r, True)
+    ds, i_s = _knn_simdgroup(q_mx, r_mx, k, ms.R_EARTH_M)
+    df, i_f = _knn_fused(q_mx, r_mx, k, ms.R_EARTH_M)
+    mx.eval(ds, i_s, df, i_f)
+    np.testing.assert_array_equal(np.array(i_s), np.array(i_f))
+    np.testing.assert_array_equal(np.array(ds), np.array(df))
+
+
+def test_simdgroup_global_top_k_can_all_come_from_one_lane():
+    """The 32-way merge must retain more than one candidate from each lane."""
+    near = np.arange(0, 1024, 32)
+    r = np.tile([120.0, 60.0], (1025, 1))
+    r[near] = np.column_stack([(np.arange(32) + 1) * 1e-4, np.zeros(32)])
+    q = np.array([[0.0, 0.0]])
+
+    d, idx = _knn_simdgroup(_prep(q, True), _prep(r, True), 32, ms.R_EARTH_M)
+    full = np.array(ms.haversine_cross(q, r))
+    d, idx = np.array(d), np.array(idx)
+    np.testing.assert_array_equal(idx[0], near)
+    np.testing.assert_array_equal(d[0], full[0, near])
+
+
+def test_simdgroup_ties_and_nan_padding_match_scalar():
+    q = np.array([[0.0, 0.0], [np.nan, 0.0]])
+    r = np.full((65, 2), np.nan)
+    finite = np.array(
+        [0, 1, 2, 5, 10, 15, 20, 25, 30, 31, 32, 33, 34, 40, 47, 50, 55, 62, 63, 64]
+    )
+    r[finite] = [1.0, 1.0]
+    q_mx, r_mx = _prep(q, True), _prep(r, True)
+    ds, i_s = _knn_simdgroup(q_mx, r_mx, 32, ms.R_EARTH_M)
+    df, i_f = _knn_fused(q_mx, r_mx, 32, ms.R_EARTH_M)
+    mx.eval(ds, i_s, df, i_f)
+    ds, i_s = np.array(ds), np.array(i_s)
+    np.testing.assert_array_equal(i_s, np.array(i_f))
+    np.testing.assert_array_equal(ds, np.array(df))
+    np.testing.assert_array_equal(i_s[0, :20], finite)
+    assert (i_s[0, 20:] == -1).all() and np.isinf(ds[0, 20:]).all()
+    assert (i_s[1] == -1).all() and np.isinf(ds[1]).all()
+
+
+@pytest.mark.parametrize(
+    ("n", "m", "k", "expected"),
+    [
+        (1024, 32, 32, "simdgroup"),
+        (1025, 32, 1, "scalar"),
+        (32_768, 128, 1, "simdgroup"),
+        (32_769, 128, 1, "scalar"),
+        (16_384, 128, 5, "simdgroup"),
+        (8_193, 128, 10, "scalar"),
+        (4_096, 128, 16, "simdgroup"),
+        (2_049, 128, 32, "scalar"),
+        (10_000, 100_000, 10, "simdgroup"),
+        (16_385, 65_536, 10, "scalar"),
+        (8_192, 65_536, 16, "simdgroup"),
+        (2_049, 100_000, 32, "scalar"),
+    ],
+)
+def test_metal_strategy_crossover(n, m, k, expected):
+    assert _knn_metal_strategy(n, m, k) == expected
+
+
+@pytest.mark.parametrize("threadgroup", [0, 31, 33, 1056])
+def test_simdgroup_rejects_invalid_threadgroup(threadgroup):
+    q = _prep(np.array([[0.0, 0.0]]), True)
+    r = _prep(np.array([[1.0, 0.0]]), True)
+    with pytest.raises(ValueError, match="multiple.*32"):
+        _knn_simdgroup(q, r, 1, ms.R_EARTH_M, threadgroup=threadgroup)
+
+
+def test_public_api_respects_cpu_default_device(monkeypatch, rng):
+    """An active CPU device must use the composed path, not compile Metal."""
+    q, r = city_cloud(rng, 4), city_cloud(rng, 40)
+
+    def metal_must_not_run(*args, **kwargs):
+        raise AssertionError("CPU-default kNN attempted to run a Metal kernel")
+
+    haversine_module = importlib.import_module("mlx_spatial.haversine")
+    monkeypatch.setattr(haversine_module, "_knn_simdgroup", metal_must_not_run)
+    monkeypatch.setattr(haversine_module, "_knn_fused", metal_must_not_run)
+
+    old_device = mx.default_device()
+    try:
+        mx.set_default_device(mx.cpu)
+        q_mx, r_mx = _prep(q, True), _prep(r, True)
+        expected = _knn_composed(
+            q_mx, r_mx, 32, ms.R_EARTH_M, 512 * 1024 * 1024
+        )
+        got = ms.haversine_knn(q, r, k=32)
+        mx.eval(*expected, *got)
+    finally:
+        mx.set_default_device(old_device)
+    np.testing.assert_array_equal(np.array(got[0]), np.array(expected[0]))
+    np.testing.assert_array_equal(np.array(got[1]), np.array(expected[1]))

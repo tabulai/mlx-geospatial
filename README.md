@@ -104,9 +104,10 @@ single-threaded GEOS beats a kernel launch there. Force a path with
 ## Benchmarks
 
 Apple M4 Max, macOS 26.2, mlx 0.31.2, Python 3.13. End-to-end wall time from
-host-resident numpy/shapely inputs — ingestion, transfer, and result
-materialization all included; best of 3. Reproduce with
-`python bench/bench.py --all` (methodology in `bench/README.md`).
+host-resident numpy/shapely inputs — ingestion, host→device transfer, and
+device result evaluation/synchronization included (no NumPy copy-back); best
+of 3. Reproduce with `python bench/bench.py --all` (methodology in
+`bench/README.md`).
 
 **Point-in-polygon join** (uniform random points × convex zones, NYC-like
 extent; mlx-spatial numbers use a warm index; the benchmark harness also
@@ -119,23 +120,28 @@ reports cold runs with polygon ingestion and index construction included):
 | 10M pts × 260 zones | **136 ms** | 6.8 s (50x) | 11.1 s (82x) | 6.4 s (47x) |
 | 1M pts × 10k zones | **12 ms** | 1.06 s (88x) | 786 ms (65x) | 554 ms (46x) |
 
-**Haversine** (`mx.compile`-fused distances; kNN via a fused selection kernel):
+**Haversine** (`mx.compile`-fused distances; kNN via adaptive scalar/SIMDgroup
+selection kernels):
 
 | workload | mlx-spatial | numpy float64 | scikit-learn |
 | --- | --- | --- | --- |
 | cross 20k × 20k | **19 ms** | 2.64 s (139x) | 3.91 s (206x) |
-| knn 1M queries × 10k refs, k=10 | **144 ms** | — | BallTree 4.3 s (30x) |
-| knn 200k queries × 200k refs, k=10 | **520 ms** | — | BallTree 1.1 s (2.2x) |
-| knn 1M queries × 200k refs, k=10 | **2.5 s** | — | BallTree 5.7 s (2.3x) |
+| knn 1k queries × 1M refs, k=10 | **26.6 ms** | — | BallTree 328 ms (12.3x) |
+| knn 1M queries × 10k refs, k=10 | **154 ms** | — | BallTree 4.54 s (30x) |
+| knn 200k queries × 200k refs, k=10 | **562 ms** | — | BallTree 1.22 s (2.2x) |
+| knn 1M queries × 200k refs, k=10 | **2.63 s** | — | BallTree 6.02 s (2.3x) |
 
 Honesty notes: `haversine_knn` is exact brute force. For `k <= 32` it runs a
-fused Metal selection kernel — one thread per query keeps its k best in
-registers, so no (N, M) matrix is materialized and nothing is sorted — which
-beats a CPU BallTree even at 200k references. With `k > 32` (or without
-Metal) it falls back to a chunked distance-matrix + `argpartition` path that
-is sort-bound; at large reference sets a BallTree can win there. Below ~1e5
-candidate pairs the join auto-dispatches to shapely, because kernel-launch
-overhead dominates at small sizes.
+shape-adaptive fused Metal selector: 32 lanes cooperate on each query when
+query parallelism is scarce, while large query batches retain the faster
+one-thread-per-query kernel. Neither materializes an `(N, M)` matrix or sorts
+the full reference set. In the 1k × 1M row, the GPU-resident selector core is
+24.8 ms versus 355.4 ms for the retained scalar kernel (14.3x); the table's
+26.6 ms includes host ingestion and transfer. With `k > 32` (or without an
+active Metal device) kNN falls back to a chunked distance-matrix +
+`argpartition` path that is sort-bound; at large reference sets a BallTree can
+win there. Below ~1e5 candidate pairs the join auto-dispatches to shapely,
+because kernel-launch overhead dominates at small sizes.
 
 ## Limitations (v0.1)
 

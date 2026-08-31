@@ -2,10 +2,11 @@
 
 Methodology (the honesty rules):
 
-- **End-to-end**: every timing starts from host-resident numpy/shapely
-  inputs and includes ingestion, host↔device transfer, and materializing the
-  result. DuckDB reads from registered in-memory tables; conversion costs
-  count against every framework equally.
+- **End-to-end**: every timing starts from host-resident numpy/shapely inputs
+  and includes ingestion, host→device input transfer, device result
+  evaluation, and synchronization. It does not copy MLX results back to
+  NumPy. DuckDB reads from registered in-memory tables; conversion costs count
+  against every framework equally.
 - **Dense-PIP exception**: the explicitly labeled dense-PIP microbenchmark
   uses a pre-ingested `PolygonSet` and GPU-resident point array. It isolates
   the direct 2-D Metal kernel from the retained composed fallback/oracle and
@@ -29,6 +30,7 @@ Run:
 python bench/bench.py --all
 python bench/bench.py --op join --n 10000000 --m 260
 python bench/bench.py --op haversine --n 20000 --m 20000
+python bench/bench.py --op knn --n 1000 --m 1000000 --k 10
 python bench/bench.py --op knn --n 200000 --m 200000 --k 10
 python bench/bench.py --op dense-pip --n 100000 --m 32 --vertices 48
 ```
