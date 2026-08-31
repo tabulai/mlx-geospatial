@@ -1,13 +1,17 @@
 """Point-in-polygon predicates (even-odd / crossing-number rule).
 
-Three GPU paths share identical semantics:
+Four GPU paths share identical semantics:
 
-- :func:`pip_pairs` — a custom Metal kernel, one thread per (point, polygon)
-  candidate pair, looping that polygon's rings serially. Used for all-match
-  joins and as a fallback for pathological candidate lists.
+- :func:`pip_pairs` — a custom Metal kernel, one thread per explicit
+  (point, polygon) candidate pair. Retained as the splittable fallback for
+  pathological first-match candidate lists.
 - :func:`pip_first_match` — a point-centric custom Metal kernel. One thread
   walks a point's grid-cell candidates in ascending polygon order, performs
   bbox + parity tests, and returns immediately on the first hit.
+- :func:`pip_all_matches` — an adaptive ordered GPU compactor. Ordinary
+  candidate lists use point-centric count/scan/write passes; sparse or skewed
+  lists use a pair-parallel flag/scan/write path so one long list cannot
+  serialize a thread.
 - :func:`pip_dense` — a custom 2-D Metal kernel, one thread per output cell,
   with adjacent lanes sharing a polygon while evaluating contiguous points.
   Used for dense ``(N, M)`` containment matrices.
@@ -30,7 +34,13 @@ import mlx.core as mx
 from ._dispatch import metal_available
 from ._ingest import PolygonSet
 
-__all__ = ["pip_pairs", "pip_first_match", "pip_dense", "contains_matrix"]
+__all__ = [
+    "pip_pairs",
+    "pip_first_match",
+    "pip_all_matches",
+    "pip_dense",
+    "contains_matrix",
+]
 
 _PAIR_KERNEL_SOURCE = """
     // Keep every float op individually rounded: with contraction enabled the
@@ -170,9 +180,194 @@ _FIRST_MATCH_KERNEL_SOURCE = """
     }
 """
 
+_ALL_MATCHES_HEADER = """
+    // Keep the count and write passes operation-for-operation identical to
+    // pip_pairs, including individually rounded x-intersection arithmetic.
+    #pragma clang fp contract(off)
+    template <typename Coords, typename RingOffsets,
+              typename GeomRingOffsets, typename Bboxes>
+    METAL_FUNC bool mlx_spatial_pip_contains(
+        float px, float py, int pg,
+        Coords coords, RingOffsets ring_offsets,
+        GeomRingOffsets geom_ring_offsets, Bboxes bboxes) {
+        if (px < bboxes[4 * (size_t)pg + 0] ||
+            py < bboxes[4 * (size_t)pg + 1] ||
+            px > bboxes[4 * (size_t)pg + 2] ||
+            py > bboxes[4 * (size_t)pg + 3]) {
+            return false;
+        }
+
+        int crossings = 0;
+        long r_begin = geom_ring_offsets[pg];
+        long r_end = geom_ring_offsets[pg + 1];
+        for (long r = r_begin; r < r_end; ++r) {
+            long v_begin = ring_offsets[r];
+            long v_end = ring_offsets[r + 1];
+            for (long v = v_begin; v + 1 < v_end; ++v) {
+                float y1 = coords[2 * (size_t)v + 1];
+                float y2 = coords[2 * (size_t)v + 3];
+                if ((y1 > py) != (y2 > py)) {
+                    float x1 = coords[2 * (size_t)v + 0];
+                    float x2 = coords[2 * (size_t)v + 2];
+                    float xint = x1 + (py - y1) / (y2 - y1) * (x2 - x1);
+                    if (px < xint) {
+                        crossings += 1;
+                    }
+                }
+            }
+        }
+        return (crossings & 1) != 0;
+    }
+"""
+
+_ALL_MATCHES_COUNT_SOURCE = """
+    uint active = thread_position_in_grid.x;
+    int n_active = shape[0];
+    if (active >= (uint)n_active) return;
+
+    int cell = point_cell[active];
+    if (cell < 0) {
+        match_count[active] = 0;
+        return;
+    }
+    int pt = point_id[active];
+    float px = points[2 * (size_t)pt + 0];
+    float py = points[2 * (size_t)pt + 1];
+    long point_begin = candidate_offsets[active];
+    long candidate_begin = point_begin;
+    long candidate_end = candidate_offsets[active + 1];
+    if (candidate_begin < limits[0]) candidate_begin = limits[0];
+    if (candidate_end > limits[1]) candidate_end = limits[1];
+    long cell_begin = cell_offsets[cell];
+
+    int count = 0;
+    for (long candidate = candidate_begin;
+         candidate < candidate_end; ++candidate) {
+        int pg = cell_poly[cell_begin + candidate - point_begin];
+        if (mlx_spatial_pip_contains(
+                px, py, pg, coords, ring_offsets,
+                geom_ring_offsets, bboxes)) {
+            count += 1;
+        }
+    }
+    match_count[active] = count;
+"""
+
+_ALL_MATCHES_WRITE_SOURCE = """
+    uint active = thread_position_in_grid.x;
+    int n_active = shape[0];
+    if (active >= (uint)n_active) return;
+
+    int cell = point_cell[active];
+    if (cell < 0) return;
+    int pt = point_id[active];
+    float px = points[2 * (size_t)pt + 0];
+    float py = points[2 * (size_t)pt + 1];
+    long point_begin = candidate_offsets[active];
+    long candidate_begin = point_begin;
+    long candidate_end = candidate_offsets[active + 1];
+    if (candidate_begin < limits[0]) candidate_begin = limits[0];
+    if (candidate_end > limits[1]) candidate_end = limits[1];
+    long cell_begin = cell_offsets[cell];
+    int out = match_offsets[active];
+
+    for (long candidate = candidate_begin;
+         candidate < candidate_end; ++candidate) {
+        int pg = cell_poly[cell_begin + candidate - point_begin];
+        if (mlx_spatial_pip_contains(
+                px, py, pg, coords, ring_offsets,
+                geom_ring_offsets, bboxes)) {
+            out_point[out] = (long)pt;
+            out_poly[out] = (long)pg;
+            out += 1;
+        }
+    }
+"""
+
+_ALL_MATCHES_PAIR_COUNT_SOURCE = """
+    uint pair = thread_position_in_grid.x;
+    int n_pairs = shape[0];
+    int n_active = shape[1];
+    if (pair >= (uint)n_pairs) return;
+
+    long candidate = limits[0] + (long)pair;
+    int lo = 0;
+    int hi = n_active;
+    while (lo + 1 < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (candidate_offsets[mid] <= candidate) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+
+    int pt = point_id[lo];
+    int cell = point_cell[lo];
+    long cell_candidate = cell_offsets[cell] +
+        candidate - candidate_offsets[lo];
+    int pg = cell_poly[cell_candidate];
+    float px = points[2 * (size_t)pt + 0];
+    float py = points[2 * (size_t)pt + 1];
+    match_flag[pair] = (int)mlx_spatial_pip_contains(
+        px, py, pg, coords, ring_offsets, geom_ring_offsets, bboxes);
+"""
+
+_ALL_MATCHES_PAIR_WRITE_SOURCE = """
+    uint pair = thread_position_in_grid.x;
+    int n_pairs = shape[0];
+    int n_active = shape[1];
+    if (pair >= (uint)n_pairs || match_flag[pair] == 0) return;
+
+    long candidate = limits[0] + (long)pair;
+    int lo = 0;
+    int hi = n_active;
+    while (lo + 1 < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (candidate_offsets[mid] <= candidate) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+
+    int pt = point_id[lo];
+    int cell = point_cell[lo];
+    long cell_candidate = cell_offsets[cell] +
+        candidate - candidate_offsets[lo];
+    int pg = cell_poly[cell_candidate];
+    int out = inclusive[pair] - 1;
+    out_point[out] = (long)pt;
+    out_poly[out] = (long)pg;
+"""
+
 _pair_kernel = None
 _dense_kernel = None
 _first_match_kernel = None
+_all_matches_count_kernel = None
+_all_matches_write_kernel = None
+_all_matches_pair_count_kernel = None
+_all_matches_pair_write_kernel = None
+
+_ALL_MATCHES_PAIR_ACTIVE_THRESHOLD = 1024
+_ALL_MATCHES_PAIR_POINT_THRESHOLD = 256
+
+
+def _all_matches_strategy(
+    n_active: int, n_pairs: int, max_point_pairs: int
+) -> str:
+    """Choose point-centric or pair-parallel ordered GPU compaction."""
+    if n_pairs == 0:
+        return "point"
+    if n_active < _ALL_MATCHES_PAIR_ACTIVE_THRESHOLD:
+        return "pair"
+    # The average is not a safe skew signal: one point can own nearly all
+    # candidates while tens of thousands of other points own one each. Such
+    # a chunk would leave the point-centric launch waiting on one serial
+    # thread, whereas the pair path distributes that list across the grid.
+    if max_point_pairs >= _ALL_MATCHES_PAIR_POINT_THRESHOLD:
+        return "pair"
+    return "point"
 
 
 def _crossed_graph(px, py, x1, y1, x2, y2):
@@ -249,6 +444,107 @@ def _get_first_match_kernel():
             source=_FIRST_MATCH_KERNEL_SOURCE,
         )
     return _first_match_kernel
+
+
+def _get_all_matches_count_kernel():
+    global _all_matches_count_kernel
+    if _all_matches_count_kernel is None:
+        _all_matches_count_kernel = mx.fast.metal_kernel(
+            name="mlx_spatial_pip_all_matches_count",
+            input_names=[
+                "points",
+                "point_id",
+                "point_cell",
+                "candidate_offsets",
+                "cell_offsets",
+                "cell_poly",
+                "coords",
+                "ring_offsets",
+                "geom_ring_offsets",
+                "bboxes",
+                "limits",
+                "shape",
+            ],
+            output_names=["match_count"],
+            header=_ALL_MATCHES_HEADER,
+            source=_ALL_MATCHES_COUNT_SOURCE,
+        )
+    return _all_matches_count_kernel
+
+
+def _get_all_matches_write_kernel():
+    global _all_matches_write_kernel
+    if _all_matches_write_kernel is None:
+        _all_matches_write_kernel = mx.fast.metal_kernel(
+            name="mlx_spatial_pip_all_matches_write",
+            input_names=[
+                "points",
+                "point_id",
+                "point_cell",
+                "candidate_offsets",
+                "cell_offsets",
+                "cell_poly",
+                "coords",
+                "ring_offsets",
+                "geom_ring_offsets",
+                "bboxes",
+                "limits",
+                "match_offsets",
+                "shape",
+            ],
+            output_names=["out_point", "out_poly"],
+            header=_ALL_MATCHES_HEADER,
+            source=_ALL_MATCHES_WRITE_SOURCE,
+        )
+    return _all_matches_write_kernel
+
+
+def _get_all_matches_pair_count_kernel():
+    global _all_matches_pair_count_kernel
+    if _all_matches_pair_count_kernel is None:
+        _all_matches_pair_count_kernel = mx.fast.metal_kernel(
+            name="mlx_spatial_pip_all_matches_pair_count",
+            input_names=[
+                "points",
+                "point_id",
+                "point_cell",
+                "candidate_offsets",
+                "cell_offsets",
+                "cell_poly",
+                "coords",
+                "ring_offsets",
+                "geom_ring_offsets",
+                "bboxes",
+                "limits",
+                "shape",
+            ],
+            output_names=["match_flag"],
+            header=_ALL_MATCHES_HEADER,
+            source=_ALL_MATCHES_PAIR_COUNT_SOURCE,
+        )
+    return _all_matches_pair_count_kernel
+
+
+def _get_all_matches_pair_write_kernel():
+    global _all_matches_pair_write_kernel
+    if _all_matches_pair_write_kernel is None:
+        _all_matches_pair_write_kernel = mx.fast.metal_kernel(
+            name="mlx_spatial_pip_all_matches_pair_write",
+            input_names=[
+                "point_id",
+                "point_cell",
+                "candidate_offsets",
+                "cell_offsets",
+                "cell_poly",
+                "limits",
+                "match_flag",
+                "inclusive",
+                "shape",
+            ],
+            output_names=["out_point", "out_poly"],
+            source=_ALL_MATCHES_PAIR_WRITE_SOURCE,
+        )
+    return _all_matches_pair_write_kernel
 
 
 def pip_pairs(
@@ -337,6 +633,153 @@ def pip_first_match(
         stream=mx.gpu,
     )
     return match
+
+
+def pip_all_matches(
+    points_local: mx.array,
+    polygons: PolygonSet,
+    point_id: mx.array,
+    point_cell: mx.array,
+    candidate_offsets: mx.array,
+    cell_offsets: mx.array,
+    cell_poly: mx.array,
+    *,
+    pair_begin: int,
+    pair_end: int,
+    max_point_pairs: int | None = None,
+    threadgroup: int = 256,
+) -> tuple[mx.array, mx.array]:
+    """Compact every CSR containment hit for one bounded candidate range.
+
+    ``point_id`` and ``point_cell`` contain candidate-bearing points in
+    ascending point order. ``candidate_offsets`` is their int64 prefix sum in
+    the conceptual point-major candidate array. ``[pair_begin, pair_end)``
+    may split the first or last point, which keeps the caller's candidate-work
+    cap exact even when one grid cell alone exceeds it.
+
+    The caller may supply the maximum number of candidates contributed by any
+    point after clipping to this batch. It lets the adaptive implementation
+    avoid serializing a highly skewed list in one point thread. If omitted,
+    the whole batch is used as a conservative bound.
+
+    Both GPU strategies preserve point-major then polygon-major order without
+    materializing explicit candidate-index arrays. Returned arrays use the
+    public int64 pair-index dtype.
+    """
+    n_active = int(point_id.shape[0])
+    pair_begin = int(pair_begin)
+    pair_end = int(pair_end)
+    if pair_begin < 0 or pair_end < pair_begin:
+        raise ValueError("candidate range must satisfy 0 <= pair_begin <= pair_end")
+    if pair_end - pair_begin >= 2**31:
+        raise ValueError("one all-matches GPU batch must contain fewer than 2**31 pairs")
+    if (
+        int(point_cell.shape[0]) != n_active
+        or int(candidate_offsets.shape[0]) != n_active + 1
+    ):
+        raise ValueError("point arrays and candidate_offsets have inconsistent shapes")
+    if n_active == 0 or pair_begin == pair_end:
+        return (
+            mx.zeros((0,), dtype=mx.int64, stream=mx.gpu),
+            mx.zeros((0,), dtype=mx.int64, stream=mx.gpu),
+        )
+    if not 1 <= threadgroup <= 1024:
+        raise ValueError("threadgroup must be in [1, 1024]")
+
+    n_pairs = pair_end - pair_begin
+    if max_point_pairs is None:
+        max_point_pairs = n_pairs
+    max_point_pairs = int(max_point_pairs)
+    if not 0 <= max_point_pairs <= n_pairs:
+        raise ValueError("max_point_pairs must be in [0, pair_end - pair_begin]")
+    limits = mx.array([pair_begin, pair_end], dtype=mx.int64)
+    common_inputs = [
+        points_local,
+        point_id,
+        point_cell,
+        candidate_offsets,
+        cell_offsets,
+        cell_poly,
+        polygons.coords,
+        polygons.ring_offsets,
+        polygons.geom_ring_offsets,
+        polygons.bboxes_local,
+        limits,
+    ]
+
+    if _all_matches_strategy(n_active, n_pairs, max_point_pairs) == "pair":
+        shape = mx.array([n_pairs, n_active], dtype=mx.int32)
+        pair_threadgroup = min(threadgroup, n_pairs)
+        count_kernel = _get_all_matches_pair_count_kernel()
+        (match_flag,) = count_kernel(
+            inputs=[*common_inputs, shape],
+            grid=(n_pairs, 1, 1),
+            threadgroup=(pair_threadgroup, 1, 1),
+            output_shapes=[(n_pairs,)],
+            output_dtypes=[mx.int32],
+            stream=mx.gpu,
+        )
+        inclusive = mx.cumsum(match_flag, stream=mx.gpu)
+        n_matches = int(inclusive[-1].item())
+        if n_matches == 0:
+            return (
+                mx.zeros((0,), dtype=mx.int64, stream=mx.gpu),
+                mx.zeros((0,), dtype=mx.int64, stream=mx.gpu),
+            )
+        write_kernel = _get_all_matches_pair_write_kernel()
+        out_point, out_poly = write_kernel(
+            inputs=[
+                point_id,
+                point_cell,
+                candidate_offsets,
+                cell_offsets,
+                cell_poly,
+                limits,
+                match_flag,
+                inclusive,
+                shape,
+            ],
+            grid=(n_pairs, 1, 1),
+            threadgroup=(pair_threadgroup, 1, 1),
+            output_shapes=[(n_matches,), (n_matches,)],
+            output_dtypes=[mx.int64, mx.int64],
+            stream=mx.gpu,
+        )
+        return out_point, out_poly
+
+    shape = mx.array([n_active], dtype=mx.int32)
+    point_threadgroup = min(threadgroup, n_active)
+    count_kernel = _get_all_matches_count_kernel()
+    (match_count,) = count_kernel(
+        inputs=[*common_inputs, shape],
+        grid=(n_active, 1, 1),
+        threadgroup=(point_threadgroup, 1, 1),
+        output_shapes=[(n_active,)],
+        output_dtypes=[mx.int32],
+        stream=mx.gpu,
+    )
+    inclusive = mx.cumsum(match_count, stream=mx.gpu)
+    match_offsets = mx.concatenate(
+        [mx.zeros((1,), dtype=mx.int32, stream=mx.gpu), inclusive],
+        stream=mx.gpu,
+    )
+    n_matches = int(match_offsets[-1].item())
+    if n_matches == 0:
+        return (
+            mx.zeros((0,), dtype=mx.int64, stream=mx.gpu),
+            mx.zeros((0,), dtype=mx.int64, stream=mx.gpu),
+        )
+
+    write_kernel = _get_all_matches_write_kernel()
+    out_point, out_poly = write_kernel(
+        inputs=[*common_inputs, match_offsets, shape],
+        grid=(n_active, 1, 1),
+        threadgroup=(point_threadgroup, 1, 1),
+        output_shapes=[(n_matches,), (n_matches,)],
+        output_dtypes=[mx.int64, mx.int64],
+        stream=mx.gpu,
+    )
+    return out_point, out_poly
 
 
 def _pip_dense_composed(

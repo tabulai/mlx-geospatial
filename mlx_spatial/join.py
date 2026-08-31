@@ -4,9 +4,10 @@ The index is a uniform grid over the polygon set's bounds. Each cell holds
 the (sorted) list of polygons whose bbox intersects it, in CSR form. A query
 point maps to exactly one cell; its candidate polygons are that cell's list,
 so the first-match Metal kernel walks that list directly and returns on its
-first containment hit. All-match queries retain bounded explicit candidate
-pairs. Grid planning runs in float64 on original coordinates, so cell
-assignment can never disagree with the (widened-bbox) kernel test.
+first containment hit. All-match queries count, prefix-scan, and compact hits
+directly on the GPU without explicit candidate-pair arrays. Grid planning runs
+in float64 on original coordinates, so cell assignment can never disagree
+with the (widened-bbox) kernel test.
 
 Small workloads (fewer candidate pairs than
 ``mlx_spatial._dispatch.GPU_MIN_CANDIDATE_PAIRS``) automatically fall back to
@@ -21,7 +22,7 @@ import shapely
 
 from ._dispatch import resolve_backend
 from ._ingest import PolygonSet, as_point_array
-from ._pip import pip_first_match, pip_pairs
+from ._pip import pip_all_matches, pip_first_match, pip_pairs
 
 __all__ = ["GridIndex", "point_in_polygon", "sjoin"]
 
@@ -203,8 +204,8 @@ class GridIndex:
                 f"max_pairs_per_batch must be in [1, 2**31), got {max_pairs_per_batch}"
             )
 
-        counts, cand_starts, total_pairs, point_cell = self._candidates(
-            pts64, include_starts=all_matches
+        counts, _, total_pairs, point_cell = self._candidates(
+            pts64, include_starts=False
         )
         chosen = resolve_backend(backend, total_pairs)
         if chosen == "cpu":
@@ -216,6 +217,15 @@ class GridIndex:
                 return (np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64))
             return np.full(n, -1, dtype=np.int32)
 
+        if all_matches:
+            return self._query_gpu_all_matches(
+                pts_local,
+                point_cell,
+                counts,
+                total_pairs=total_pairs,
+                max_pairs_per_batch=max_pairs_per_batch,
+            )
+
         if not all_matches and int(counts.max(initial=0)) <= max_pairs_per_batch:
             return self._query_gpu_first_match(
                 pts_local,
@@ -225,20 +235,83 @@ class GridIndex:
                 max_pairs_per_batch=max_pairs_per_batch,
             )
 
-        # all_matches requires compaction of every hit. A first-match query
-        # also uses this bounded legacy path when one point alone has more
-        # candidates than max_pairs_per_batch and therefore cannot fit in a
-        # whole-point fused launch.
-        if cand_starts is None:
-            cand_starts = self._cell_offsets[np.maximum(point_cell, 0)]
+        # A first-match query uses this bounded legacy path when one point
+        # alone has more candidates than max_pairs_per_batch and therefore
+        # cannot fit in a whole-point fused launch.
+        cand_starts = self._cell_offsets[np.maximum(point_cell, 0)]
         return self._query_gpu_pairs(
             pts_local,
             counts,
             cand_starts,
             total_pairs=total_pairs,
-            all_matches=all_matches,
             max_pairs_per_batch=max_pairs_per_batch,
         )
+
+    def _query_gpu_all_matches(
+        self,
+        pts_local: mx.array,
+        point_cell: np.ndarray,
+        counts: np.ndarray,
+        *,
+        total_pairs: int,
+        max_pairs_per_batch: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """GPU count/scan/write compaction, batched by candidate rank."""
+        # Zero-candidate points cannot contribute output. Removing them keeps
+        # every launch compact even when millions of outside rows separate two
+        # candidate-bearing points; active_point remains globally ascending.
+        active_point = np.flatnonzero(counts).astype(np.int32)
+        active_count = counts[active_point].astype(np.int64, copy=False)
+        candidate_offsets = np.concatenate(
+            [np.zeros(1, dtype=np.int64), np.cumsum(active_count, dtype=np.int64)]
+        )
+        if int(candidate_offsets[-1]) != total_pairs:
+            raise RuntimeError("active candidate offsets do not cover all pairs")
+        active_cell = point_cell[active_point]
+
+        active_point_mx = mx.array(active_point)
+        active_cell_mx = mx.array(active_cell)
+        candidate_offsets_mx = mx.array(candidate_offsets)
+        cell_offsets_mx, cell_poly_mx = self._device_csr()
+
+        matches_pt: list[np.ndarray] = []
+        matches_pg: list[np.ndarray] = []
+        pair0 = 0
+        while pair0 < total_pairs:
+            pair1 = min(pair0 + max_pairs_per_batch, total_pairs)
+            active0 = int(np.searchsorted(candidate_offsets, pair0, side="right")) - 1
+            active1 = int(
+                np.searchsorted(candidate_offsets, pair1 - 1, side="right")
+            )
+            # Clip the active prefix offsets to this exact pair-rank batch.
+            # The largest difference detects a single skewed candidate list
+            # even when its cost is hidden by a tiny chunk-wide average.
+            clipped_offsets = np.clip(
+                candidate_offsets[active0 : active1 + 1], pair0, pair1
+            )
+            max_point_pairs = int(np.diff(clipped_offsets).max())
+            out_point, out_poly = pip_all_matches(
+                pts_local,
+                self.polygons,
+                active_point_mx[active0:active1],
+                active_cell_mx[active0:active1],
+                candidate_offsets_mx[active0 : active1 + 1],
+                cell_offsets_mx,
+                cell_poly_mx,
+                pair_begin=pair0,
+                pair_end=pair1,
+                max_point_pairs=max_point_pairs,
+            )
+            if int(out_point.shape[0]):
+                matches_pt.append(np.array(out_point))
+                matches_pg.append(np.array(out_poly))
+            pair0 = pair1
+
+        if not matches_pt:
+            return (np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64))
+        if len(matches_pt) == 1:
+            return matches_pt[0], matches_pg[0]
+        return np.concatenate(matches_pt), np.concatenate(matches_pg)
 
     def _query_gpu_first_match(
         self,
@@ -295,22 +368,17 @@ class GridIndex:
         cand_starts: np.ndarray,
         *,
         total_pairs: int,
-        all_matches: bool,
         max_pairs_per_batch: int,
-    ):
-        """Bounded explicit-pair GPU path for all hits and heavy cells."""
+    ) -> np.ndarray:
+        """Bounded explicit-pair fallback for oversized first-match cells."""
         n = len(counts)
 
         # Expand candidate pairs in contiguous ranges of the conceptual flat
         # pair array. Chunking by pair rank (rather than only by point ranges)
         # keeps max_pairs_per_batch a hard bound even when one point's cell
-        # contains more polygons than the budget. Global pair order is point
-        # then polygon, so concatenating per-chunk hits preserves the documented
-        # all_matches ordering.
+        # contains more polygons than the budget.
         cum = np.concatenate([[0], np.cumsum(counts)])  # (n + 1,)
         result = np.full(n, _INT32_MAX, dtype=np.int32)
-        matches_pt: list[np.ndarray] = []
-        matches_pg: list[np.ndarray] = []
         pair0 = 0
         while pair0 < total_pairs:
             pair1 = min(pair0 + max_pairs_per_batch, total_pairs)
@@ -341,19 +409,9 @@ class GridIndex:
                 )
             )
             hit = flags.astype(bool)
-            if all_matches:
-                # pair_point ascending by construction; polygon ids ascending
-                # within each point because cell lists are sorted.
-                matches_pt.append(pair_point[hit])
-                matches_pg.append(pair_poly[hit].astype(np.int64))
-            else:
-                np.minimum.at(result, pair_point[hit], pair_poly[hit].astype(np.int32))
+            np.minimum.at(result, pair_point[hit], pair_poly[hit].astype(np.int32))
             pair0 = pair1
 
-        if all_matches:
-            if matches_pt:
-                return np.concatenate(matches_pt), np.concatenate(matches_pg)
-            return (np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64))
         result[result == _INT32_MAX] = -1
         return result
 

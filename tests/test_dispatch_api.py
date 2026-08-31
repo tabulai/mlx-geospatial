@@ -35,7 +35,9 @@ from mlx_spatial._dispatch import (
     resolve_backend,
 )
 from mlx_spatial._pip import (
+    _all_matches_strategy,
     _pip_dense_composed,
+    pip_all_matches,
     pip_dense,
     pip_first_match,
     pip_pairs,
@@ -48,6 +50,12 @@ requires_metal = pytest.mark.skipif(
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_all_matches_strategy_accounts_for_max_point_skew():
+    """One pathological point must not hide behind a low chunk average."""
+    assert _all_matches_strategy(100_000, 199_999, 100_000) == "pair"
+    assert _all_matches_strategy(100_000, 800_000, 8) == "point"
 
 
 @pytest.fixture(autouse=True)
@@ -271,23 +279,29 @@ def test_explicit_gpu_small_workload_uses_kernel(rng, monkeypatch):
 
 
 @requires_metal
-def test_explicit_gpu_all_matches_retains_pair_kernel(rng, monkeypatch):
+def test_explicit_gpu_all_matches_uses_gpu_compactor(rng, monkeypatch):
     polys = make_grid_polygons(4, 4, cell=1.0)
     index = ms.GridIndex(polys)
     pts = rng.uniform(0.05, 3.95, size=(200, 2))
     calls: list[int] = []
 
-    def _spy(points_local, polyset_, pair_point, pair_poly, **kwargs):
-        calls.append(int(pair_point.shape[0]))
-        return pip_pairs(points_local, polyset_, pair_point, pair_poly, **kwargs)
+    def _spy(*args, pair_begin, pair_end, **kwargs):
+        calls.append(pair_end - pair_begin)
+        return pip_all_matches(
+            *args,
+            pair_begin=pair_begin,
+            pair_end=pair_end,
+            **kwargs,
+        )
 
-    def fused_must_not_run(*args, **kwargs):
-        raise AssertionError("all_matches launched the first-match kernel")
+    def other_kernel_must_not_run(*args, **kwargs):
+        raise AssertionError("all_matches launched a non-compacting kernel")
 
-    monkeypatch.setattr("mlx_spatial.join.pip_first_match", fused_must_not_run)
-    monkeypatch.setattr("mlx_spatial.join.pip_pairs", _spy)
+    monkeypatch.setattr("mlx_spatial.join.pip_all_matches", _spy)
+    monkeypatch.setattr("mlx_spatial.join.pip_first_match", other_kernel_must_not_run)
+    monkeypatch.setattr("mlx_spatial.join.pip_pairs", other_kernel_must_not_run)
     index.query(pts, all_matches=True, backend="gpu")
-    assert calls, "all_matches no longer launched the explicit-pair kernel"
+    assert calls, "all_matches never launched the GPU compactor"
 
 
 def test_invalid_env_propagates_from_point_in_polygon(monkeypatch):
@@ -391,6 +405,47 @@ def test_pip_first_match_zero_points():
     )
     assert out.shape == (0,)
     assert out.dtype == mx.int32
+
+
+@requires_metal
+def test_pip_all_matches_uses_int64_global_candidate_offsets():
+    polyset = ms.PolygonSet([shapely.box(0, 0, 1, 1)])
+    _, points_local = polyset.recenter_points(
+        np.array([[0.5, 0.5], [2.0, 2.0]])
+    )
+    base = 2**31 + 17
+    candidate_offsets = mx.array([base, base + 1], dtype=mx.int64)
+    cell_offsets = mx.array([0, 1], dtype=mx.int64)
+    cell_poly = mx.array([0], dtype=mx.int32)
+
+    hit_pt, hit_pg = pip_all_matches(
+        points_local,
+        polyset,
+        mx.array([0], dtype=mx.int32),
+        mx.array([0], dtype=mx.int32),
+        candidate_offsets,
+        cell_offsets,
+        cell_poly,
+        pair_begin=base,
+        pair_end=base + 1,
+    )
+    np.testing.assert_array_equal(np.array(hit_pt), [0])
+    np.testing.assert_array_equal(np.array(hit_pg), [0])
+    assert hit_pt.dtype == mx.int64 and hit_pg.dtype == mx.int64
+
+    miss_pt, miss_pg = pip_all_matches(
+        points_local,
+        polyset,
+        mx.array([1], dtype=mx.int32),
+        mx.array([0], dtype=mx.int32),
+        candidate_offsets,
+        cell_offsets,
+        cell_poly,
+        pair_begin=base,
+        pair_end=base + 1,
+    )
+    assert miss_pt.shape == miss_pg.shape == (0,)
+    assert miss_pt.dtype == mx.int64 and miss_pg.dtype == mx.int64
 
 
 def test_pip_dense_zero_points():

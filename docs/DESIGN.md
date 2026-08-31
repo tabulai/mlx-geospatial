@@ -98,8 +98,12 @@ cell ID per point → point-centric Metal kernel traverses the cached grid
 CSR, performs bbox + parity tests, and returns on the first hit. This avoids
 all per-candidate query arrays and the host `minimum.at` reduction. Whole-point
 launches are split by the candidate-work budget; a cell that individually
-exceeds it uses the bounded explicit-pair fallback. `all_matches=True` retains
-the explicit-pair path until GPU count/scan/compaction is implemented.
+exceeds it uses the bounded explicit-pair fallback. For `all_matches=True`,
+zero-candidate points are removed and conceptual candidate ranks are split by
+the same hard budget. Ordinary batches use point-centric count, prefix scan,
+and ordered write passes; sparse or skewed batches use pair-parallel predicate
+flags, scan, and ordered writes. Both routes avoid host candidate-pair
+expansion and atomics while preserving point-then-polygon output order.
 
 ## Dispatch
 

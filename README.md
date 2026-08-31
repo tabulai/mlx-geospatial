@@ -149,8 +149,9 @@ because kernel-launch overhead dominates at small sizes.
   distance-to-polygon (backlog).
 - Uniform grid index; heavily skewed polygon sizes may want the quadtree
   planned for v0.2.
-- `all_matches=True` still expands candidate pairs in numpy; ordinary
-  first-match queries traverse the grid CSR directly in a Metal kernel.
+- `all_matches=True` uses bounded adaptive GPU count/scan/ordered compaction
+  without NumPy candidate-pair expansion; its returned arrays still require
+  memory proportional to the number of hits.
 - `sjoin` implements point-`within`-polygon with first-match (lowest polygon
   index) semantics; use `all_matches=True` on `point_in_polygon` for
   multi-match joins.
