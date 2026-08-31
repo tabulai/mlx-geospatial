@@ -2,10 +2,10 @@
 
 Targets the classic ray-casting failure modes (rays through vertices, points
 sharing y with vertices, horizontal edges, slivers, degenerate rings, holes
-touching shells, sub-tolerance geometry) and cross-validates the pair and
-direct-dense Metal kernels against the retained composed-MLX oracle exactly,
-and against shapely float64 outside the documented ``boundary_tolerance``
-band.
+touching shells, sub-tolerance geometry) and cross-validates the pair,
+direct-dense, first-match, and compact all-match Metal kernels against the
+retained composed-MLX oracle exactly, and against shapely float64 outside the
+documented ``boundary_tolerance`` band.
 
 Everything here is deterministic; coordinates in the exact-y tests are chosen
 to be exactly representable in float32 after re-centering.
@@ -76,14 +76,21 @@ def _first_match(matrix: np.ndarray) -> np.ndarray:
 
 
 def _join_matches_matrix(pts, polyset: ms.PolygonSet, matrix: np.ndarray) -> np.ndarray:
-    """The grid-indexed GPU join must equal the dense matrix's first match."""
+    """Grid first/all-match outputs must equal the exact dense matrix."""
+    pts = np.asarray(pts, float)
     got = np.asarray(
-        ms.point_in_polygon(np.asarray(pts, float), polyset, backend="gpu"),
+        ms.point_in_polygon(pts, polyset, backend="gpu"),
         dtype=np.int64,
     )
     np.testing.assert_array_equal(
         got, _first_match(matrix), err_msg="grid join != dense first-match"
     )
+    point_idx, poly_idx = ms.point_in_polygon(
+        pts, polyset, all_matches=True, backend="gpu"
+    )
+    expected_point, expected_poly = np.nonzero(matrix)
+    np.testing.assert_array_equal(point_idx, expected_point.astype(np.int64))
+    np.testing.assert_array_equal(poly_idx, expected_poly.astype(np.int64))
     return got
 
 

@@ -16,7 +16,7 @@ from shapely.geometry import MultiPolygon, Polygon
 import mlx_spatial as ms
 import mlx_spatial._dispatch as dispatch
 from mlx_spatial._dispatch import metal_available
-from mlx_spatial._pip import pip_first_match
+from mlx_spatial._pip import pip_all_matches, pip_first_match
 from mlx_spatial.join import GridIndex
 
 from conftest import (
@@ -247,13 +247,26 @@ class TestBatching:
         assert calls == [4] * 8 + [2]
 
         calls.clear()
+        compact_calls = []
+
+        def compact_spy(*args, pair_begin, pair_end, **kwargs):
+            compact_calls.append(pair_end - pair_begin)
+            return pip_all_matches(
+                *args,
+                pair_begin=pair_begin,
+                pair_end=pair_end,
+                **kwargs,
+            )
+
+        monkeypatch.setattr("mlx_spatial.join.pip_all_matches", compact_spy)
         point_idx, poly_idx = index.query(
             points,
             backend="gpu",
             all_matches=True,
             max_pairs_per_batch=4,
         )
-        assert calls == [4] * 8 + [2]
+        assert compact_calls == [4] * 8 + [2]
+        assert calls == [], "all_matches fell back to explicit candidate pairs"
         np.testing.assert_array_equal(
             point_idx,
             np.repeat(np.array([1, 3], dtype=np.int64), 17),
@@ -305,6 +318,45 @@ class TestBatching:
         assert max(candidate_work) <= 1000
         assert sum(candidate_work) == total_pairs
         np.testing.assert_array_equal(got, expected)
+
+    def test_all_matches_sparse_split_batches_skip_long_zero_runs(self, monkeypatch):
+        """Split points and zero-hit chunks retain global lexicographic order."""
+        triangle = Polygon([(0, 0), (2, 0), (0, 2)])
+        polys = np.array([triangle for _ in range(17)], dtype=object)
+        index = GridIndex(polys, cell_size=3.0)
+        outside = np.full((100_005, 2), 9.0)
+        points = np.vstack([[0.25, 0.25], outside, [1.75, 1.75], [0.5, 0.5]])
+        calls: list[int] = []
+
+        def compact_spy(*args, pair_begin, pair_end, **kwargs):
+            calls.append(pair_end - pair_begin)
+            return pip_all_matches(
+                *args,
+                pair_begin=pair_begin,
+                pair_end=pair_end,
+                **kwargs,
+            )
+
+        def pairs_must_not_run(*args, **kwargs):
+            raise AssertionError("all_matches expanded explicit candidate pairs")
+
+        monkeypatch.setattr("mlx_spatial.join.pip_all_matches", compact_spy)
+        monkeypatch.setattr("mlx_spatial.join.pip_pairs", pairs_must_not_run)
+        point_idx, poly_idx = index.query(
+            points,
+            backend="gpu",
+            all_matches=True,
+            max_pairs_per_batch=4,
+        )
+
+        assert calls == [4] * 12 + [3]
+        expected_points = np.repeat(
+            np.array([0, len(points) - 1], dtype=np.int64), 17
+        )
+        np.testing.assert_array_equal(point_idx, expected_points)
+        np.testing.assert_array_equal(
+            poly_idx, np.tile(np.arange(17, dtype=np.int64), 2)
+        )
 
     def test_fused_matches_pair_reduction_on_mixed_geometry(self, monkeypatch):
         donut = Polygon(
