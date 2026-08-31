@@ -31,17 +31,16 @@ from shapely.geometry import MultiPolygon, Polygon
 import mlx_spatial as ms
 from mlx_spatial._dispatch import metal_available
 from mlx_spatial._pip import pip_pairs
-
-pytestmark = pytest.mark.skipif(
-    not metal_available(), reason="GPU point-in-polygon tests require Metal"
-)
-
 from conftest import (
     make_convex_polygons,
     make_donut,
     make_grid_polygons,
     near_boundary_mask,
     reference_assign,
+)
+
+pytestmark = pytest.mark.skipif(
+    not metal_available(), reason="GPU point-in-polygon tests require Metal"
 )
 
 # --------------------------------------------------------------------------

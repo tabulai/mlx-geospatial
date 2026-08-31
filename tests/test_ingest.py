@@ -432,6 +432,25 @@ def test_compute_origin_multiple_arrays_and_shapes():
     )
 
 
+def test_compute_origin_midpoint_does_not_overflow():
+    coords = np.array(
+        [
+            [1.6e308, -1.7e308],
+            [1.7e308, -1.6e308],
+        ]
+    )
+    origin = compute_origin(coords)
+    assert np.isfinite(origin).all()
+    np.testing.assert_allclose(origin, [1.65e308, -1.65e308], rtol=1e-15)
+
+    # Opposite-sign extrema need a different overflow-safe midpoint form.
+    max_f64 = np.finfo(np.float64).max
+    np.testing.assert_array_equal(
+        compute_origin(np.array([[-max_f64, -max_f64], [max_f64, max_f64]])),
+        [0.0, 0.0],
+    )
+
+
 def test_float32_resolution_properties():
     assert float32_resolution(0.0) > 0.0
     assert float32_resolution(np.inf) > 0.0

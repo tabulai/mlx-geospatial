@@ -267,8 +267,8 @@ def test_left_dtypes_preserved(rng):
         out = ms.sjoin(left, right, how=how)
         assert out["i"].dtype == np.int64
         assert out["f"].dtype == np.float64
-        assert out["s"].dtype == object
-        assert str(out["t"].dtype) == "datetime64[ns]"
+        assert out["s"].dtype == left["s"].dtype
+        assert out["t"].dtype == left["t"].dtype
         # values survive the join untouched
         sub = left.loc[out.index]
         assert (out["i"].to_numpy() == sub["i"].to_numpy()).all()
@@ -427,7 +427,7 @@ def test_bad_how_and_predicate_raise(rng):
 def test_empty_right_no_matches_and_preserved_schema(rng):
     left = gpd.GeoDataFrame(
         {"pid": [0, 1, 2]},
-        geometry=list(shapely.points([[0.0, 0.0], [1.0, 1.0], [2.0, 2.0])),
+        geometry=list(shapely.points([[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]])),
     )
     right = gpd.GeoDataFrame({"zid": pd.Series(dtype=int)}, geometry=[])
 

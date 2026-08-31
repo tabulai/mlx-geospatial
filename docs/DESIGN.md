@@ -55,12 +55,13 @@ Two paths, identical semantics, cross-validated in tests:
   counts recovered with `cumsum` + gather at geometry boundaries (edges are
   geometry-grouped, so no scatter). Used for small M and as a test oracle.
 
-Boundary semantics: half-open crossing rule — a point on a shared edge of two
-adjacent polygons lands in exactly one; within the tolerance band results are
-undefined (see policy above). Valid geometry is assumed: even-odd equals GEOS
-fill semantics only for valid polygons; on self-intersections or overlapping
-multipolygon parts the GPU (even-odd) and the CPU fallback (GEOS) diverge —
-`PolygonSet(geoms, validate=True)` rejects such input at ingestion.
+Boundary semantics: the half-open crossing rule avoids double-counting ray
+crossings at vertices. Within the tolerance band — including every exact
+boundary point — results are undefined, so a shared-edge point may match either
+adjacent polygon, both, or neither. Valid geometry is assumed: even-odd equals
+GEOS fill semantics only for valid polygons; on self-intersections or
+overlapping multipolygon parts the GPU (even-odd) and the CPU fallback (GEOS)
+diverge — `PolygonSet(geoms, validate=True)` rejects such input at ingestion.
 
 ## k-nearest neighbors
 

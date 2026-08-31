@@ -8,11 +8,11 @@ attacking the index machinery directly.
 from __future__ import annotations
 
 import numpy as np
+import mlx.core as mx
 import pytest
 import shapely
 from shapely.geometry import Polygon
 
-import mlx_spatial as ms
 import mlx_spatial._dispatch as dispatch
 from mlx_spatial._dispatch import metal_available
 from mlx_spatial.join import GridIndex
@@ -225,6 +225,41 @@ class TestBatching:
             )
             np.testing.assert_array_equal(gpt, base_pt)
             np.testing.assert_array_equal(gpg, base_pg)
+
+    def test_oversized_point_lists_respect_hard_cap(self, monkeypatch):
+        """Dense points split at the cap despite intervening zero-count rows."""
+        polys = np.array([shapely.box(0, 0, 1, 1) for _ in range(17)], dtype=object)
+        index = GridIndex(polys, cell_size=2.0)
+        points = [[-1.0, -1.0], [0.5, 0.5], [9.0, 9.0], [0.25, 0.25], [2.0, 2.0]]
+        calls = []
+
+        def all_hit(_points, _polyset, pair_point, _pair_poly):
+            calls.append(int(pair_point.shape[0]))
+            return mx.ones(pair_point.shape, dtype=mx.uint8)
+
+        monkeypatch.setattr("mlx_spatial.join.pip_pairs", all_hit)
+        got = np.asarray(
+            index.query(points, backend="gpu", max_pairs_per_batch=4)
+        )
+        np.testing.assert_array_equal(got, [-1, 0, -1, 0, -1])
+        assert calls == [4] * 8 + [2]
+
+        calls.clear()
+        point_idx, poly_idx = index.query(
+            points,
+            backend="gpu",
+            all_matches=True,
+            max_pairs_per_batch=4,
+        )
+        assert calls == [4] * 8 + [2]
+        np.testing.assert_array_equal(
+            point_idx,
+            np.repeat(np.array([1, 3], dtype=np.int64), 17),
+        )
+        np.testing.assert_array_equal(
+            poly_idx,
+            np.tile(np.arange(17, dtype=np.int64), 2),
+        )
 
 
 # ---------------------------------------------------------------------------

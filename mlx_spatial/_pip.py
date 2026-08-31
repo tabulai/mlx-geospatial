@@ -9,17 +9,16 @@ Two GPU paths share identical semantics:
   edge list. Used for small polygon sets and as an independent
   cross-validation oracle for the kernel in tests.
 
-Boundary semantics: the crossing-number test with the half-open rule
-``(y1 > py) != (y2 > py)`` and ``px < x_intersection`` classifies points on
-edges to exactly one side; a point on the shared edge of two adjacent
-polygons lands in exactly one of them. Within
-``PolygonSet.boundary_tolerance`` of an edge the fp32 result is undefined —
-matching the documented tolerance policy, not GEOS bit-for-bit.
+Boundary semantics: the crossing-number test uses the half-open rule
+``(y1 > py) != (y2 > py)`` and ``px < x_intersection`` to avoid double-counting
+ray crossings at vertices. Within ``PolygonSet.boundary_tolerance`` of an
+edge — including every exact boundary point — the fp32 result is undefined.
+Consequently a point on a shared edge may match either adjacent polygon, both,
+or neither; there is no general uniqueness guarantee inside the band.
 """
 
 from __future__ import annotations
 
-import numpy as np
 import mlx.core as mx
 
 from ._ingest import PolygonSet

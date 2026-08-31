@@ -164,6 +164,10 @@ class GridIndex:
         ``(point_indices, polygon_indices)`` for every containment pair,
         sorted by point then polygon.
 
+        ``max_pairs_per_batch`` is a hard upper bound on each GPU kernel
+        launch, including when one point alone has more candidates than the
+        requested batch size.
+
         ``predicate`` is ``"intersects"`` (boundary counts as a match) or
         ``"within"`` (it does not). The two differ only for points exactly on
         a polygon boundary — inside the documented fp32 tolerance band, where
@@ -196,32 +200,37 @@ class GridIndex:
                 return (np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64))
             return np.full(n, -1, dtype=np.int32)
 
-        # Expand candidate pairs slice-by-slice over point ranges so HOST
-        # memory is bounded by the same knob as the GPU batch — a full upfront
-        # expansion costs ~35 bytes per candidate pair. A single point whose
-        # candidate list alone exceeds the budget still runs as one batch
-        # (its candidates are at most one cell's polygon list).
+        # Expand candidate pairs in contiguous ranges of the conceptual flat
+        # pair array. Chunking by pair rank (rather than only by point ranges)
+        # keeps max_pairs_per_batch a hard bound even when one point's cell
+        # contains more polygons than the budget. Global pair order is point
+        # then polygon, so concatenating per-chunk hits preserves the documented
+        # all_matches ordering.
         cum = np.concatenate([[0], np.cumsum(counts)])  # (n + 1,)
         result = np.full(n, _INT32_MAX, dtype=np.int32)
         matches_pt: list[np.ndarray] = []
         matches_pg: list[np.ndarray] = []
-        p0 = 0
-        while p0 < n:
-            p1 = int(np.searchsorted(cum, cum[p0] + max_pairs_per_batch, side="right")) - 1
-            p1 = min(max(p1, p0 + 1), n)
-            slice_counts = counts[p0:p1]
-            slice_total = int(cum[p1] - cum[p0])
-            if slice_total == 0:
-                p0 = p1
-                continue
-            pair_point = np.repeat(np.arange(p0, p1, dtype=np.int64), slice_counts)
-            local_starts = cum[p0:p1] - cum[p0]
-            rank = np.arange(slice_total, dtype=np.int64) - np.repeat(
-                local_starts, slice_counts
-            )
-            pair_poly = self._cell_poly[
-                np.repeat(cand_starts[p0:p1], slice_counts) + rank
-            ]
+        pair0 = 0
+        while pair0 < total_pairs:
+            pair1 = min(pair0 + max_pairs_per_batch, total_pairs)
+            point0 = int(np.searchsorted(cum, pair0, side="right")) - 1
+            point1 = int(np.searchsorted(cum, pair1 - 1, side="right")) - 1
+
+            # Keep only candidate-bearing points in this span. Long runs of
+            # outside/empty points therefore cost one scan, not pair storage;
+            # every retained point contributes at least one pair, so these
+            # arrays remain bounded by the pair budget.
+            span_counts = counts[point0 : point1 + 1]
+            nonzero = np.flatnonzero(span_counts)
+            point_ids = point0 + nonzero
+            chunk_counts = span_counts[nonzero].copy()
+            chunk_counts[0] -= pair0 - cum[point_ids[0]]
+            chunk_counts[-1] -= cum[point_ids[-1] + 1] - pair1
+
+            pair_point = np.repeat(point_ids, chunk_counts)
+            pair_rank = np.arange(pair0, pair1, dtype=np.int64)
+            rank_in_point = pair_rank - cum[pair_point]
+            pair_poly = self._cell_poly[cand_starts[pair_point] + rank_in_point]
             flags = np.array(
                 pip_pairs(
                     pts_local,
@@ -238,7 +247,7 @@ class GridIndex:
                 matches_pg.append(pair_poly[hit].astype(np.int64))
             else:
                 np.minimum.at(result, pair_point[hit], pair_poly[hit].astype(np.int32))
-            p0 = p1
+            pair0 = pair1
 
         if all_matches:
             if matches_pt:
@@ -292,6 +301,29 @@ def point_in_polygon(
         )
     if polygons is None:
         raise ValueError("point_in_polygon requires polygons (or a prebuilt index=)")
+    if not isinstance(polygons, PolygonSet):
+        polygon_values = (
+            polygons.geometry
+            if hasattr(polygons, "geometry") and not isinstance(polygons, shapely.Geometry)
+            else polygons
+        )
+        try:
+            n_polygons = len(polygon_values)
+        except TypeError:
+            n_polygons = None
+        if n_polygons == 0:
+            if predicate not in ("within", "intersects"):
+                raise ValueError(
+                    f"predicate must be 'within' or 'intersects', got {predicate!r}"
+                )
+            pts64 = as_point_array(points)
+            resolve_backend(backend, 0)
+            if all_matches:
+                return (
+                    np.empty(0, dtype=np.int64),
+                    np.empty(0, dtype=np.int64),
+                )
+            return np.full(len(pts64), -1, dtype=np.int32)
     polyset = polygons if isinstance(polygons, PolygonSet) else PolygonSet(polygons)
     if polyset._grid_index is None:
         polyset._grid_index = GridIndex(polyset)

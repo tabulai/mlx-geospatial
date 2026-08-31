@@ -42,7 +42,16 @@ def compute_origin(*coord_arrays: np.ndarray) -> np.ndarray:
             hi = np.fmax(hi, np.nanmax(arr, axis=0))
     if not (np.isfinite(lo).all() and np.isfinite(hi).all()):
         return np.zeros(2)
-    return (lo + hi) / 2.0
+    # Avoid overflow without sacrificing the close/subnormal same-sign case.
+    # For equal signs, hi - lo is bounded by the larger magnitude.  For
+    # opposite signs, halving each endpoint before adding is overflow-safe.
+    midpoint = np.empty(2, dtype=np.float64)
+    same_sign = np.signbit(lo) == np.signbit(hi)
+    midpoint[same_sign] = lo[same_sign] + (
+        hi[same_sign] - lo[same_sign]
+    ) * 0.5
+    midpoint[~same_sign] = lo[~same_sign] * 0.5 + hi[~same_sign] * 0.5
+    return midpoint
 
 
 def recenter(coords: np.ndarray, origin: np.ndarray, dtype=np.float32) -> np.ndarray:
