@@ -22,7 +22,13 @@ import shapely
 
 from ._dispatch import resolve_backend
 from ._ingest import PolygonSet, as_point_array
-from ._pip import pip_all_matches, pip_first_match, pip_pairs
+from ._pip import (
+    _ALL_MATCHES_EDGE_WORK_THRESHOLD,
+    _PIP_LONG_RING_THRESHOLD,
+    pip_all_matches,
+    pip_first_match,
+    pip_pairs,
+)
 
 __all__ = ["GridIndex", "point_in_polygon", "sjoin"]
 
@@ -57,6 +63,11 @@ class GridIndex:
             self.nx = self.ny = 1
             self._cell_poly = np.empty(0, dtype=np.int32)
             self._cell_offsets = np.zeros(2, dtype=np.int64)
+            self._cell_max_ring_edges = None
+            self._cell_edge_work = np.zeros(1, dtype=np.uint16)
+            self._cell_all_long_rings = None
+            self._max_cell_ring_edges = 0
+            self._max_cell_edge_work = 0
             return
         fb = bboxes[finite]
         self.x0 = float(fb[:, 0].min())
@@ -124,6 +135,53 @@ class GridIndex:
         counts = np.bincount(cell_id[order], minlength=nx * ny)
         self._cell_offsets = np.concatenate([[0], np.cumsum(counts)]).astype(np.int64)
 
+        # Host selectors need the actual candidate complexity of each cell.
+        # This avoids routing a query through a cooperative long-ring kernel
+        # merely because some unrelated polygon elsewhere in the set is long.
+        nonempty_cell = counts > 0
+        starts = self._cell_offsets[:-1][nonempty_cell]
+        # Selectors saturate well below 65k edges. Narrow the small geometry
+        # tables *before* expanding by CSR entry so max_entries-sized builds
+        # never create temporary int64 entry arrays.
+        u16_max = np.iinfo(np.uint16).max
+        geom_edge_counts = np.minimum(
+            polyset._geom_edge_counts, u16_max
+        ).astype(np.uint16)
+        polygon_edges = geom_edge_counts[self._cell_poly]
+        self._cell_edge_work = np.zeros(nx * ny, dtype=np.uint16)
+        edge_work = np.add.reduceat(
+            polygon_edges, starts, dtype=np.uint64
+        )
+        self._cell_edge_work[nonempty_cell] = np.minimum(
+            edge_work, u16_max
+        ).astype(np.uint16)
+        self._max_cell_edge_work = int(self._cell_edge_work.max(initial=0))
+
+        if polyset.max_edges_per_ring >= _PIP_LONG_RING_THRESHOLD:
+            geom_ring_edges = np.minimum(
+                polyset._geom_max_ring_edges, u16_max
+            ).astype(np.uint16)
+            geom_has_long_ring = (
+                polyset._geom_max_ring_edges >= _PIP_LONG_RING_THRESHOLD
+            ).astype(np.uint8)
+            ring_edges = geom_ring_edges[self._cell_poly]
+            long_ring = geom_has_long_ring[self._cell_poly]
+            self._cell_max_ring_edges = np.zeros(nx * ny, dtype=np.uint16)
+            self._cell_all_long_rings = np.zeros(nx * ny, dtype=bool)
+            self._cell_max_ring_edges[nonempty_cell] = np.maximum.reduceat(
+                ring_edges, starts
+            )
+            self._cell_all_long_rings[nonempty_cell] = np.minimum.reduceat(
+                long_ring, starts
+            ).astype(bool)
+            self._max_cell_ring_edges = int(
+                self._cell_max_ring_edges.max(initial=0)
+            )
+        else:
+            self._cell_max_ring_edges = None
+            self._cell_all_long_rings = None
+            self._max_cell_ring_edges = 0
+
     @property
     def n_cells(self) -> int:
         return self.nx * self.ny
@@ -161,6 +219,44 @@ class GridIndex:
             self._cell_offsets_mx = mx.array(self._cell_offsets)
             self._cell_poly_mx = mx.array(self._cell_poly)
         return self._cell_offsets_mx, self._cell_poly_mx
+
+    def _candidate_edge_bounds(
+        self, point_cell: np.ndarray
+    ) -> tuple[int, int]:
+        """Maximum ring size and aggregate edge work in referenced cells."""
+        # The ordinary short-polygon case cannot change either adaptive
+        # selector, so avoid an O(N) point-cell gather on every query.
+        if (
+            self._max_cell_ring_edges < _PIP_LONG_RING_THRESHOLD
+            and self._max_cell_edge_work < _ALL_MATCHES_EDGE_WORK_THRESHOLD
+        ):
+            return self._max_cell_ring_edges, self._max_cell_edge_work
+        cells = point_cell[point_cell >= 0]
+        if cells.size:
+            cells = cells[
+                self._cell_offsets[cells + 1] > self._cell_offsets[cells]
+            ]
+        if cells.size == 0:
+            return 0, 0
+        max_ring_edges = (
+            0
+            if self._cell_max_ring_edges is None
+            else int(self._cell_max_ring_edges[cells].max(initial=0))
+        )
+        return max_ring_edges, int(self._cell_edge_work[cells].max(initial=0))
+
+    def _first_match_ring_bound(self, point_cell: np.ndarray) -> int:
+        """Cooperate only when every candidate in every used cell is long."""
+        if self._max_cell_ring_edges < _PIP_LONG_RING_THRESHOLD:
+            return 0
+        cells = point_cell[point_cell >= 0]
+        if cells.size:
+            cells = cells[
+                self._cell_offsets[cells + 1] > self._cell_offsets[cells]
+            ]
+        if cells.size == 0 or not self._cell_all_long_rings[cells].all():
+            return 0
+        return int(self._cell_max_ring_edges[cells].max(initial=0))
 
     def query(
         self,
@@ -290,6 +386,9 @@ class GridIndex:
                 candidate_offsets[active0 : active1 + 1], pair0, pair1
             )
             max_point_pairs = int(np.diff(clipped_offsets).max())
+            max_ring_edges, max_candidate_edges = self._candidate_edge_bounds(
+                active_cell[active0:active1]
+            )
             out_point, out_poly = pip_all_matches(
                 pts_local,
                 self.polygons,
@@ -301,6 +400,8 @@ class GridIndex:
                 pair_begin=pair0,
                 pair_end=pair1,
                 max_point_pairs=max_point_pairs,
+                max_ring_edges=max_ring_edges,
+                max_candidate_edges=max_candidate_edges,
             )
             if int(out_point.shape[0]):
                 matches_pt.append(np.array(out_point))
@@ -328,6 +429,7 @@ class GridIndex:
         n = len(point_cell)
 
         if total_pairs <= max_pairs_per_batch:
+            max_ring_edges = self._first_match_ring_bound(point_cell)
             return np.array(
                 pip_first_match(
                     pts_local,
@@ -335,6 +437,7 @@ class GridIndex:
                     point_cell_mx,
                     cell_offsets_mx,
                     cell_poly_mx,
+                    max_ring_edges=max_ring_edges,
                 )
             )
 
@@ -349,6 +452,9 @@ class GridIndex:
             point1 = int(np.searchsorted(cum, pair_limit, side="right")) - 1
             if point1 <= point0:  # defensive: counts.max() was checked above
                 raise RuntimeError("could not form a bounded fused point batch")
+            max_ring_edges = self._first_match_ring_bound(
+                point_cell[point0:point1]
+            )
             result[point0:point1] = np.array(
                 pip_first_match(
                     pts_local[point0:point1],
@@ -356,6 +462,7 @@ class GridIndex:
                     point_cell_mx[point0:point1],
                     cell_offsets_mx,
                     cell_poly_mx,
+                    max_ring_edges=max_ring_edges,
                 )
             )
             point0 = point1
@@ -400,12 +507,16 @@ class GridIndex:
             pair_rank = np.arange(pair0, pair1, dtype=np.int64)
             rank_in_point = pair_rank - cum[pair_point]
             pair_poly = self._cell_poly[cand_starts[pair_point] + rank_in_point]
+            max_ring_edges = int(
+                self.polygons._geom_max_ring_edges[pair_poly].max(initial=0)
+            )
             flags = np.array(
                 pip_pairs(
                     pts_local,
                     self.polygons,
                     mx.array(pair_point.astype(np.int32)),
                     mx.array(pair_poly.astype(np.int32)),
+                    max_ring_edges=max_ring_edges,
                 )
             )
             hit = flags.astype(bool)

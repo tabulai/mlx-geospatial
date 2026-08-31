@@ -46,17 +46,24 @@ haversine (same split cuSpatial uses).
 
 ## Point-in-polygon
 
-Two paths, identical semantics, cross-validated in tests:
+All Metal call sites adapt among scalar, SIMD32, and TG128 traversal while
+sharing identical fp32 even-odd semantics. The scalar kernels assign one
+thread to each predicate. For a ring with at least 1,024 edges and a bounded
+number of predicates, either one 32-lane SIMDgroup or four SIMDgroups in a
+128-thread group traverse disjoint strided edge subsets. They XOR integer
+crossing parity only—never floating-point partials—so edge reordering cannot
+change the result; each edge retains the scalar operation order with FMA
+contraction disabled. Conservative work cutoffs keep saturated or bbox-miss
+heavy launches on the scalar path.
 
-- `pip_pairs`: custom Metal kernel via `mx.fast.metal_kernel`, one thread per
-  candidate (point, polygon) pair; bbox pre-test then serial crossing loop
-  over that polygon's rings. Used by the join.
-- `pip_dense`: custom 2-D Metal kernel, one thread per `(point, polygon)`
-  output. Points occupy the x-axis and polygons the y-axis, so a SIMDgroup
-  reads contiguous points while sharing polygon metadata and edge addresses.
-  It writes the final boolean matrix directly, avoiding the former `N x E`
-  crossing matrix and cumulative sum. The composed MLX implementation remains
-  the non-Metal fallback and an independent arithmetic oracle in tests.
+- `pip_pairs` applies this selector directly to explicit candidate pairs.
+- `pip_dense` writes the final `(N, M)` boolean matrix without an `N x E`
+  intermediate. Its scalar kernel uses the 2-D point/polygon grid; cooperative
+  work is polygon-major for coordinate locality but writes the same row-major
+  output. The composed MLX implementation remains the non-Metal fallback and
+  an independent arithmetic oracle in tests.
+- The indexed first- and all-match call sites use the same cooperative
+  predicate implementations under the additional grid-aware rules below.
 
 Boundary semantics: the half-open crossing rule avoids double-counting ray
 crossings at vertices. Within the tolerance band — including every exact
@@ -104,6 +111,18 @@ the same hard budget. Ordinary batches use point-centric count, prefix scan,
 and ordered write passes; sparse or skewed batches use pair-parallel predicate
 flags, scan, and ordered writes. Both routes avoid host candidate-pair
 expansion and atomics while preserving point-then-polygon output order.
+
+The index stores saturated per-cell maximum-ring and summed-edge-work
+summaries for dispatch. First-match uses SIMD32/TG128 only when every candidate
+in every used cell has a ring of at least 1,024 edges; mixed cells stay scalar
+so an unvisited long polygon cannot penalize an early short-polygon hit.
+All-match forces candidate-parallel compaction when a used cell contains a
+long ring or at least 8,192 candidate edges, avoiding a serial point thread
+and a duplicate predicate pass. Within that route, the bounded predicate-work
+selector still chooses scalar, SIMD32, or TG128 independently. These choices
+change scheduling only: sorted CSR traversal, stable scan/compaction, and
+first-hit early return preserve the public minimum-index and output-order
+contracts.
 
 ## Dispatch
 

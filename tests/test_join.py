@@ -235,7 +235,7 @@ class TestBatching:
         points = [[-1.0, -1.0], [0.5, 0.5], [9.0, 9.0], [0.25, 0.25], [2.0, 2.0]]
         calls = []
 
-        def all_hit(_points, _polyset, pair_point, _pair_poly):
+        def all_hit(_points, _polyset, pair_point, _pair_poly, **_kwargs):
             calls.append(int(pair_point.shape[0]))
             return mx.ones(pair_point.shape, dtype=mx.uint8)
 

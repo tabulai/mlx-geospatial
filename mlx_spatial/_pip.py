@@ -2,19 +2,19 @@
 
 Four GPU paths share identical semantics:
 
-- :func:`pip_pairs` — a custom Metal kernel, one thread per explicit
-  (point, polygon) candidate pair. Retained as the splittable fallback for
-  pathological first-match candidate lists.
-- :func:`pip_first_match` — a point-centric custom Metal kernel. One thread
-  walks a point's grid-cell candidates in ascending polygon order, performs
-  bbox + parity tests, and returns immediately on the first hit.
+- :func:`pip_pairs` — adaptive explicit-pair kernels. Ordinary saturated work
+  uses one thread per pair; long rings use one SIMDgroup or four-SIMDgroup
+  threadgroup per pair to distribute edges.
+- :func:`pip_first_match` — adaptive point-centric kernels. Candidates remain
+  sequential for minimum-index semantics, while long rings are distributed
+  across 32 or 128 cooperating lanes.
 - :func:`pip_all_matches` — an adaptive ordered GPU compactor. Ordinary
   candidate lists use point-centric count/scan/write passes; sparse or skewed
   lists use a pair-parallel flag/scan/write path so one long list cannot
   serialize a thread.
-- :func:`pip_dense` — a custom 2-D Metal kernel, one thread per output cell,
-  with adjacent lanes sharing a polygon while evaluating contiguous points.
-  Used for dense ``(N, M)`` containment matrices.
+- :func:`pip_dense` — an ordinary 2-D kernel plus poly-major cooperative
+  long-ring kernels, selected by shape. Used for dense ``(N, M)`` containment
+  matrices.
 
 The former composed-MLX dense implementation remains as a private fallback
 for non-Metal systems and as an independent correctness oracle in tests.
@@ -87,6 +87,203 @@ _PAIR_KERNEL_SOURCE = """
     inside[i] = (uint8_t)(crossings & 1);
 """
 
+_PIP_SIMDGROUP_HEADER = """
+    // Cooperative long-polygon predicate shared by every specialized path.
+    // Edge order does not affect parity: each lane evaluates a disjoint
+    // strided subset with scalar-identical arithmetic, then the SIMDgroup
+    // XOR-reduces the 32 partial parities.
+    #pragma clang fp contract(off)
+    template <typename Coords, typename RingOffsets,
+              typename GeomRingOffsets, typename Bboxes>
+    METAL_FUNC uint mlx_spatial_pip_contains_simdgroup(
+        float px, float py, long pg, uint lane,
+        Coords coords, RingOffsets ring_offsets,
+        GeomRingOffsets geom_ring_offsets, Bboxes bboxes) {
+        uint parity = 0;
+        bool in_bbox = !(
+            px < bboxes[4 * pg + 0] || py < bboxes[4 * pg + 1] ||
+            px > bboxes[4 * pg + 2] || py > bboxes[4 * pg + 3]);
+        if (!in_bbox) return 0;
+        long r_begin = geom_ring_offsets[pg];
+        long r_end = geom_ring_offsets[pg + 1];
+        for (long r = r_begin; r < r_end; ++r) {
+            long v_begin = ring_offsets[r];
+            long v_end = ring_offsets[r + 1];
+            for (long v = v_begin + (long)lane;
+                 v + 1 < v_end; v += 32) {
+                float y1 = coords[2 * v + 1];
+                float y2 = coords[2 * v + 3];
+                if ((y1 > py) != (y2 > py)) {
+                    float x1 = coords[2 * v + 0];
+                    float x2 = coords[2 * v + 2];
+                    float xint = x1 +
+                        (py - y1) / (y2 - y1) * (x2 - x1);
+                    parity ^= (uint)(px < xint);
+                }
+            }
+        }
+        for (ushort delta = 16; delta > 0; delta >>= 1) {
+            parity ^= metal::simd_shuffle_down(parity, delta);
+        }
+        return metal::simd_broadcast(parity, 0) & 1;
+    }
+"""
+
+_PIP_THREADGROUP_HEADER = """
+    // Four SIMDgroups cooperatively evaluate one point/polygon predicate.
+    // Lane zero receives the final parity in partial[0]. Callers that need
+    // every lane to observe it add one more threadgroup barrier.
+    #pragma clang fp contract(off)
+    template <typename Coords, typename RingOffsets,
+              typename GeomRingOffsets, typename Bboxes>
+    METAL_FUNC void mlx_spatial_pip_contains_threadgroup(
+        float px, float py, long pg, uint local, uint lane, uint simd,
+        Coords coords, RingOffsets ring_offsets,
+        GeomRingOffsets geom_ring_offsets, Bboxes bboxes,
+        threadgroup uint* partial) {
+        uint parity = 0;
+        bool in_bbox = !(
+            px < bboxes[4 * pg + 0] || py < bboxes[4 * pg + 1] ||
+            px > bboxes[4 * pg + 2] || py > bboxes[4 * pg + 3]);
+        if (!in_bbox) {
+            if (local == 0) partial[0] = 0;
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            return;
+        }
+        long r_begin = geom_ring_offsets[pg];
+        long r_end = geom_ring_offsets[pg + 1];
+        for (long r = r_begin; r < r_end; ++r) {
+            long v_begin = ring_offsets[r];
+            long v_end = ring_offsets[r + 1];
+            for (long v = v_begin + (long)local;
+                 v + 1 < v_end; v += 128) {
+                float y1 = coords[2 * v + 1];
+                float y2 = coords[2 * v + 3];
+                if ((y1 > py) != (y2 > py)) {
+                    float x1 = coords[2 * v + 0];
+                    float x2 = coords[2 * v + 2];
+                    float xint = x1 +
+                        (py - y1) / (y2 - y1) * (x2 - x1);
+                    parity ^= (uint)(px < xint);
+                }
+            }
+        }
+        for (ushort delta = 16; delta > 0; delta >>= 1) {
+            parity ^= metal::simd_shuffle_down(parity, delta);
+        }
+        if (lane == 0) partial[simd] = parity;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (simd == 0) {
+            uint group_parity = lane < 4 ? partial[lane] : 0;
+            for (ushort delta = 16; delta > 0; delta >>= 1) {
+                group_parity ^= metal::simd_shuffle_down(group_parity, delta);
+            }
+            if (lane == 0) partial[0] = group_parity & 1;
+        }
+    }
+"""
+
+_PAIR_SIMDGROUP_KERNEL_SOURCE = """
+    // One SIMDgroup cooperates on every long candidate polygon.
+    uint tid = thread_position_in_grid.x;
+    uint lane = thread_index_in_simdgroup;
+    uint pair = tid / 32;
+    int count = n_pairs[0];
+    // pair changes only at SIMDgroup boundaries, so the tail return is
+    // uniform and no live lane can be stranded in a shuffle reduction.
+    if (pair >= (uint)count) return;
+
+    long pt = pair_point[pair];
+    long pg = pair_poly[pair];
+    float px = points[2 * pt + 0];
+    float py = points[2 * pt + 1];
+    uint hit = mlx_spatial_pip_contains_simdgroup(
+        px, py, pg, lane, coords, ring_offsets, geom_ring_offsets, bboxes);
+    if (lane == 0) inside[pair] = (uint8_t)hit;
+"""
+
+_PAIR_THREADGROUP_KERNEL_SOURCE = """
+    // Four SIMDgroups cooperate on one very long polygon. Each first lane
+    // publishes its SIMDgroup parity, then SIMDgroup zero performs the final
+    // XOR. A whole threadgroup maps to one pair, so every barrier is uniform.
+    #pragma clang fp contract(off)
+    uint pair = threadgroup_position_in_grid.x;
+    uint local = thread_index_in_threadgroup;
+    uint lane = thread_index_in_simdgroup;
+    uint simd = simdgroup_index_in_threadgroup;
+    int count = n_pairs[0];
+    if (pair >= (uint)count) return;
+
+    long pt = pair_point[pair];
+    long pg = pair_poly[pair];
+    float px = points[2 * pt + 0];
+    float py = points[2 * pt + 1];
+    threadgroup uint partial[4];
+    mlx_spatial_pip_contains_threadgroup(
+        px, py, pg, local, lane, simd, coords, ring_offsets,
+        geom_ring_offsets, bboxes, partial);
+    if (local == 0) inside[pair] = (uint8_t)partial[0];
+"""
+
+_FIRST_MATCH_SIMDGROUP_KERNEL_SOURCE = """
+    uint tid = thread_position_in_grid.x;
+    uint lane = thread_index_in_simdgroup;
+    uint pt = tid / 32;
+    int n_points = shape[0];
+    if (pt >= (uint)n_points) return;
+
+    if (lane == 0) match[pt] = -1;
+    int cell = point_cell[pt];
+    if (cell < 0) return;
+    float px = points[2 * (size_t)pt + 0];
+    float py = points[2 * (size_t)pt + 1];
+    long candidate_begin = cell_offsets[cell];
+    long candidate_end = cell_offsets[cell + 1];
+    for (long candidate = candidate_begin;
+         candidate < candidate_end; ++candidate) {
+        int pg = cell_poly[candidate];
+        uint hit = mlx_spatial_pip_contains_simdgroup(
+            px, py, pg, lane, coords, ring_offsets,
+            geom_ring_offsets, bboxes);
+        if (hit) {
+            if (lane == 0) match[pt] = pg;
+            return;
+        }
+    }
+"""
+
+_FIRST_MATCH_THREADGROUP_KERNEL_SOURCE = """
+    uint pt = threadgroup_position_in_grid.x;
+    uint local = thread_index_in_threadgroup;
+    uint lane = thread_index_in_simdgroup;
+    uint simd = simdgroup_index_in_threadgroup;
+    int n_points = shape[0];
+    if (pt >= (uint)n_points) return;
+
+    if (local == 0) match[pt] = -1;
+    int cell = point_cell[pt];
+    if (cell < 0) return;
+    float px = points[2 * (size_t)pt + 0];
+    float py = points[2 * (size_t)pt + 1];
+    threadgroup uint partial[4];
+    long candidate_begin = cell_offsets[cell];
+    long candidate_end = cell_offsets[cell + 1];
+    for (long candidate = candidate_begin;
+         candidate < candidate_end; ++candidate) {
+        int pg = cell_poly[candidate];
+        mlx_spatial_pip_contains_threadgroup(
+            px, py, (long)pg, local, lane, simd, coords, ring_offsets,
+            geom_ring_offsets, bboxes, partial);
+        // Unlike the pair kernel, every SIMDgroup must observe the reduced
+        // predicate before it can uniformly continue or return.
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (partial[0]) {
+            if (local == 0) match[pt] = pg;
+            return;
+        }
+    }
+"""
+
 _DENSE_KERNEL_SOURCE = """
     // Match pip_pairs and the composed oracle operation-for-operation.
     #pragma clang fp contract(off)
@@ -127,6 +324,50 @@ _DENSE_KERNEL_SOURCE = """
         }
     }
     inside[out_idx] = (crossings & 1) != 0;
+"""
+
+_DENSE_SIMDGROUP_KERNEL_SOURCE = """
+    uint tid = thread_position_in_grid.x;
+    uint lane = thread_index_in_simdgroup;
+    size_t pair = (size_t)tid / 32;
+    int n_points = shape[0];
+    int n_geoms = shape[1];
+    size_t n_pairs = (size_t)n_points * (size_t)n_geoms;
+    if (pair >= n_pairs) return;
+
+    // Poly-major work order keeps adjacent cooperative groups on the same
+    // long coordinate block; the required result remains row-major.
+    size_t pg = pair / (size_t)n_points;
+    size_t pt = pair - pg * (size_t)n_points;
+    size_t out = pt * (size_t)n_geoms + pg;
+    float px = points[2 * (size_t)pt + 0];
+    float py = points[2 * (size_t)pt + 1];
+    uint hit = mlx_spatial_pip_contains_simdgroup(
+        px, py, (long)pg, lane, coords, ring_offsets,
+        geom_ring_offsets, bboxes);
+    if (lane == 0) inside[out] = hit != 0;
+"""
+
+_DENSE_THREADGROUP_KERNEL_SOURCE = """
+    size_t pair = (size_t)threadgroup_position_in_grid.x;
+    uint local = thread_index_in_threadgroup;
+    uint lane = thread_index_in_simdgroup;
+    uint simd = simdgroup_index_in_threadgroup;
+    int n_points = shape[0];
+    int n_geoms = shape[1];
+    size_t n_pairs = (size_t)n_points * (size_t)n_geoms;
+    if (pair >= n_pairs) return;
+
+    size_t pg = pair / (size_t)n_points;
+    size_t pt = pair - pg * (size_t)n_points;
+    size_t out = pt * (size_t)n_geoms + pg;
+    float px = points[2 * (size_t)pt + 0];
+    float py = points[2 * (size_t)pt + 1];
+    threadgroup uint partial[4];
+    mlx_spatial_pip_contains_threadgroup(
+        px, py, (long)pg, local, lane, simd, coords, ring_offsets,
+        geom_ring_offsets, bboxes, partial);
+    if (local == 0) inside[out] = partial[0] != 0;
 """
 
 _FIRST_MATCH_KERNEL_SOURCE = """
@@ -313,6 +554,69 @@ _ALL_MATCHES_PAIR_COUNT_SOURCE = """
         px, py, pg, coords, ring_offsets, geom_ring_offsets, bboxes);
 """
 
+_ALL_MATCHES_PAIR_SIMDGROUP_COUNT_SOURCE = """
+    uint tid = thread_position_in_grid.x;
+    uint lane = thread_index_in_simdgroup;
+    uint pair = tid / 32;
+    int n_pairs = shape[0];
+    int n_active = shape[1];
+    if (pair >= (uint)n_pairs) return;
+
+    long candidate = limits[0] + (long)pair;
+    int lo = 0;
+    if (lane == 0) {
+        int hi = n_active;
+        while (lo + 1 < hi) {
+            int mid = lo + (hi - lo) / 2;
+            if (candidate_offsets[mid] <= candidate) lo = mid;
+            else hi = mid;
+        }
+    }
+    lo = metal::simd_broadcast(lo, 0);
+    int pt = point_id[lo];
+    int cell = point_cell[lo];
+    long cell_candidate = cell_offsets[cell] +
+        candidate - candidate_offsets[lo];
+    int pg = cell_poly[cell_candidate];
+    float px = points[2 * (size_t)pt + 0];
+    float py = points[2 * (size_t)pt + 1];
+    uint hit = mlx_spatial_pip_contains_simdgroup(
+        px, py, (long)pg, lane, coords, ring_offsets,
+        geom_ring_offsets, bboxes);
+    if (lane == 0) match_flag[pair] = (int)hit;
+"""
+
+_ALL_MATCHES_PAIR_THREADGROUP_COUNT_SOURCE = """
+    uint pair = threadgroup_position_in_grid.x;
+    uint local = thread_index_in_threadgroup;
+    uint lane = thread_index_in_simdgroup;
+    uint simd = simdgroup_index_in_threadgroup;
+    int n_pairs = shape[0];
+    int n_active = shape[1];
+    if (pair >= (uint)n_pairs) return;
+
+    long candidate = limits[0] + (long)pair;
+    int lo = 0;
+    int hi = n_active;
+    while (lo + 1 < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (candidate_offsets[mid] <= candidate) lo = mid;
+        else hi = mid;
+    }
+    int pt = point_id[lo];
+    int cell = point_cell[lo];
+    long cell_candidate = cell_offsets[cell] +
+        candidate - candidate_offsets[lo];
+    int pg = cell_poly[cell_candidate];
+    float px = points[2 * (size_t)pt + 0];
+    float py = points[2 * (size_t)pt + 1];
+    threadgroup uint partial[4];
+    mlx_spatial_pip_contains_threadgroup(
+        px, py, (long)pg, local, lane, simd, coords, ring_offsets,
+        geom_ring_offsets, bboxes, partial);
+    if (local == 0) match_flag[pair] = (int)partial[0];
+"""
+
 _ALL_MATCHES_PAIR_WRITE_SOURCE = """
     uint pair = thread_position_in_grid.x;
     int n_pairs = shape[0];
@@ -342,23 +646,82 @@ _ALL_MATCHES_PAIR_WRITE_SOURCE = """
 """
 
 _pair_kernel = None
+_pair_simdgroup_kernel = None
+_pair_threadgroup_kernel = None
 _dense_kernel = None
+_dense_simdgroup_kernel = None
+_dense_threadgroup_kernel = None
 _first_match_kernel = None
+_first_match_simdgroup_kernel = None
+_first_match_threadgroup_kernel = None
 _all_matches_count_kernel = None
 _all_matches_write_kernel = None
 _all_matches_pair_count_kernel = None
+_all_matches_pair_simdgroup_count_kernel = None
+_all_matches_pair_threadgroup_count_kernel = None
 _all_matches_pair_write_kernel = None
 
 _ALL_MATCHES_PAIR_ACTIVE_THRESHOLD = 1024
 _ALL_MATCHES_PAIR_POINT_THRESHOLD = 256
+_ALL_MATCHES_LONG_POLYGON_THRESHOLD = 1024
+_ALL_MATCHES_EDGE_WORK_THRESHOLD = 8192
+
+_PIP_LONG_RING_THRESHOLD = 1024
+_PIP_LONG_SIMDGROUP_MAX_WORK = 16_384
+_PIP_LONG_THREADGROUP_MAX_WORK = 4096
+
+
+def _pip_long_polygon_strategy(
+    n_work: int,
+    max_ring_edges: int,
+    *,
+    max_work: int = _PIP_LONG_SIMDGROUP_MAX_WORK,
+) -> str:
+    """Choose scalar, SIMDgroup, or threadgroup traversal for long rings."""
+    n_work = int(n_work)
+    max_ring_edges = int(max_ring_edges)
+    if n_work <= 0 or max_ring_edges < _PIP_LONG_RING_THRESHOLD:
+        return "scalar"
+
+    # Four SIMDgroups amortize their barriers only while each work item has
+    # enough edges and the launch does not create excessive lane pressure.
+    threadgroup_limit = min(
+        _PIP_LONG_THREADGROUP_MAX_WORK,
+        max_ring_edges,
+    )
+    if n_work <= min(threadgroup_limit, max_work):
+        return "threadgroup"
+
+    # SIMD32 remains profitable at a much wider launch. Scale the crossover
+    # with ring length, capped before 32x lane expansion hurts saturated work.
+    simdgroup_limit = min(
+        _PIP_LONG_SIMDGROUP_MAX_WORK,
+        max(4096, max_ring_edges * 4),
+        max_work,
+    )
+    if n_work <= simdgroup_limit:
+        return "simdgroup"
+    return "scalar"
 
 
 def _all_matches_strategy(
-    n_active: int, n_pairs: int, max_point_pairs: int
+    n_active: int,
+    n_pairs: int,
+    max_point_pairs: int,
+    max_candidate_edges: int = 0,
+    max_ring_edges: int = 0,
 ) -> str:
     """Choose point-centric or pair-parallel ordered GPU compaction."""
     if n_pairs == 0:
         return "point"
+    # Candidate-parallel evaluates the PIP predicate once. Point-centric
+    # count/write evaluates it twice and serializes every candidate list,
+    # which is catastrophic when even one candidate polygon is expensive.
+    if (
+        max_ring_edges >= _ALL_MATCHES_LONG_POLYGON_THRESHOLD
+        or max_candidate_edges >= _ALL_MATCHES_EDGE_WORK_THRESHOLD
+    ):
+        return "pair"
     if n_active < _ALL_MATCHES_PAIR_ACTIVE_THRESHOLD:
         return "pair"
     # The average is not a safe skew signal: one point can own nearly all
@@ -405,6 +768,236 @@ def _get_pair_kernel():
     return _pair_kernel
 
 
+def _get_pair_simdgroup_kernel():
+    global _pair_simdgroup_kernel
+    if _pair_simdgroup_kernel is None:
+        _pair_simdgroup_kernel = mx.fast.metal_kernel(
+            name="mlx_spatial_pip_pairs_simdgroup",
+            input_names=[
+                "points",
+                "pair_point",
+                "pair_poly",
+                "coords",
+                "ring_offsets",
+                "geom_ring_offsets",
+                "bboxes",
+                "n_pairs",
+            ],
+            output_names=["inside"],
+            header=_PIP_SIMDGROUP_HEADER,
+            source=_PAIR_SIMDGROUP_KERNEL_SOURCE,
+        )
+    return _pair_simdgroup_kernel
+
+
+def _get_pair_threadgroup_kernel():
+    global _pair_threadgroup_kernel
+    if _pair_threadgroup_kernel is None:
+        _pair_threadgroup_kernel = mx.fast.metal_kernel(
+            name="mlx_spatial_pip_pairs_threadgroup",
+            input_names=[
+                "points",
+                "pair_point",
+                "pair_poly",
+                "coords",
+                "ring_offsets",
+                "geom_ring_offsets",
+                "bboxes",
+                "n_pairs",
+            ],
+            output_names=["inside"],
+            header=_PIP_THREADGROUP_HEADER,
+            source=_PAIR_THREADGROUP_KERNEL_SOURCE,
+        )
+    return _pair_threadgroup_kernel
+
+
+def _pip_pairs_simdgroup(
+    points_local: mx.array,
+    polygons: PolygonSet,
+    pair_point: mx.array,
+    pair_poly: mx.array,
+    *,
+    threadgroup: int = 128,
+) -> mx.array:
+    """Cooperative long-polygon PIP: one SIMDgroup per candidate pair."""
+    if threadgroup < 32 or threadgroup > 1024 or threadgroup % 32:
+        raise ValueError("threadgroup must be a multiple of 32 in [32, 1024]")
+    n_pairs = int(pair_point.shape[0])
+    if n_pairs == 0:
+        return mx.zeros((0,), dtype=mx.uint8)
+    threads = n_pairs * 32
+    grid_x = ((threads + threadgroup - 1) // threadgroup) * threadgroup
+    kernel = _get_pair_simdgroup_kernel()
+    (inside,) = kernel(
+        inputs=[
+            points_local,
+            pair_point,
+            pair_poly,
+            polygons.coords,
+            polygons.ring_offsets,
+            polygons.geom_ring_offsets,
+            polygons.bboxes_local,
+            mx.array([n_pairs], dtype=mx.int32),
+        ],
+        grid=(grid_x, 1, 1),
+        threadgroup=(threadgroup, 1, 1),
+        output_shapes=[(n_pairs,)],
+        output_dtypes=[mx.uint8],
+        stream=mx.gpu,
+    )
+    return inside
+
+
+def _pip_pairs_threadgroup(
+    points_local: mx.array,
+    polygons: PolygonSet,
+    pair_point: mx.array,
+    pair_poly: mx.array,
+) -> mx.array:
+    """Cooperative very-long PIP: one 128-lane threadgroup per pair."""
+    n_pairs = int(pair_point.shape[0])
+    if n_pairs == 0:
+        return mx.zeros((0,), dtype=mx.uint8)
+    kernel = _get_pair_threadgroup_kernel()
+    (inside,) = kernel(
+        inputs=[
+            points_local,
+            pair_point,
+            pair_poly,
+            polygons.coords,
+            polygons.ring_offsets,
+            polygons.geom_ring_offsets,
+            polygons.bboxes_local,
+            mx.array([n_pairs], dtype=mx.int32),
+        ],
+        grid=(n_pairs * 128, 1, 1),
+        threadgroup=(128, 1, 1),
+        output_shapes=[(n_pairs,)],
+        output_dtypes=[mx.uint8],
+        stream=mx.gpu,
+    )
+    return inside
+
+
+def _get_first_match_simdgroup_kernel():
+    global _first_match_simdgroup_kernel
+    if _first_match_simdgroup_kernel is None:
+        _first_match_simdgroup_kernel = mx.fast.metal_kernel(
+            name="mlx_spatial_pip_first_match_simdgroup",
+            input_names=[
+                "points",
+                "point_cell",
+                "cell_offsets",
+                "cell_poly",
+                "coords",
+                "ring_offsets",
+                "geom_ring_offsets",
+                "bboxes",
+                "shape",
+            ],
+            output_names=["match"],
+            header=_PIP_SIMDGROUP_HEADER,
+            source=_FIRST_MATCH_SIMDGROUP_KERNEL_SOURCE,
+        )
+    return _first_match_simdgroup_kernel
+
+
+def _get_first_match_threadgroup_kernel():
+    global _first_match_threadgroup_kernel
+    if _first_match_threadgroup_kernel is None:
+        _first_match_threadgroup_kernel = mx.fast.metal_kernel(
+            name="mlx_spatial_pip_first_match_threadgroup",
+            input_names=[
+                "points",
+                "point_cell",
+                "cell_offsets",
+                "cell_poly",
+                "coords",
+                "ring_offsets",
+                "geom_ring_offsets",
+                "bboxes",
+                "shape",
+            ],
+            output_names=["match"],
+            header=_PIP_THREADGROUP_HEADER,
+            source=_FIRST_MATCH_THREADGROUP_KERNEL_SOURCE,
+        )
+    return _first_match_threadgroup_kernel
+
+
+def _pip_first_match_simdgroup(
+    points_local: mx.array,
+    polygons: PolygonSet,
+    point_cell: mx.array,
+    cell_offsets: mx.array,
+    cell_poly: mx.array,
+    *,
+    threadgroup: int = 128,
+) -> mx.array:
+    """Cooperative long-polygon first match: one SIMDgroup per point."""
+    if threadgroup < 32 or threadgroup > 1024 or threadgroup % 32:
+        raise ValueError("threadgroup must be a multiple of 32 in [32, 1024]")
+    n_points = int(points_local.shape[0])
+    if n_points == 0:
+        return mx.zeros((0,), dtype=mx.int32)
+    threads = n_points * 32
+    grid_x = ((threads + threadgroup - 1) // threadgroup) * threadgroup
+    kernel = _get_first_match_simdgroup_kernel()
+    (match,) = kernel(
+        inputs=[
+            points_local,
+            point_cell,
+            cell_offsets,
+            cell_poly,
+            polygons.coords,
+            polygons.ring_offsets,
+            polygons.geom_ring_offsets,
+            polygons.bboxes_local,
+            mx.array([n_points], dtype=mx.int32),
+        ],
+        grid=(grid_x, 1, 1),
+        threadgroup=(threadgroup, 1, 1),
+        output_shapes=[(n_points,)],
+        output_dtypes=[mx.int32],
+        stream=mx.gpu,
+    )
+    return match
+
+
+def _pip_first_match_threadgroup(
+    points_local: mx.array,
+    polygons: PolygonSet,
+    point_cell: mx.array,
+    cell_offsets: mx.array,
+    cell_poly: mx.array,
+) -> mx.array:
+    """Cooperative very-long first match: one 128-lane group per point."""
+    n_points = int(points_local.shape[0])
+    if n_points == 0:
+        return mx.zeros((0,), dtype=mx.int32)
+    kernel = _get_first_match_threadgroup_kernel()
+    (match,) = kernel(
+        inputs=[
+            points_local,
+            point_cell,
+            cell_offsets,
+            cell_poly,
+            polygons.coords,
+            polygons.ring_offsets,
+            polygons.geom_ring_offsets,
+            polygons.bboxes_local,
+            mx.array([n_points], dtype=mx.int32),
+        ],
+        grid=(n_points * 128, 1, 1),
+        threadgroup=(128, 1, 1),
+        output_shapes=[(n_points,)],
+        output_dtypes=[mx.int32],
+        stream=mx.gpu,
+    )
+    return match
+
+
 def _get_dense_kernel():
     global _dense_kernel
     if _dense_kernel is None:
@@ -422,6 +1015,46 @@ def _get_dense_kernel():
             source=_DENSE_KERNEL_SOURCE,
         )
     return _dense_kernel
+
+
+def _get_dense_simdgroup_kernel():
+    global _dense_simdgroup_kernel
+    if _dense_simdgroup_kernel is None:
+        _dense_simdgroup_kernel = mx.fast.metal_kernel(
+            name="mlx_spatial_pip_dense_simdgroup",
+            input_names=[
+                "points",
+                "coords",
+                "ring_offsets",
+                "geom_ring_offsets",
+                "bboxes",
+                "shape",
+            ],
+            output_names=["inside"],
+            header=_PIP_SIMDGROUP_HEADER,
+            source=_DENSE_SIMDGROUP_KERNEL_SOURCE,
+        )
+    return _dense_simdgroup_kernel
+
+
+def _get_dense_threadgroup_kernel():
+    global _dense_threadgroup_kernel
+    if _dense_threadgroup_kernel is None:
+        _dense_threadgroup_kernel = mx.fast.metal_kernel(
+            name="mlx_spatial_pip_dense_threadgroup",
+            input_names=[
+                "points",
+                "coords",
+                "ring_offsets",
+                "geom_ring_offsets",
+                "bboxes",
+                "shape",
+            ],
+            output_names=["inside"],
+            header=_PIP_THREADGROUP_HEADER,
+            source=_DENSE_THREADGROUP_KERNEL_SOURCE,
+        )
+    return _dense_threadgroup_kernel
 
 
 def _get_first_match_kernel():
@@ -525,6 +1158,58 @@ def _get_all_matches_pair_count_kernel():
     return _all_matches_pair_count_kernel
 
 
+def _get_all_matches_pair_simdgroup_count_kernel():
+    global _all_matches_pair_simdgroup_count_kernel
+    if _all_matches_pair_simdgroup_count_kernel is None:
+        _all_matches_pair_simdgroup_count_kernel = mx.fast.metal_kernel(
+            name="mlx_spatial_pip_all_matches_pair_simdgroup_count",
+            input_names=[
+                "points",
+                "point_id",
+                "point_cell",
+                "candidate_offsets",
+                "cell_offsets",
+                "cell_poly",
+                "coords",
+                "ring_offsets",
+                "geom_ring_offsets",
+                "bboxes",
+                "limits",
+                "shape",
+            ],
+            output_names=["match_flag"],
+            header=_PIP_SIMDGROUP_HEADER,
+            source=_ALL_MATCHES_PAIR_SIMDGROUP_COUNT_SOURCE,
+        )
+    return _all_matches_pair_simdgroup_count_kernel
+
+
+def _get_all_matches_pair_threadgroup_count_kernel():
+    global _all_matches_pair_threadgroup_count_kernel
+    if _all_matches_pair_threadgroup_count_kernel is None:
+        _all_matches_pair_threadgroup_count_kernel = mx.fast.metal_kernel(
+            name="mlx_spatial_pip_all_matches_pair_threadgroup_count",
+            input_names=[
+                "points",
+                "point_id",
+                "point_cell",
+                "candidate_offsets",
+                "cell_offsets",
+                "cell_poly",
+                "coords",
+                "ring_offsets",
+                "geom_ring_offsets",
+                "bboxes",
+                "limits",
+                "shape",
+            ],
+            output_names=["match_flag"],
+            header=_PIP_THREADGROUP_HEADER,
+            source=_ALL_MATCHES_PAIR_THREADGROUP_COUNT_SOURCE,
+        )
+    return _all_matches_pair_threadgroup_count_kernel
+
+
 def _get_all_matches_pair_write_kernel():
     global _all_matches_pair_write_kernel
     if _all_matches_pair_write_kernel is None:
@@ -553,6 +1238,7 @@ def pip_pairs(
     pair_point: mx.array,
     pair_poly: mx.array,
     *,
+    max_ring_edges: int | None = None,
     threadgroup: int = 256,
 ) -> mx.array:
     """Containment flags for explicit (point, polygon) candidate pairs.
@@ -571,6 +1257,17 @@ def pip_pairs(
     n_pairs = int(pair_point.shape[0])
     if n_pairs == 0:
         return mx.zeros((0,), dtype=mx.uint8)
+    if max_ring_edges is None:
+        max_ring_edges = polygons.max_edges_per_ring
+    strategy = _pip_long_polygon_strategy(n_pairs, max_ring_edges)
+    if strategy == "threadgroup":
+        return _pip_pairs_threadgroup(
+            points_local, polygons, pair_point, pair_poly
+        )
+    if strategy == "simdgroup":
+        return _pip_pairs_simdgroup(
+            points_local, polygons, pair_point, pair_poly
+        )
     kernel = _get_pair_kernel()
     grid_x = ((n_pairs + threadgroup - 1) // threadgroup) * threadgroup
     (inside,) = kernel(
@@ -600,6 +1297,7 @@ def pip_first_match(
     cell_offsets: mx.array,
     cell_poly: mx.array,
     *,
+    max_ring_edges: int | None = None,
     threadgroup: int = 256,
 ) -> mx.array:
     """First containing polygon for each point from grid-cell CSR candidates.
@@ -612,6 +1310,19 @@ def pip_first_match(
     n_points = int(points_local.shape[0])
     if n_points == 0:
         return mx.zeros((0,), dtype=mx.int32)
+    if max_ring_edges is None:
+        max_ring_edges = polygons.max_edges_per_ring
+    strategy = _pip_long_polygon_strategy(
+        n_points, max_ring_edges, max_work=4096
+    )
+    if strategy == "threadgroup":
+        return _pip_first_match_threadgroup(
+            points_local, polygons, point_cell, cell_offsets, cell_poly
+        )
+    if strategy == "simdgroup":
+        return _pip_first_match_simdgroup(
+            points_local, polygons, point_cell, cell_offsets, cell_poly
+        )
     kernel = _get_first_match_kernel()
     threadgroup = min(threadgroup, n_points)
     (match,) = kernel(
@@ -647,6 +1358,8 @@ def pip_all_matches(
     pair_begin: int,
     pair_end: int,
     max_point_pairs: int | None = None,
+    max_ring_edges: int | None = None,
+    max_candidate_edges: int | None = None,
     threadgroup: int = 256,
 ) -> tuple[mx.array, mx.array]:
     """Compact every CSR containment hit for one bounded candidate range.
@@ -661,6 +1374,11 @@ def pip_all_matches(
     point after clipping to this batch. It lets the adaptive implementation
     avoid serializing a highly skewed list in one point thread. If omitted,
     the whole batch is used as a conservative bound.
+
+    ``max_ring_edges`` controls cooperative edge traversal. The maximum total
+    candidate-edge work contributed by one point, ``max_candidate_edges``,
+    lets expensive candidate lists use the pair-parallel one-predicate path
+    rather than the point-centric two-predicate path.
 
     Both GPU strategies preserve point-major then polygon-major order without
     materializing explicit candidate-index arrays. Returned arrays use the
@@ -692,6 +1410,14 @@ def pip_all_matches(
     max_point_pairs = int(max_point_pairs)
     if not 0 <= max_point_pairs <= n_pairs:
         raise ValueError("max_point_pairs must be in [0, pair_end - pair_begin]")
+    if max_ring_edges is None:
+        max_ring_edges = polygons.max_edges_per_ring
+    if max_candidate_edges is None:
+        max_candidate_edges = int(polygons._geom_edge_counts.sum())
+    max_ring_edges = int(max_ring_edges)
+    max_candidate_edges = int(max_candidate_edges)
+    if max_ring_edges < 0 or max_candidate_edges < 0:
+        raise ValueError("edge-count bounds must be non-negative")
     limits = mx.array([pair_begin, pair_end], dtype=mx.int64)
     common_inputs = [
         points_local,
@@ -707,14 +1433,37 @@ def pip_all_matches(
         limits,
     ]
 
-    if _all_matches_strategy(n_active, n_pairs, max_point_pairs) == "pair":
+    if (
+        _all_matches_strategy(
+            n_active,
+            n_pairs,
+            max_point_pairs,
+            max_candidate_edges,
+            max_ring_edges,
+        )
+        == "pair"
+    ):
         shape = mx.array([n_pairs, n_active], dtype=mx.int32)
         pair_threadgroup = min(threadgroup, n_pairs)
-        count_kernel = _get_all_matches_pair_count_kernel()
+        long_strategy = _pip_long_polygon_strategy(n_pairs, max_ring_edges)
+        if long_strategy == "threadgroup":
+            count_kernel = _get_all_matches_pair_threadgroup_count_kernel()
+            count_grid = (n_pairs * 128, 1, 1)
+            count_threadgroup = (128, 1, 1)
+        elif long_strategy == "simdgroup":
+            count_kernel = _get_all_matches_pair_simdgroup_count_kernel()
+            count_threads = n_pairs * 32
+            count_grid_x = ((count_threads + 127) // 128) * 128
+            count_grid = (count_grid_x, 1, 1)
+            count_threadgroup = (128, 1, 1)
+        else:
+            count_kernel = _get_all_matches_pair_count_kernel()
+            count_grid = (n_pairs, 1, 1)
+            count_threadgroup = (pair_threadgroup, 1, 1)
         (match_flag,) = count_kernel(
             inputs=[*common_inputs, shape],
-            grid=(n_pairs, 1, 1),
-            threadgroup=(pair_threadgroup, 1, 1),
+            grid=count_grid,
+            threadgroup=count_threadgroup,
             output_shapes=[(n_pairs,)],
             output_dtypes=[mx.int32],
             stream=mx.gpu,
@@ -831,6 +1580,65 @@ def _pip_dense_composed(
     return mx.concatenate(out_chunks, axis=0)
 
 
+def _pip_dense_simdgroup(
+    points_local: mx.array,
+    polygons: PolygonSet,
+    *,
+    threadgroup: int = 128,
+) -> mx.array:
+    """Dense long-ring PIP with one SIMDgroup per matrix cell."""
+    if threadgroup < 32 or threadgroup > 1024 or threadgroup % 32:
+        raise ValueError("threadgroup must be a multiple of 32 in [32, 1024]")
+    n_points = int(points_local.shape[0])
+    n_geoms = polygons.n_polygons
+    n_pairs = n_points * n_geoms
+    threads = n_pairs * 32
+    grid_x = ((threads + threadgroup - 1) // threadgroup) * threadgroup
+    kernel = _get_dense_simdgroup_kernel()
+    (inside,) = kernel(
+        inputs=[
+            points_local,
+            polygons.coords,
+            polygons.ring_offsets,
+            polygons.geom_ring_offsets,
+            polygons.bboxes_local,
+            mx.array([n_points, n_geoms], dtype=mx.int32),
+        ],
+        grid=(grid_x, 1, 1),
+        threadgroup=(threadgroup, 1, 1),
+        output_shapes=[(n_points, n_geoms)],
+        output_dtypes=[mx.bool_],
+        stream=mx.gpu,
+    )
+    return inside
+
+
+def _pip_dense_threadgroup(
+    points_local: mx.array, polygons: PolygonSet
+) -> mx.array:
+    """Dense very-long PIP with one 128-lane group per matrix cell."""
+    n_points = int(points_local.shape[0])
+    n_geoms = polygons.n_polygons
+    n_pairs = n_points * n_geoms
+    kernel = _get_dense_threadgroup_kernel()
+    (inside,) = kernel(
+        inputs=[
+            points_local,
+            polygons.coords,
+            polygons.ring_offsets,
+            polygons.geom_ring_offsets,
+            polygons.bboxes_local,
+            mx.array([n_points, n_geoms], dtype=mx.int32),
+        ],
+        grid=(n_pairs * 128, 1, 1),
+        threadgroup=(128, 1, 1),
+        output_shapes=[(n_points, n_geoms)],
+        output_dtypes=[mx.bool_],
+        stream=mx.gpu,
+    )
+    return inside
+
+
 def pip_dense(
     points_local: mx.array,
     polygons: PolygonSet,
@@ -839,12 +1647,12 @@ def pip_dense(
 ) -> mx.array:
     """Dense ``(N, M)`` bool containment matrix.
 
-    On Metal, a 2-D custom kernel evaluates one ``(point, polygon)`` output
-    per thread. The x-axis is points and the y-axis is polygons, so adjacent
-    lanes read contiguous points while sharing polygon metadata and edge
-    addresses. Widened geometry bboxes reject most pairs before the ring
-    traversal, and the result is written directly without an ``(N, E)``
-    crossing matrix or cumulative sum.
+    On Metal, ordinary shapes use a 2-D custom kernel with one thread per
+    ``(point, polygon)`` output. For long rings and bounded output counts, a
+    poly-major kernel assigns either 32 or 128 lanes to each output and
+    XOR-reduces their exact integer crossing parities. Widened geometry bboxes
+    reject pairs before ring traversal, and every route writes the result
+    directly without an ``(N, E)`` crossing matrix or cumulative sum.
 
     ``chunk_bytes`` is retained for API compatibility and controls the
     composed fallback on non-Metal systems. The Metal path has no dense
@@ -862,6 +1670,14 @@ def pip_dense(
         return _pip_dense_composed(
             points_local, polygons, chunk_bytes=chunk_bytes
         )
+
+    strategy = _pip_long_polygon_strategy(
+        n_points * n_geoms, polygons.max_edges_per_ring
+    )
+    if strategy == "threadgroup":
+        return _pip_dense_threadgroup(points_local, polygons)
+    if strategy == "simdgroup":
+        return _pip_dense_simdgroup(points_local, polygons)
 
     # MLX dispatches partial threadgroups, so the exact x extent avoids idle
     # tail lanes and cannot overflow by rounding an INT_MAX-sized axis up.
