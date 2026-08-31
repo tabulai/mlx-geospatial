@@ -194,9 +194,35 @@ class PolygonSet:
         if len(coords_local) and not np.isfinite(coords_local).all():
             raise ValueError(
                 "re-centered coordinates overflow float32; origin="
-                f"{self.origin.tolist()} is too far from the data (the "
-                "default origin, the vertex bbox center, always fits)"
+                f"{self.origin.tolist()} is too far from the data or the "
+                "data extent exceeds the float32 coordinate range"
             )
+        if len(coords_local) > 1:
+            # The crossing test subtracts consecutive edge endpoints.
+            # Individually finite fp32 coordinates are not sufficient: e.g.
+            # -3e38 and +3e38 both fit, but their difference overflows to inf.
+            # Do not reject merely distant rings/geometries, though: adjacent
+            # rows at ring boundaries are not edges and are never subtracted
+            # by either PIP implementation. The cheap global-span test avoids
+            # allocating a full delta array for ordinary coordinate ranges;
+            # only a globally extreme set needs the edge-precise check.
+            local_lo = coords_local.min(axis=0).astype(np.float64)
+            local_hi = coords_local.max(axis=0).astype(np.float64)
+            if np.any(local_hi - local_lo > float(np.finfo(np.float32).max)):
+                with np.errstate(over="ignore", invalid="ignore"):
+                    consecutive_delta = coords_local[1:] - coords_local[:-1]
+                safe_delta = np.isfinite(consecutive_delta).all(axis=1)
+                cross_ring = ring_offsets[1:-1] - 1
+                cross_ring = cross_ring[
+                    (cross_ring >= 0) & (cross_ring < len(safe_delta))
+                ]
+                safe_delta[cross_ring] = True
+                if not safe_delta.all():
+                    raise ValueError(
+                        "re-centered edge endpoint difference overflows "
+                        "float32; rescale the coordinates or subdivide the "
+                        "affected edge"
+                    )
         self.coords = mx.array(coords_local)
         self.ring_offsets = mx.array(ring_offsets.astype(np.int32))
         self.geom_ring_offsets = mx.array(geom_ring_offsets.astype(np.int32))

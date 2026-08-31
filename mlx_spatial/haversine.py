@@ -30,18 +30,21 @@ R_EARTH_M = 6371008.8  # IUGG mean Earth radius, meters
 _DEG2RAD_F32 = np.float32(math.pi / 180.0)
 
 
-# Upper bound keeps pi * radius (the largest representable distance) well
-# below float32 max, so distances can never overflow to inf — the kNN paths
-# rely on inf being unambiguous "no neighbor" padding.
+# Keep radius inside the normal float32 range used by MLX/Metal.  Below the
+# lower bound the scalar itself can underflow (or be flushed) to zero, which
+# makes the composed kNN path rank every reference as an exact tie.  The upper
+# bound keeps pi * radius (the largest representable distance) well below
+# float32 max, so distances cannot collide with kNN's inf "no neighbor" pad.
+_MIN_RADIUS = float(np.finfo(np.float32).tiny)
 _MAX_RADIUS = 1e37
 
 
 def _check_radius(radius) -> float:
     radius = float(radius)
-    if not (0.0 < radius < _MAX_RADIUS):
+    if not (_MIN_RADIUS <= radius < _MAX_RADIUS):
         raise ValueError(
-            "radius must be positive, finite, and small enough that distances "
-            f"fit float32 (< {_MAX_RADIUS:g}), got {radius}"
+            "radius must be finite and within the normal float32 computation "
+            f"range [{_MIN_RADIUS:g}, {_MAX_RADIUS:g}), got {radius}"
         )
     return radius
 
@@ -154,6 +157,7 @@ def _get_knn_select_kernel():
 
 def _knn_fused(q: mx.array, r: mx.array, k: int, radius: float, *, threadgroup: int = 128):
     """Fused-select path: q/r are (N, 2)/(M, 2) float32 radians."""
+    radius = _check_radius(radius)
     n, m = int(q.shape[0]), int(r.shape[0])
     kernel = _get_knn_select_kernel()
     qcos = mx.cos(q[:, 1])
@@ -282,6 +286,7 @@ def haversine_knn(
 
 def _knn_composed(q: mx.array, r: mx.array, k: int, radius: float, chunk_bytes: int):
     """Chunked distance-matrix + argpartition fallback (no Metal, or k > 32)."""
+    radius = _check_radius(radius)
     n, m = q.shape[0], r.shape[0]
     lon2 = r[:, 0][None, :]
     lat2 = r[:, 1][None, :]

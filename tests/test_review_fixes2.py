@@ -106,6 +106,34 @@ def test_pip_no_overflow_at_large_coordinates():
         np.testing.assert_array_equal(got, np.where(expect_inside, 0, -1))
 
 
+def test_pip_rejects_endpoint_difference_overflow():
+    """Finite endpoints can still have an unrepresentable fp32 difference.
+
+    Before the endpoint-difference guard, the diagonal's +/-3e38 subtraction
+    became inf in both PIP paths and silently rejected deep-interior points
+    hundreds of thousands of boundary tolerances from the edge.
+    """
+    tri = Polygon(
+        [(-3e38, -3e38), (3e38, 3e38), (-3e38, 3e38)]
+    )
+    assert tri.is_valid
+    with pytest.raises(ValueError, match="edge endpoint difference.*float32"):
+        ms.PolygonSet([tri])
+
+
+def test_pip_accepts_far_apart_polygons_with_safe_edges():
+    """Dataset-wide span may exceed float32 while every real edge is safe."""
+    half_size = 1e35
+    polys = [
+        shapely.box(-3e38 - half_size, -half_size, -3e38 + half_size, half_size),
+        shapely.box(3e38 - half_size, -half_size, 3e38 + half_size, half_size),
+    ]
+    assert all(poly.is_valid for poly in polys)
+    ps = ms.PolygonSet(polys)
+    got = np.array(ms.contains_matrix([[-3e38, 0.0], [3e38, 0.0]], ps))
+    np.testing.assert_array_equal(got, [[True, False], [False, True]])
+
+
 # ---------------------------------------------------------------------------
 # predicate handling
 # ---------------------------------------------------------------------------
@@ -219,6 +247,27 @@ def test_zero_length_right_frame():
         ms.sjoin(left, right, backend="banana")
 
 
+def test_zero_length_polygon_sequence_point_in_polygon():
+    """The array API treats an empty polygon collection as no matches."""
+    points = [[0.0, 0.0], [1.0, 1.0]]
+    backends = ("cpu", "gpu") if metal_available() else ("cpu",)
+    for backend in backends:
+        got = ms.point_in_polygon(points, [], backend=backend)
+        assert got.dtype == np.int32
+        np.testing.assert_array_equal(got, [-1, -1])
+
+        point_idx, poly_idx = ms.point_in_polygon(
+            points, [], backend=backend, all_matches=True
+        )
+        assert point_idx.dtype == poly_idx.dtype == np.int64
+        assert len(point_idx) == len(poly_idx) == 0
+
+    with pytest.raises(ValueError, match="backend"):
+        ms.point_in_polygon(points, [], backend="banana")
+    with pytest.raises(ValueError, match="predicate"):
+        ms.point_in_polygon(points, [], predicate="touches")
+
+
 def test_as_point_array_scalar_none_raises():
     """None (a 0-d object array) must fail with a clear ValueError, not an
     opaque TypeError from len()."""
@@ -300,13 +349,44 @@ def test_radius_validation():
     r = np.array([b])
     # 1e38 is finite but pi * radius overflows float32 distances to inf,
     # which would collide with the kNN paths' "no neighbor" padding.
-    for bad in (0.0, -5.0, np.nan, np.inf, -np.inf, 1e38):
+    # Positive values below float32's normal range can underflow or be flushed
+    # to zero on Metal, destroying the composed path's neighbor ordering.
+    smallest_float32_subnormal = float(
+        np.nextafter(np.float32(0), np.float32(1))
+    )
+    subnormal_radius = float(np.finfo(np.float32).tiny) * 0.5
+    for bad in (
+        0.0,
+        -5.0,
+        np.nan,
+        np.inf,
+        -np.inf,
+        smallest_float32_subnormal,
+        subnormal_radius,
+        1e-50,
+        1e38,
+    ):
         with pytest.raises(ValueError, match="radius"):
             ms.haversine(a, b, radius=bad)
         with pytest.raises(ValueError, match="radius"):
             ms.haversine_cross(q, r, radius=bad)
         with pytest.raises(ValueError, match="radius"):
             ms.haversine_knn(q, r, k=1, radius=bad)
+
+    # The internal engines enforce the same contract, so direct/fallback use
+    # cannot reintroduce the fused/composed discrepancy.
+    q_mx, r_mx = _prep(q, True), _prep(r, True)
+    with pytest.raises(ValueError, match="radius"):
+        _knn_fused(q_mx, r_mx, 1, 1e-50)
+    with pytest.raises(ValueError, match="radius"):
+        _knn_composed(q_mx, r_mx, 1, 1e-50, 512 * 1024 * 1024)
+
+    # The smallest normal float32 radius is the inclusive lower boundary.
+    radius_min = float(np.finfo(np.float32).tiny)
+    assert np.isfinite(float(ms.haversine(a, b, radius=radius_min)))
+    d, i = ms.haversine_knn(q, r, k=1, radius=radius_min)
+    assert np.array(d).shape == (1, 1)
+    np.testing.assert_array_equal(np.array(i), [[0]])
 
 
 # ---------------------------------------------------------------------------

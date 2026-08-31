@@ -22,12 +22,11 @@ from shapely.geometry import MultiPolygon, Polygon
 import mlx_spatial as ms
 from mlx_spatial._dispatch import metal_available
 from mlx_spatial._pip import pip_pairs
+from conftest import make_grid_polygons, near_boundary_mask, reference_assign
 
 pytestmark = pytest.mark.skipif(
     not metal_available(), reason="GPU point-in-polygon tests require Metal"
 )
-
-from conftest import make_grid_polygons, near_boundary_mask, reference_assign
 
 
 # ---------------------------------------------------------------------------
@@ -292,12 +291,15 @@ def test_sliver_triangle_3x_tolerance_offsets():
     # along n_hat, the interior at base-parameter t spans (0, 2*h*min(t, 1-t))
     thick = 2.0 * h * np.minimum(ts, 1.0 - ts)
 
-    offsets = [3.0 * tol, None, -3.0 * tol, None]  # inside-low, inside-high, out-low, out-high
     groups, exp = [], []
-    groups.append(base + 3.0 * tol * n_hat[None, :]);           exp.append(np.ones(len(ts)))
-    groups.append(base + (thick - 3.0 * tol)[:, None] * n_hat); exp.append(np.ones(len(ts)))
-    groups.append(base - 3.0 * tol * n_hat[None, :]);           exp.append(np.zeros(len(ts)))
-    groups.append(base + (thick + 3.0 * tol)[:, None] * n_hat); exp.append(np.zeros(len(ts)))
+    groups.append(base + 3.0 * tol * n_hat[None, :])
+    exp.append(np.ones(len(ts)))
+    groups.append(base + (thick - 3.0 * tol)[:, None] * n_hat)
+    exp.append(np.ones(len(ts)))
+    groups.append(base - 3.0 * tol * n_hat[None, :])
+    exp.append(np.zeros(len(ts)))
+    groups.append(base + (thick + 3.0 * tol)[:, None] * n_hat)
+    exp.append(np.zeros(len(ts)))
     pts = np.concatenate(groups, axis=0)
     expected = np.concatenate(exp).astype(bool)
 
