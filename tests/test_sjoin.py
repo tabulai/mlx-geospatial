@@ -424,6 +424,36 @@ def test_bad_how_and_predicate_raise(rng):
     assert len(ms.sjoin(left, right, predicate="intersects")) == 1
 
 
+def test_empty_right_no_matches_and_preserved_schema(rng):
+    left = gpd.GeoDataFrame(
+        {"pid": [0, 1, 2]},
+        geometry=list(shapely.points([[0.0, 0.0], [1.0, 1.0], [2.0, 2.0])),
+    )
+    right = gpd.GeoDataFrame({"zid": pd.Series(dtype=int)}, geometry=[])
+
+    out_inner = ms.sjoin(left, right, how="inner")
+    assert len(out_inner) == 0
+    assert set(out_inner.columns) == {"pid", "geometry", "index_right", "zid"}
+
+    out_left = ms.sjoin(left, right, how="left")
+    assert len(out_left) == len(left)
+    assert out_left["index_right"].isna().all()
+    assert out_left["zid"].isna().all()
+
+
+def test_left_with_existing_index_right_column_errors():
+    left = gpd.GeoDataFrame(
+        {
+            "index_right": [10, 20],
+            "value": ["a", "b"],
+            "geometry": list(shapely.points([[0.5, 0.5], [1.5, 1.5]])),
+        }
+    )
+    right = gpd.GeoDataFrame({"kind": ["zone"]}, geometry=[shapely.box(0, 0, 1, 1)])
+    with pytest.raises(ValueError):
+        ms.sjoin(left, right, how="inner")
+
+
 def test_empty_inner_result_well_formed(rng):
     polys = disjoint_boxes(3, 3)
     pts = scatter_points(rng, 50, (100.0, 100.0, 101.0, 101.0))  # far away

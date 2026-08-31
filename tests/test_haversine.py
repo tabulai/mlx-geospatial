@@ -442,12 +442,52 @@ class TestKnn:
     def test_k_validation_errors(self, rng):
         q = city_points(rng, 5)
         r = city_points(rng, 8)
+        with pytest.raises(TypeError):
+            ms.haversine_knn(q, r, k=True)
+        with pytest.raises(TypeError):
+            ms.haversine_knn(q, r, k=np.bool_(True))
         with pytest.raises(ValueError):
             ms.haversine_knn(q, r, k=0)
         with pytest.raises(ValueError):
             ms.haversine_knn(q, r, k=9)  # k > M
         with pytest.raises(ValueError):
             ms.haversine_knn(q, r, k=-1)
+
+    def test_nan_queries_and_references_return_minus_one(self, rng):
+        q = np.array(
+            [
+                [0.0, 0.0],
+                [np.nan, np.nan],
+                [1.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        r = np.array(
+            [
+                [0.0, 0.0],
+                [1.0, 1.0],
+                [np.nan, np.nan],
+            ],
+            dtype=np.float64,
+        )
+        d, idx = ms.haversine_knn(q, r, k=3)
+        d = np.array(d)
+        idx = np.array(idx)
+
+        assert idx.shape == (3, 3)
+        assert d.shape == (3, 3)
+
+        # Query with NaN coordinates never matches.
+        assert np.isinf(d[1]).all()
+        assert (idx[1] == -1).all()
+
+        # References with NaN coordinates never match; remaining slots are -1.
+        row = idx[2]
+        assert -1 in row
+        finite = {int(v) for v in row[row >= 0].tolist()}
+        assert finite == {0, 1}
+        assert np.isfinite(d[2]).any()
+        assert np.isinf(d[2][row == -1]).all()
 
     def test_chunked_equals_unchunked(self, rng):
         q = city_points(rng, 60)

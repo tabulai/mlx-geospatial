@@ -251,6 +251,10 @@ def haversine_knn(
     from ._dispatch import metal_available
 
     radius = _check_radius(radius)
+    if isinstance(k, (bool, np.bool_)):
+        # bool is a valid int per Python's numeric model but is not a valid
+        # cardinality in k-nearest-neighbor semantics.
+        raise TypeError("k must be an integer, got bool")
     try:
         # Normalize numpy/other integer types: Metal template arguments and
         # range checks both need a plain Python int; reject floats cleanly.
