@@ -18,6 +18,7 @@ whenever the input is a CPU array. Chunked paths peak at ~2x the result size
 from __future__ import annotations
 
 import math
+import operator
 
 import numpy as np
 import mlx.core as mx
@@ -27,6 +28,22 @@ __all__ = ["R_EARTH_M", "haversine", "haversine_cross", "haversine_knn"]
 R_EARTH_M = 6371008.8  # IUGG mean Earth radius, meters
 
 _DEG2RAD_F32 = np.float32(math.pi / 180.0)
+
+
+# Upper bound keeps pi * radius (the largest representable distance) well
+# below float32 max, so distances can never overflow to inf — the kNN paths
+# rely on inf being unambiguous "no neighbor" padding.
+_MAX_RADIUS = 1e37
+
+
+def _check_radius(radius) -> float:
+    radius = float(radius)
+    if not (0.0 < radius < _MAX_RADIUS):
+        raise ValueError(
+            "radius must be positive, finite, and small enough that distances "
+            f"fit float32 (< {_MAX_RADIUS:g}), got {radius}"
+        )
+    return radius
 
 
 def _prep(a, degrees: bool) -> mx.array:
@@ -167,6 +184,7 @@ def _knn_fused(q: mx.array, r: mx.array, k: int, radius: float, *, threadgroup: 
 
 def haversine(a, b, *, radius: float = R_EARTH_M, degrees: bool = True) -> mx.array:
     """Elementwise (broadcasting) great-circle distance between ``a`` and ``b``."""
+    radius = _check_radius(radius)
     a = _prep(a, degrees)
     b = _prep(b, degrees)
     return _hav(a[..., 0], a[..., 1], b[..., 0], b[..., 1], radius)
@@ -181,6 +199,7 @@ def haversine_cross(
     chunk_bytes: int = 512 * 1024 * 1024,
 ) -> mx.array:
     """All-pairs distance matrix: ``(N, 2) x (M, 2) -> (N, M)``."""
+    radius = _check_radius(radius)
     a = _prep(a, degrees)
     b = _prep(b, degrees)
     if a.ndim != 2 or b.ndim != 2:
@@ -215,6 +234,12 @@ def haversine_knn(
     row. Ties near the k-th neighbor may resolve either way at fp32
     (~meter-scale) distance resolution.
 
+    NaN coordinates never match: a reference row with NaN coordinates is
+    never selected, and any slot that no finite-coordinate reference can fill
+    — including every slot of a query row with NaN coordinates — reports
+    index ``-1`` with distance ``inf``. Both execution paths below share this
+    contract.
+
     Exact brute force. On Metal with ``k <= 32`` this runs a fused
     selection kernel (one thread per query keeps its k best in registers —
     no ``(N, M)`` matrix, no sort), which stays competitive with tree methods
@@ -225,6 +250,13 @@ def haversine_knn(
     """
     from ._dispatch import metal_available
 
+    radius = _check_radius(radius)
+    try:
+        # Normalize numpy/other integer types: Metal template arguments and
+        # range checks both need a plain Python int; reject floats cleanly.
+        k = operator.index(k)
+    except TypeError:
+        raise TypeError(f"k must be an integer, got {type(k).__name__}") from None
     q = _prep(query, degrees)
     r = _prep(reference, degrees)
     if q.ndim != 2 or r.ndim != 2:
@@ -254,6 +286,12 @@ def _knn_composed(q: mx.array, r: mx.array, k: int, radius: float, chunk_bytes: 
     for start in range(0, n, rows_per_chunk):
         stop = min(start + rows_per_chunk, n)
         d = _hav(q[start:stop, 0:1], q[start:stop, 1:2], lon2, lat2, radius)
+        # Match the fused kernel's NaN contract: NaN coordinates (query or
+        # reference) become +inf distances that never win selection, and any
+        # slot only inf could fill reports index -1. _hav itself never
+        # produces inf (h is clipped and _check_radius bounds pi * radius
+        # below float32 max), so inf is unambiguous.
+        d = mx.where(mx.isnan(d), mx.array(np.inf, dtype=mx.float32), d)
         if k < m:
             idx = mx.argpartition(d, kth=k - 1, axis=1)[:, :k]
             dk = mx.take_along_axis(d, idx, axis=1)
@@ -263,6 +301,7 @@ def _knn_composed(q: mx.array, r: mx.array, k: int, radius: float, chunk_bytes: 
         order = mx.argsort(dk, axis=1)
         dk = mx.take_along_axis(dk, order, axis=1)
         idx = mx.take_along_axis(idx, order, axis=1).astype(mx.int32)
+        idx = mx.where(mx.isinf(dk), mx.array(-1, dtype=mx.int32), idx)
         mx.eval(dk, idx)
         dist_chunks.append(dk)
         idx_chunks.append(idx)

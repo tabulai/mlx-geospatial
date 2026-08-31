@@ -91,8 +91,10 @@ CPU-side numpy in v0.1 (int ops, subsecond at 5e7 pairs); known non-GPU stage.
 
 Below ~1e5 candidate pairs, single-threaded GEOS beats kernel launch +
 transfer overhead: automatic shapely STRtree fallback with matching
-first-match semantics (`predicate="intersects"`). Override per call
-(`backend=`) or via `MLX_SPATIAL_BACKEND`.
+first-match semantics, honoring the caller's `predicate` exactly (the GPU
+kernel serves both predicates — they differ only on boundary points, inside
+the fp32 tolerance band). Override per call (`backend=`) or via
+`MLX_SPATIAL_BACKEND`.
 
 ## Benchmark honesty rules
 

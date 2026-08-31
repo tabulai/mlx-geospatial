@@ -53,8 +53,9 @@ def as_point_array(points) -> np.ndarray:
     arrays, GeoSeries, and GeoDataFrames. Coordinate order is always
     ``(x, y)`` — i.e. ``(lon, lat)`` for geographic data.
 
-    Empty Point geometries become NaN rows, preserving row alignment: NaN
-    coordinates never match any polygon and yield NaN distances.
+    Empty Point geometries and missing geometries (``None``) become NaN
+    rows, preserving row alignment: NaN coordinates never match any polygon
+    and yield NaN distances.
     """
     if isinstance(points, mx.array):
         points = np.array(points)
@@ -67,14 +68,20 @@ def as_point_array(points) -> np.ndarray:
     arr = np.asarray(points)
     if arr.dtype == object:
         arr = np.asarray(arr, dtype=object)
+        if arr.ndim != 1:  # e.g. None -> a 0-d object array
+            raise ValueError(
+                f"expected a 1-D sequence of points, got shape {arr.shape}"
+            )
         type_ids = shapely.get_type_id(arr)
-        if not np.all(type_ids == GeometryType.POINT.value):
+        # Missing geometries (None) carry type id -1 and are treated like
+        # empty points below.
+        if not np.all((type_ids == GeometryType.POINT.value) | (type_ids == -1)):
             raise ValueError("object arrays must contain only Point geometries")
-        # get_coordinates emits no row for empty points; preserve alignment
-        # with NaN rows instead of silently shifting every later row.
+        # get_coordinates emits no row for empty or missing points; preserve
+        # alignment with NaN rows instead of silently shifting every later row.
         out = np.full((len(arr), 2), np.nan, dtype=np.float64)
-        non_empty = ~shapely.is_empty(arr)
-        out[non_empty] = shapely.get_coordinates(arr[non_empty])
+        present = (type_ids == GeometryType.POINT.value) & ~shapely.is_empty(arr)
+        out[present] = shapely.get_coordinates(arr[present])
         return out
     pts = np.asarray(arr, dtype=np.float64)
     if pts.ndim == 1 and pts.size == 2:
@@ -110,7 +117,8 @@ class PolygonSet:
         Original-coordinate bounds, used for CPU-side grid planning.
     origin : np.ndarray (2,) float64
         The shared re-centering origin. Query points must be re-centered with
-        this same origin.
+        this same origin; the array is read-only so it cannot drift from the
+        already-recentered GPU coordinates.
     """
 
     def __init__(self, geoms, *, origin=None, validate=False):
@@ -118,6 +126,13 @@ class PolygonSet:
         if len(arr) == 0:
             raise ValueError("PolygonSet requires at least one geometry")
         type_ids = shapely.get_type_id(arr)
+        missing = type_ids == -1
+        if missing.any():
+            # Missing geometries (None) become empty polygons: they stay
+            # row-aligned and can never contain a point on either backend.
+            # arr is our own snapshot, so in-place replacement is safe.
+            arr[missing] = shapely.Polygon()
+            type_ids = shapely.get_type_id(arr)
         valid = {GeometryType.POLYGON.value, GeometryType.MULTIPOLYGON.value}
         if not np.all(np.isin(type_ids, list(valid))):
             bad = set(np.unique(type_ids)) - valid
@@ -136,8 +151,8 @@ class PolygonSet:
                 )
 
         geom_type, coords, offsets = shapely.to_ragged_array(arr)
-        if coords.ndim == 2 and coords.shape[1] == 3:
-            coords = coords[:, :2]  # drop Z; predicates are 2-D, as in GEOS
+        if coords.ndim == 2 and coords.shape[1] > 2:
+            coords = coords[:, :2]  # drop Z/M; predicates are 2-D, as in GEOS
         if not np.isfinite(coords).all():
             raise ValueError(
                 "polygon coordinates must be finite; a NaN/inf vertex would "
@@ -165,9 +180,23 @@ class PolygonSet:
 
         if origin is None:
             origin = compute_origin(coords)
-        self.origin = np.asarray(origin, dtype=np.float64).reshape(2)
+        # Own, frozen copy: aliasing a caller-owned (writable) array would let
+        # a later mutation desynchronize the CPU fallback (which re-centers
+        # query points with self.origin) from the already-uploaded GPU coords.
+        origin = np.array(origin, dtype=np.float64).reshape(2).copy()
+        if not np.isfinite(origin).all():
+            raise ValueError(f"origin must be finite, got {origin.tolist()}")
+        origin.flags.writeable = False
+        self.origin = origin
 
-        coords_local = recenter(coords, self.origin)
+        with np.errstate(over="ignore"):
+            coords_local = recenter(coords, self.origin)
+        if len(coords_local) and not np.isfinite(coords_local).all():
+            raise ValueError(
+                "re-centered coordinates overflow float32; origin="
+                f"{self.origin.tolist()} is too far from the data (the "
+                "default origin, the vertex bbox center, always fits)"
+            )
         self.coords = mx.array(coords_local)
         self.ring_offsets = mx.array(ring_offsets.astype(np.int32))
         self.geom_ring_offsets = mx.array(geom_ring_offsets.astype(np.int32))
@@ -257,6 +286,6 @@ class PolygonSet:
         return pts64, mx.array(local)
 
 
-def from_shapely(geoms, *, origin=None) -> PolygonSet:
+def from_shapely(geoms, *, origin=None, validate=False) -> PolygonSet:
     """Build a :class:`PolygonSet` from shapely geometries / GeoSeries / GeoDataFrame."""
-    return PolygonSet(geoms, origin=origin)
+    return PolygonSet(geoms, origin=origin, validate=validate)

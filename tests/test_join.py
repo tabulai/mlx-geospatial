@@ -257,9 +257,9 @@ class TestBackends:
         calls = []
         orig = GridIndex._query_cpu
 
-        def spy(self, pts64, *, all_matches):
+        def spy(self, pts64, *, all_matches, predicate="intersects"):
             calls.append(1)
-            return orig(self, pts64, all_matches=all_matches)
+            return orig(self, pts64, all_matches=all_matches, predicate=predicate)
 
         monkeypatch.setattr(GridIndex, "_query_cpu", spy)
         monkeypatch.delenv("MLX_SPATIAL_BACKEND", raising=False)
@@ -291,9 +291,9 @@ class TestBackends:
         calls = []
         orig = GridIndex._query_cpu
 
-        def spy(self, pts64, *, all_matches):
+        def spy(self, pts64, *, all_matches, predicate="intersects"):
             calls.append(1)
-            return orig(self, pts64, all_matches=all_matches)
+            return orig(self, pts64, all_matches=all_matches, predicate=predicate)
 
         monkeypatch.setattr(GridIndex, "_query_cpu", spy)
         monkeypatch.setattr(dispatch, "GPU_MIN_CANDIDATE_PAIRS", 0)
@@ -389,9 +389,16 @@ class TestEdgeGeometry:
             assert 1 not in poly_idx  # the empty polygon never matches
             assert set(zip(pt_idx.tolist(), poly_idx.tolist())) == {(0, 0), (1, 2)}
 
-    def test_all_empty_polygons_raise(self):
-        with pytest.raises(ValueError):
-            GridIndex(np.array([Polygon(), Polygon()], dtype=object))
+    def test_all_empty_polygons_degenerate_grid(self):
+        """All-empty sets build a degenerate grid: every query is unmatched."""
+        index = GridIndex(np.array([Polygon(), Polygon()], dtype=object))
+        pts = np.array([[0.0, 0.0], [0.5, 0.5], [np.nan, np.nan]])
+        for backend in (["cpu", "gpu"] if metal_available() else ["cpu"]):
+            np.testing.assert_array_equal(
+                np.asarray(index.query(pts, backend=backend)), [-1, -1, -1]
+            )
+            pt_idx, poly_idx = index.query(pts, all_matches=True, backend=backend)
+            assert len(pt_idx) == 0 and len(poly_idx) == 0
 
 
 # ---------------------------------------------------------------------------

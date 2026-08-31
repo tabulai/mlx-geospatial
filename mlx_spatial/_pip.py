@@ -27,6 +27,12 @@ from ._ingest import PolygonSet
 __all__ = ["pip_pairs", "pip_dense", "contains_matrix"]
 
 _PAIR_KERNEL_SOURCE = """
+    // Keep every float op individually rounded: with contraction enabled the
+    // Metal compiler fuses the x-intersection's multiply-add into an FMA,
+    // while the composed dense path (pip_dense) rounds each op separately —
+    // and the two paths must agree bit-for-bit, including inside the
+    // tolerance band.
+    #pragma clang fp contract(off)
     uint i = thread_position_in_grid.x;
     if (i >= (uint)n_pairs[0]) return;
     // Index math in 64-bit: 2 * pt overflows int32 from pt = 2^30, silently
@@ -52,7 +58,11 @@ _PAIR_KERNEL_SOURCE = """
             if ((y1 > py) != (y2 > py)) {
                 float x1 = coords[2 * v + 0];
                 float x2 = coords[2 * v + 2];
-                float xint = x1 + (py - y1) * (x2 - x1) / (y2 - y1);
+                // Divide before multiplying: the straddle test bounds the
+                // ratio to [0, 1], so huge coordinates cannot overflow the
+                // intermediate product to inf (which would misclassify
+                // points far outside the tolerance band).
+                float xint = x1 + (py - y1) / (y2 - y1) * (x2 - x1);
                 if (px < xint) {
                     crossings += 1;
                 }
@@ -68,8 +78,10 @@ _pair_kernel = None
 def _crossed_graph(px, py, x1, y1, x2, y2):
     straddles = (y1 > py) != (y2 > py)
     # Horizontal edges (y1 == y2) never straddle; the resulting inf/nan
-    # x-intersections are discarded by the logical_and.
-    xint = x1 + (py - y1) * (x2 - x1) / (y2 - y1)
+    # x-intersections are discarded by the logical_and. Divide before
+    # multiplying (identically to the pair kernel): the ratio is bounded
+    # for straddling edges, so huge coordinates cannot overflow to inf.
+    xint = x1 + (py - y1) / (y2 - y1) * (x2 - x1)
     return mx.logical_and(straddles, px < xint).astype(mx.int32)
 
 
