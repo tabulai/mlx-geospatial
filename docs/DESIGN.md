@@ -97,10 +97,15 @@ an active CPU default device.
 ## Grid-indexed join
 
 Uniform grid over polygon bounds (cell ≈ median polygon bbox side, coarsened
-to fit cell/entry budgets). CSR cell→polygon lists built vectorized in numpy
-(ragged cartesian expansion via `repeat` + rank arithmetic; stable sort keeps
-per-cell lists ascending, making "first match = min polygon index"
-deterministic). First-match query: float64 CPU cell assignment → one int32
+to fit cell/entry budgets). Low-coverage construction uses NumPy's stable
+integer sort, which is especially efficient when input bboxes are already
+spatially ordered. More expanded grids pack every unique `(cell ID, polygon
+ID)` pair into one uint64 key and sort it in place, removing the indirect
+permutation array. Material high-occupancy rectangle expansions instead
+derive cell counts from four-corner 2-D differences and fill CSR segments
+directly with monotonic per-cell cursors while visiting polygons in ascending
+order. Every route preserves the deterministic "first match = min polygon
+index" contract. First-match query: float64 CPU cell assignment → one int32
 cell ID per point → point-centric Metal kernel traverses the cached grid
 CSR, performs bbox + parity tests, and returns on the first hit. This avoids
 all per-candidate query arrays and the host `minimum.at` reduction. Whole-point

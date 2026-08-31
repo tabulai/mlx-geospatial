@@ -63,6 +63,11 @@ for batch in point_batches:
 | `PolygonSet(geoms)` | ingested, re-centered, GPU-resident polygons |
 | `GridIndex(polyset)` | reusable uniform-grid spatial index |
 
+`GridIndex` construction is adaptive: low-coverage bbox expansions use stable
+integer sorting, more expanded grids use lower-memory packed-key sorting, and
+material high-occupancy grids use a sort-free direct CSR fill. Every route
+retains ascending polygon IDs within each cell.
+
 Conventions: coordinates are `(x, y)` = `(lon, lat)`, degrees; planar math
 for containment (project first if you need metric correctness near poles);
 spherical math for haversine. No CRS handling — that stays pyproj's job;
