@@ -34,7 +34,7 @@ from mlx_spatial._dispatch import (
     metal_available,
     resolve_backend,
 )
-from mlx_spatial._pip import pip_dense, pip_pairs
+from mlx_spatial._pip import _pip_dense_composed, pip_dense, pip_pairs
 
 from conftest import make_convex_polygons, make_grid_polygons, reference_assign
 
@@ -269,8 +269,8 @@ def test_invalid_backend_argument_propagates():
 # ---------------------------------------------------------------------------
 
 
-def test_contains_matrix_tiny_chunks_bitwise_equal(rng):
-    """chunk_bytes=1 forces one point per chunk; result must be identical."""
+def test_contains_matrix_tiny_chunks_bitwise_equal(rng, monkeypatch):
+    """Composed fallback chunking is bitwise equal to direct dense Metal."""
     polys = make_convex_polygons(20, rng, radius_frac=0.25)
     polyset = ms.PolygonSet(polys)
     pts = np.column_stack(
@@ -279,6 +279,12 @@ def test_contains_matrix_tiny_chunks_bitwise_equal(rng):
     default = np.array(ms.contains_matrix(pts, polyset))
     assert default.shape == (137, 20)
     assert default.any(), "degenerate all-False matrix; chunk test is vacuous"
+
+    # Force the retained non-Metal implementation. On the direct Metal path
+    # chunk_bytes is intentionally inert because no N x E intermediate exists.
+    monkeypatch.setattr("mlx_spatial._pip.metal_available", lambda: False)
+    fallback = np.array(ms.contains_matrix(pts, polyset))
+    np.testing.assert_array_equal(fallback, default)
 
     tiny = np.array(ms.contains_matrix(pts, polyset, chunk_bytes=1))
     np.testing.assert_array_equal(tiny, default)
@@ -289,6 +295,29 @@ def test_contains_matrix_tiny_chunks_bitwise_equal(rng):
         ms.contains_matrix(pts, polyset, chunk_bytes=7 * n_edges * 4 * 5)
     )
     np.testing.assert_array_equal(mid, default)
+
+
+@requires_metal
+def test_contains_matrix_uses_composed_fallback_on_cpu_device(monkeypatch):
+    """Metal availability does not imply the active MLX device is the GPU."""
+    polyset = ms.PolygonSet(
+        [shapely.box(0, 0, 1, 1), shapely.box(2, 2, 3, 3)]
+    )
+    pts = np.array([[0.5, 0.5], [2.5, 2.5], [4.0, 4.0]])
+    _, points_local = polyset.recenter_points(pts)
+    expected = np.array(_pip_dense_composed(points_local, polyset))
+
+    def metal_must_not_run():
+        raise AssertionError("CPU-device dense PIP attempted to compile Metal")
+
+    monkeypatch.setattr("mlx_spatial._pip._get_dense_kernel", metal_must_not_run)
+    old_device = mx.default_device()
+    try:
+        mx.set_default_device(mx.cpu)
+        got = np.array(pip_dense(points_local, polyset, chunk_bytes=1))
+    finally:
+        mx.set_default_device(old_device)
+    np.testing.assert_array_equal(got, expected)
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +351,14 @@ def test_contains_matrix_zero_points():
     out = ms.contains_matrix(np.empty((0, 2)), polyset)
     assert out.shape == (0, 2)
     assert out.dtype == mx.bool_
+
+
+def test_contains_matrix_all_empty_polygons():
+    polyset = ms.PolygonSet([shapely.Polygon(), shapely.Polygon()])
+    out = ms.contains_matrix([[0.0, 0.0], [1.0, 1.0]], polyset, chunk_bytes=1)
+    assert out.shape == (2, 2)
+    assert out.dtype == mx.bool_
+    assert not np.array(out).any()
 
 
 def test_point_in_polygon_zero_points():

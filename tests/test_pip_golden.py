@@ -5,9 +5,9 @@ Goes deeper than test_smoke:
 - random convex polygon sets at four coordinate scales (unit, NYC degrees,
   Tokyo degrees, far-from-origin planar) to prove local re-centering keeps
   fp32 containment correct outside the documented tolerance band;
-- exact (no-tolerance) agreement between the dense composed-MLX path
-  (``contains_matrix`` / ``pip_dense``) and the Metal pair kernel
-  (``pip_pairs``) on every (point, polygon) pair;
+- exact (no-tolerance) agreement among the direct-dense Metal path
+  (``contains_matrix`` / ``pip_dense``), the Metal pair kernel
+  (``pip_pairs``), and the retained composed-MLX oracle on every pair;
 - holes, multipolygons with holes, and nested donuts;
 - overlapping polygons with ``all_matches=True`` vs STRtree pairs, plus
   sortedness/uniqueness of the returned pair list;
@@ -30,7 +30,7 @@ from shapely.geometry import MultiPolygon, Polygon
 
 import mlx_spatial as ms
 from mlx_spatial._dispatch import metal_available
-from mlx_spatial._pip import pip_pairs
+from mlx_spatial._pip import _pip_dense_composed, pip_pairs
 from conftest import (
     make_convex_polygons,
     make_donut,
@@ -104,6 +104,12 @@ def dense_matrix(pts, polyset) -> np.ndarray:
     return np.array(ms.contains_matrix(pts, polyset))
 
 
+def composed_dense_matrix(pts, polyset) -> np.ndarray:
+    """Independent composed-MLX oracle retained behind the Metal path."""
+    _, points_local = polyset.recenter_points(pts)
+    return np.array(_pip_dense_composed(points_local, polyset))
+
+
 def dense_first_match(dense: np.ndarray) -> np.ndarray:
     """Lowest containing polygon index per row of a dense bool matrix, -1 if none."""
     return np.where(dense.any(axis=1), dense.argmax(axis=1), -1)
@@ -143,14 +149,21 @@ def test_scale_golden_first_match(scale):
 
 @pytest.mark.parametrize("scale", SCALES)
 def test_scale_dense_vs_pair_kernel_exact(scale):
-    """Dense path and pair kernel share fp32 + rule: bit-identical everywhere.
+    """Direct, pair, and composed paths are bit-identical everywhere.
 
     No tolerance band here — any single (point, polygon) disagreement between
-    the two GPU paths is a bug by the documented 'identical semantics' claim.
+    the two Metal decompositions or the independent composed arithmetic is a
+    bug by the documented 'identical semantics' claim.
     """
     _, pts, polyset = scale_dataset(scale)
     dense = dense_matrix(pts, polyset)
+    composed = composed_dense_matrix(pts, polyset)
     flags = exhaustive_pair_flags(pts, polyset)
+    np.testing.assert_array_equal(
+        dense,
+        composed,
+        err_msg=f"{scale}: direct dense Metal != composed MLX oracle",
+    )
     disagree = np.argwhere(dense.astype(np.uint8) != flags)
     assert disagree.size == 0, (
         f"{scale}: dense vs pair kernel disagree on {len(disagree)} pairs, "

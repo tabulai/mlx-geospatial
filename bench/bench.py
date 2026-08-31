@@ -3,6 +3,9 @@
 Honesty rules:
 - All timings are end-to-end from host-resident numpy/shapely inputs,
   including ingestion, host<->device transfer, and result materialization.
+- The explicitly labeled dense-PIP microbenchmark is the exception: it uses
+  a pre-ingested PolygonSet and GPU-resident points to isolate the replacement
+  kernel from its retained composed oracle.
 - ``cold`` numbers include building the PolygonSet + grid index; ``warm``
   numbers reuse a prebuilt index (the realistic repeated-query pattern).
 - Baselines that are unavailable are reported as ``n/a``, never silently
@@ -11,6 +14,7 @@ Honesty rules:
 Usage:
     python bench/bench.py --op haversine --n 20000 --m 20000
     python bench/bench.py --op knn --n 200000 --m 200000 --k 10
+    python bench/bench.py --op dense-pip --n 100000 --m 32 --vertices 48
     python bench/bench.py --op join --n 1000000 --m 260
     python bench/bench.py --all            # quick representative sweep
 """
@@ -27,6 +31,8 @@ import shapely
 
 import mlx.core as mx
 import mlx_spatial as ms
+from mlx_spatial._dispatch import metal_available
+from mlx_spatial._pip import _pip_dense_composed, pip_dense
 
 EXTENT = (-74.3, 40.5, -73.7, 40.9)  # roughly NYC
 
@@ -89,6 +95,39 @@ def make_zones(m: int, rng: np.random.Generator, vertices: int = 48) -> np.ndarr
             )
         )
     return np.array(polys, dtype=object)
+
+
+# ---------------------------------------------------------------- dense PIP
+
+def bench_dense_pip(n: int, m: int, vertices: int, rng) -> list[tuple[str, float | None]]:
+    """Warm, GPU-resident comparison of direct and composed dense PIP."""
+    if not metal_available() or mx.default_device() != mx.gpu:
+        raise RuntimeError("the dense-PIP Metal benchmark requires an active GPU device")
+    pts = make_points(n, rng)
+    polyset = ms.PolygonSet(make_zones(m, rng, vertices=vertices))
+    _, points_local = polyset.recenter_points(pts)
+
+    def direct():
+        out = pip_dense(points_local, polyset)
+        mx.eval(out)
+        sync()
+
+    def composed():
+        out = _pip_dense_composed(points_local, polyset)
+        mx.eval(out)
+        sync()
+
+    # Correctness is checked outside the timed region. Keeping the composed
+    # implementation here makes performance regressions reproducible while it
+    # remains the non-Metal fallback and independent arithmetic oracle.
+    direct_out = np.array(pip_dense(points_local, polyset))
+    composed_out = np.array(_pip_dense_composed(points_local, polyset))
+    np.testing.assert_array_equal(direct_out, composed_out)
+
+    return [
+        ("mlx-spatial dense PIP (direct 2-D Metal)", timeit(direct)),
+        ("composed MLX dense PIP oracle", timeit(composed)),
+    ]
 
 
 # ---------------------------------------------------------------- haversine
@@ -249,10 +288,11 @@ def report(title: str, rows: list[tuple[str, float | None]]):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--op", choices=["haversine", "knn", "join"])
+    parser.add_argument("--op", choices=["haversine", "knn", "dense-pip", "join"])
     parser.add_argument("--n", type=int, default=1_000_000)
     parser.add_argument("--m", type=int, default=260)
     parser.add_argument("--k", type=int, default=10)
+    parser.add_argument("--vertices", type=int, default=48)
     parser.add_argument("--all", action="store_true", help="run a representative sweep")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
@@ -270,6 +310,10 @@ def main():
             "haversine_knn 200k queries, 200k refs, k=10",
             bench_knn(200_000, 200_000, 10, rng),
         )
+        report(
+            "dense PIP 100,000 points x 32 polygons x 48 vertices",
+            bench_dense_pip(100_000, 32, 48, rng),
+        )
         for n in (100_000, 1_000_000, 10_000_000):
             report(f"join {n:,} points x 260 zones", bench_join(n, 260, rng))
         report("join 1,000,000 points x 10,000 zones", bench_join(1_000_000, 10_000, rng))
@@ -281,6 +325,12 @@ def main():
         report(
             f"haversine_knn {args.n:,} queries, {args.m:,} refs, k={args.k}",
             bench_knn(args.n, args.m, args.k, rng),
+        )
+    elif args.op == "dense-pip":
+        report(
+            f"dense PIP {args.n:,} points x {args.m:,} polygons "
+            f"x {args.vertices} vertices",
+            bench_dense_pip(args.n, args.m, args.vertices, rng),
         )
     elif args.op == "join":
         report(f"join {args.n:,} points x {args.m:,} zones", bench_join(args.n, args.m, rng))
