@@ -12,7 +12,7 @@ Covers:
   bitwise).
 - Degenerate sizes: zero points, zero candidate pairs, a single point.
 - Public API: ``__all__`` resolves with docstrings, ``__version__`` matches
-  pyproject.toml, clean import in a fresh subprocess, GPU_MIN_CANDIDATE_PAIRS
+  pyproject.toml, clean import in a fresh subprocess, dispatch cost-model
   sanity.
 """
 
@@ -30,7 +30,8 @@ import shapely
 import mlx_spatial as ms
 import mlx_spatial._dispatch as _dispatch
 from mlx_spatial._dispatch import (
-    GPU_MIN_CANDIDATE_PAIRS,
+    GPU_LAUNCH_US,
+    gpu_min_points,
     metal_available,
     resolve_backend,
 )
@@ -95,8 +96,8 @@ def _clean_backend_env(monkeypatch):
 def grid_workload():
     """8x8 unit-square tiling + 100k strictly-interior points.
 
-    Enough candidate pairs (~1.9 per point with the quarter-median default
-    grid) to exceed GPU_MIN_CANDIDATE_PAIRS, so 'auto' would pick the GPU.
+    Far more points than gpu_min_points() for this layer, so 'auto' picks
+    the GPU.
     Points stay >= 0.05 from every edge -- far outside the fp32 tolerance
     band -- so GPU and CPU answers are both exactly the golden STRtree
     assignment.
@@ -120,12 +121,29 @@ def grid_workload():
 
 @requires_metal
 def test_auto_threshold_boundary():
-    """'auto' switches to GPU exactly at GPU_MIN_CANDIDATE_PAIRS (>= rule)."""
-    assert resolve_backend(None, GPU_MIN_CANDIDATE_PAIRS) == "gpu"
-    assert resolve_backend(None, GPU_MIN_CANDIDATE_PAIRS - 1) == "cpu"
+    """'auto' switches to GPU exactly at gpu_min_points() (>= rule)."""
+    t = gpu_min_points()
+    assert resolve_backend(None, t) == "gpu"
+    assert resolve_backend(None, t - 1) == "cpu"
     assert resolve_backend(None, 0) == "cpu"
-    assert resolve_backend("auto", GPU_MIN_CANDIDATE_PAIRS + 1) == "gpu"
+    assert resolve_backend("auto", t + 1) == "gpu"
     assert resolve_backend("auto", 1) == "cpu"
+    # Device-resident inputs never wait for the CPU path under auto.
+    assert resolve_backend(None, None) == "gpu"
+    # Detailed polygons make GEOS slower per point, so the GPU wins earlier.
+    heavy = gpu_min_points(edges_per_point=6000.0)
+    assert heavy < t
+    assert resolve_backend(None, heavy, edges_per_point=6000.0) == "gpu"
+    assert resolve_backend(None, heavy, edges_per_point=0.0) == "cpu"
+    # All-match compaction has a larger fixed GPU cost, so it switches later.
+    t_all = gpu_min_points(all_matches=True)
+    assert t_all > t
+    assert resolve_backend(None, t, all_matches=True) == "cpu"
+    assert resolve_backend(None, t_all, all_matches=True) == "gpu"
+    # NaN edge work is treated as zero rather than raising.
+    assert gpu_min_points(float("nan")) == gpu_min_points(0.0)
+    with pytest.raises(ValueError):
+        resolve_backend(3, 10)
 
 
 def test_explicit_passthrough_ignores_workload_size():
@@ -137,7 +155,7 @@ def test_explicit_passthrough_ignores_workload_size():
 
 
 def test_resolve_backend_never_returns_auto():
-    for n in (0, GPU_MIN_CANDIDATE_PAIRS - 1, GPU_MIN_CANDIDATE_PAIRS, 10**9):
+    for n in (0, gpu_min_points() - 1, gpu_min_points(), 10**9, None):
         assert resolve_backend(None, n) in ("gpu", "cpu")
         assert resolve_backend("auto", n) in ("gpu", "cpu")
 
@@ -205,11 +223,24 @@ def test_metal_available_returns_bool():
     assert isinstance(metal_available(), bool)
 
 
-def test_gpu_min_candidate_pairs_sane():
-    assert isinstance(GPU_MIN_CANDIDATE_PAIRS, int)
-    assert not isinstance(GPU_MIN_CANDIDATE_PAIRS, bool)
-    assert 0 < GPU_MIN_CANDIDATE_PAIRS < 2**31
-    assert "GPU_MIN_CANDIDATE_PAIRS" in _dispatch.__all__
+def test_dispatch_cost_model_sane():
+    assert _dispatch.CPU_US_PER_POINT > 0 and _dispatch.CPU_US_PER_EDGE > 0
+    assert GPU_LAUNCH_US > 0
+    t = gpu_min_points()
+    assert isinstance(t, int) and not isinstance(t, bool)
+    assert 1 <= t < 10**6
+    # More candidate edge work per point can only lower the threshold.
+    thresholds = [gpu_min_points(e) for e in (0.0, 150.0, 1000.0, 10_000.0)]
+    assert thresholds == sorted(thresholds, reverse=True)
+    assert _dispatch.GPU_ALL_MATCHES_LAUNCH_US > GPU_LAUNCH_US
+    for name in (
+        "CPU_US_PER_POINT",
+        "CPU_US_PER_EDGE",
+        "GPU_LAUNCH_US",
+        "GPU_ALL_MATCHES_LAUNCH_US",
+        "gpu_min_points",
+    ):
+        assert name in _dispatch.__all__
 
 
 # ---------------------------------------------------------------------------
@@ -221,9 +252,8 @@ def test_gpu_min_candidate_pairs_sane():
 def test_env_cpu_forces_cpu_path_end_to_end(grid_workload, monkeypatch):
     """MLX_SPATIAL_BACKEND=cpu must route a large workload off the GPU."""
     polys, polyset, index, pts, ref = grid_workload
-    total_pairs = index._candidates(np.asarray(pts, dtype=np.float64))[2]
     # This workload would auto-dispatch to the GPU...
-    assert total_pairs >= GPU_MIN_CANDIDATE_PAIRS
+    assert len(pts) >= gpu_min_points(index._edges_per_point)
 
     monkeypatch.setenv("MLX_SPATIAL_BACKEND", "cpu")
 
@@ -267,8 +297,7 @@ def test_auto_small_workload_takes_cpu_path(rng, monkeypatch):
     index = ms.GridIndex(polyset)
     ij = rng.integers(0, 4, size=(500, 2)).astype(np.float64)
     pts = ij + rng.uniform(0.05, 0.95, size=(500, 2))
-    total_pairs = index._candidates(pts)[2]
-    assert total_pairs < GPU_MIN_CANDIDATE_PAIRS
+    assert len(pts) < gpu_min_points(index._edges_per_point)
 
     def _boom(*args, **kwargs):  # pragma: no cover - only on failure
         raise AssertionError("GPU kernel invoked below the auto threshold")
@@ -280,6 +309,41 @@ def test_auto_small_workload_takes_cpu_path(rng, monkeypatch):
 
 
 @requires_metal
+@requires_metal
+def test_all_matches_auto_switches_later_than_first_match(rng, monkeypatch):
+    """Between the two thresholds, auto keeps all_matches on GEOS (cheaper)."""
+    polys = make_grid_polygons(6, 6, cell=1.0)
+    polyset = ms.PolygonSet(polys)
+    index = ms.GridIndex(polyset)
+    t_first = gpu_min_points(index._edges_per_point)
+    t_all = gpu_min_points(index._edges_per_point, all_matches=True)
+    assert t_first < t_all
+    pts = rng.uniform(0.05, 5.95, size=(t_all, 2))
+
+    cpu_calls, gpu_calls = [], []
+    orig_cpu = ms.GridIndex._query_cpu
+    orig_all = ms.GridIndex._query_gpu_all_matches
+
+    def cpu_spy(self, *args, **kwargs):
+        cpu_calls.append(1)
+        return orig_cpu(self, *args, **kwargs)
+
+    def gpu_spy(self, *args, **kwargs):
+        gpu_calls.append(1)
+        return orig_all(self, *args, **kwargs)
+
+    monkeypatch.setattr(ms.GridIndex, "_query_cpu", cpu_spy)
+    monkeypatch.setattr(ms.GridIndex, "_query_gpu_all_matches", gpu_spy)
+    monkeypatch.delenv("MLX_SPATIAL_BACKEND", raising=False)
+
+    index.query(pts[:t_first], all_matches=True)  # first-match threshold: still GEOS
+    assert (len(cpu_calls), len(gpu_calls)) == (1, 0)
+    index.query(pts[:t_first])  # the same point count runs first match on the GPU
+    assert (len(cpu_calls), len(gpu_calls)) == (1, 0)
+    index.query(pts, all_matches=True)  # at the all-match threshold: GPU compaction
+    assert (len(cpu_calls), len(gpu_calls)) == (1, 1)
+
+
 def test_explicit_gpu_small_workload_uses_kernel(rng, monkeypatch):
     """backend='gpu' forces fused first-match even below the threshold."""
     polys = make_grid_polygons(4, 4, cell=1.0)

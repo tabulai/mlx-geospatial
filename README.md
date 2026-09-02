@@ -172,8 +172,13 @@ structurally rather than hopefully:
   antipode, arcsin amplification grows absolute error to 10²-10⁴ m (relative
   error stays < 2e-4).
 
-Small host-resident workloads (< ~100k candidate pairs) automatically fall
-back to shapely — single-threaded GEOS beats a kernel launch there.
+Small host-resident workloads automatically fall back to shapely: auto
+dispatch compares the GEOS cost (per point plus per candidate polygon edge,
+estimated from the index) with the fixed GPU cost of the route, which puts
+the crossover at roughly 500-800 points for simple polygons and a few dozen
+for detailed ones, later for all-match queries whose compaction passes cost
+more (measured in the crossover table below; `python bench/bench.py --op
+crossover` re-derives the constants for another machine).
 Device-resident inputs (`mx.array`, `LocalPoints`) run on the GPU whenever
 Metal is available, because the fallback would need a host copy. Force a path
 with `backend="gpu" | "cpu"` or `MLX_SPATIAL_BACKEND`; `backend="cpu"` on
@@ -202,6 +207,42 @@ polygon ingestion and index construction included: 3.8 ms at 1M × 260 zones,
 | 10M pts × 260 zones | **24 ms** | 13 ms | 6.4 s (262x) | 10.3 s (426x) | 6.6 s (273x) |
 | 1M pts × 10k zones | **3.1 ms** | 1.6 ms | 892 ms (290x) | 692 ms (225x) | 576 ms (188x) |
 
+**Crossover** (`python bench/bench.py --op crossover`; 260 zones, warm index,
+host-resident NumPy points, best of 7). The CPU column is the shapely STRtree
+fallback the auto dispatch uses. First-match queries:
+
+| points | 48-vertex zones: shapely / GPU | auto | 2048-vertex zones: shapely / GPU | auto |
+| --- | --- | --- | --- | --- |
+| 100 | **59 µs** / 412 µs | cpu | 704 µs / **303 µs** | gpu |
+| 200 | **109 µs** / 203 µs | cpu | 1.5 ms / **343 µs** | gpu |
+| 500 | 267 µs / **195 µs** | cpu | 3.8 ms / **442 µs** | gpu |
+| 1,000 | 536 µs / **208 µs** | gpu | 7.6 ms / **499 µs** | gpu |
+| 2,000 | 1.1 ms / **198 µs** | gpu | 15.7 ms / **565 µs** | gpu |
+| 10,000 | 6.0 ms / **445 µs** | gpu | 77 ms / **1.8 ms** | gpu |
+| 50,000 | 30.7 ms / **696 µs** | gpu | 400 ms / **3.1 ms** | gpu |
+
+All-match queries (`all_matches=True`) carry a larger fixed GPU cost for the
+count, scan and compaction passes, so they switch later:
+
+| points | 48-vertex zones: shapely / GPU | auto | 2048-vertex zones: shapely / GPU | auto |
+| --- | --- | --- | --- | --- |
+| 100 | **60 µs** / 1.3 ms | cpu | **696 µs** / 1.3 ms | cpu |
+| 500 | **279 µs** / 1.2 ms | cpu | 3.8 ms / **1.7 ms** | gpu |
+| 2,000 | **1.2 ms** / 2.1 ms | cpu | 15.8 ms / **1.9 ms** | gpu |
+| 5,000 | 3.3 ms / **1.4 ms** | gpu | 39.7 ms / **1.8 ms** | gpu |
+| 50,000 | 34.9 ms / **1.7 ms** | gpu | 405 ms / **3.8 ms** | gpu |
+
+`auto` picked the faster side in every row except first match at 500 points on
+48-vertex zones, where the GPU was 70 µs faster than the CPU path it chose: the
+model deliberately leans toward the GPU only where a wrong CPU choice would
+cost milliseconds. The GPU path is a near-constant launch cost until kernel
+work shows (tens of thousands of points for simple polygons, a few thousand
+for detailed ones) while GEOS grows per point and per candidate edge, so the
+dispatch model switches first-match queries at about 550 points for 48-vertex
+zones and about 40 for 2048-vertex zones, and all-match queries roughly four
+times later. Device-resident inputs skip the comparison and run on the GPU
+whenever Metal is available.
+
 **Haversine** (`mx.compile`-fused distances; kNN via adaptive scalar/SIMDgroup
 selection kernels):
 
@@ -222,8 +263,9 @@ the full reference set. In the 1k × 1M row, the GPU-resident selector core is
 26.6 ms includes host ingestion and transfer. With `k > 32` (or without an
 active Metal device) kNN falls back to a chunked distance-matrix +
 `argpartition` path that is sort-bound; at large reference sets a BallTree can
-win there. Below ~1e5 candidate pairs the join auto-dispatches to shapely,
-because kernel-launch overhead dominates at small sizes.
+win there. Below roughly 500-800 host points (fewer for detailed polygons)
+the join auto-dispatches to shapely, because the fixed GPU launch overhead
+dominates there; the crossover table shows both sides.
 
 ## Limitations (v0.1)
 

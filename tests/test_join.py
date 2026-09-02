@@ -656,19 +656,17 @@ class TestBackends:
         monkeypatch.delenv("MLX_SPATIAL_BACKEND", raising=False)
 
         # tiny workload, real default threshold: auto must pick the CPU path
-        assert index._candidates(np.asarray(pts, dtype=np.float64))[2] < (
-            dispatch.GPU_MIN_CANDIDATE_PAIRS
-        )
+        assert len(pts) < dispatch.gpu_min_points(index._edges_per_point)
         r_default = np.asarray(index.query(pts))
         assert len(calls) == 1
 
         # threshold forced high: still CPU
-        monkeypatch.setattr(dispatch, "GPU_MIN_CANDIDATE_PAIRS", 10**18)
+        monkeypatch.setattr(dispatch, "GPU_LAUNCH_US", 1e18)
         index.query(pts)
         assert len(calls) == 2
 
         # threshold forced to zero: auto must take the GPU path (no CPU call)
-        monkeypatch.setattr(dispatch, "GPU_MIN_CANDIDATE_PAIRS", 0)
+        monkeypatch.setattr(dispatch, "GPU_LAUNCH_US", 0.0)
         r_gpu = np.asarray(index.query(pts))
         assert len(calls) == 2
         keep = ~near_boundary_mask(pts, polys, index.polygons.boundary_tolerance)
@@ -687,7 +685,7 @@ class TestBackends:
             return orig(self, pts64, all_matches=all_matches, predicate=predicate)
 
         monkeypatch.setattr(GridIndex, "_query_cpu", spy)
-        monkeypatch.setattr(dispatch, "GPU_MIN_CANDIDATE_PAIRS", 0)
+        monkeypatch.setattr(dispatch, "GPU_LAUNCH_US", 0.0)
         monkeypatch.setenv("MLX_SPATIAL_BACKEND", "cpu")
         index.query(pts)
         assert len(calls) == 1  # env var forced CPU despite zero threshold

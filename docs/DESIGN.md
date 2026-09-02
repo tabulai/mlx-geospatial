@@ -161,12 +161,25 @@ contracts.
 
 ## Dispatch
 
-Below ~1e5 candidate pairs, single-threaded GEOS beats kernel launch +
-transfer overhead for host-resident inputs: automatic shapely STRtree
-fallback with matching first-match semantics, honoring the caller's
-`predicate` exactly (the GPU kernel serves both predicates — they differ only
-on boundary points, inside the fp32 tolerance band). Small host queries are
-routed without a device pass from the bound `n_points * max_cell_count`.
+For host-resident inputs, `auto` compares a two-term cost model: the GEOS
+path costs `CPU_US_PER_POINT` per point plus `CPU_US_PER_EDGE` per expected
+candidate polygon edge (the index's mean per-cell edge work), the GPU path a
+fixed cost that dominates until kernel work shows (tens of thousands of points
+for simple polygons, a few thousand for detailed ones): `GPU_LAUNCH_US` for
+first match (upload, cell assignment, one launch, sync) and the larger
+`GPU_ALL_MATCHES_LAUNCH_US` for all-match compaction (count, scan and write
+passes with their syncs). With the shipped constants the model switches at
+~550 points for 48-vertex zones, ~810 for an axis-aligned square tiling (only
+~9 candidate edges per point) and ~40 for 2048-vertex zones for first match,
+and about four times later for all matches; on an M4 Max the bench measured
+547 and 36 for the two zone layers. The constants live in `_dispatch.py` and
+`bench.py --op crossover` re-fits them. The asymmetry favors the GPU: a wrong
+GPU choice costs at most the launch overhead, a wrong CPU choice costs
+milliseconds on detailed polygons, so `GPU_LAUNCH_US` sits slightly below the
+measured 400-500 us. The fallback is a shapely STRtree with
+matching first-match semantics, honoring the caller's `predicate` exactly
+(the GPU kernel serves both predicates — they differ only on boundary points,
+inside the fp32 tolerance band). No candidate counting is needed to dispatch.
 Device-resident inputs run on the GPU whenever Metal is available, since the
 fallback would need a host copy; `backend="cpu"` on them runs GEOS on the fp32
 local coordinates. Override per call (`backend=`) or via

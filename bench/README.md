@@ -24,9 +24,12 @@ Methodology (the honesty rules):
   TABLE`) is built once outside the timed region, so DuckDB's number is
   comparable to our *warm* rows; points are scanned from a registered
   DataFrame inside the timed query for both.
-- **Crossover, not headlines**: sweep N to show where the GPU starts winning.
-  Small inputs lose to CPU on launch overhead by design; the library
-  auto-dispatches to shapely below ~1e5 candidate pairs.
+- **Crossover, not headlines**: `--op crossover` sweeps N for forced CPU,
+  forced GPU and the default auto dispatch on simple and detailed zones and
+  fits the dispatch cost model's constants. Small inputs lose to CPU on launch
+  overhead by design; the library auto-dispatches to shapely below roughly
+  500-800 host points (fewer for detailed polygons, more for all-match
+  queries).
 - Baselines that are not installed are reported `n/a`, never dropped.
 
 Run:
@@ -38,6 +41,7 @@ python bench/bench.py --op haversine --n 20000 --m 20000
 python bench/bench.py --op knn --n 1000 --m 1000000 --k 10
 python bench/bench.py --op knn --n 200000 --m 200000 --k 10
 python bench/bench.py --op dense-pip --n 100000 --m 32 --vertices 48
+python bench/bench.py --op crossover --m 260
 ```
 
 Current numbers live in the top-level README benchmark section.
