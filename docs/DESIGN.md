@@ -36,8 +36,11 @@ to flip containment near edges. Structural mitigations:
    assigns a point near a cell
    line, the list holds every polygon whose kernel bbox accepts it, so the
    answer is determined by the kernel alone and cell assignment can only add
-   candidates. Adjacent tilings pay with tiles listed on both sides of shared
-   cell lines (9 candidates instead of 4 for an interior point). Device/host
+   candidates. Tilings whose edges fall on cell lines pay with tiles listed
+   on both sides of those lines: with the default quarter-median cells a
+   point in a tile's central cells sees one candidate, the cells bordering a
+   shared edge list two and the corner cells four, about two candidates per
+   point on average (down from nine with median-sized cells). Device/host
    bit-identity and shapely parity tests are the arbiter.
 4. **Device inputs keep the contract**: host float64 and ``mx.float64`` points
    are re-centered in float64 (on the MLX CPU stream, bit-identical to NumPy);
@@ -110,8 +113,12 @@ an active CPU default device.
 
 ## Grid-indexed join
 
-Uniform grid over polygon bounds (cell ≈ median polygon bbox side, coarsened
-to fit cell/entry budgets). Low-coverage construction uses NumPy's stable
+Uniform grid over polygon bounds. The default cell is a quarter of the
+median longer bbox side, which cuts candidates per point ~2.5x versus the
+median for a 4-6x larger but still small CSR; it backs off to a half, then
+the median, when the padded CSR would exceed 40 entries per polygon (a few
+large polygons among many small ones), and is coarsened further to fit the
+cell/entry budgets. Low-coverage construction uses NumPy's stable
 integer sort, which is especially efficient when input bboxes are already
 spatially ordered. More expanded grids pack every unique `(cell ID, polygon
 ID)` pair into one uint64 key and sort it in place, removing the indirect
@@ -129,9 +136,11 @@ returns the candidate total and maximum for dispatch and batching; the
 point-centric Metal kernel then traverses the cached grid CSR, performs bbox
 + parity tests, and returns on the first hit. This avoids all per-candidate
 query arrays and every O(N) host pass. Whole-point launches are split by the
-candidate-work budget from a device prefix sum; a cell that individually
-exceeds it uses the bounded explicit-pair fallback (host-planned from the
-device-assigned cells). For `all_matches=True`, candidate-bearing points are
+candidate-work budget from a device prefix sum (default 256M pairs per
+launch for the fused first-match kernel, which allocates nothing per pair;
+16M for all-match compaction, whose scan buffers scale with the batch); a
+cell that individually exceeds it uses the bounded explicit-pair fallback
+(host-planned from the device-assigned cells). For `all_matches=True`, candidate-bearing points are
 compacted on the device (prefix sum + scatter) and conceptual candidate ranks
 are split by the same hard budget. Ordinary batches use point-centric count, prefix scan,
 and ordered write passes; sparse or skewed batches use pair-parallel predicate

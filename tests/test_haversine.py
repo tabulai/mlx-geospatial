@@ -544,3 +544,32 @@ class TestKnn:
         dist, idx = ms.haversine_knn(np.zeros((0, 2)), r, k=3)
         assert np.array(dist).shape == (0, 3)
         assert np.array(idx).shape == (0, 3)
+
+
+class TestCrossSingleLaunch:
+    """haversine_cross runs as one fused launch unless chunk_bytes is given."""
+
+    def test_default_is_one_launch_and_matches_chunked(self, rng, monkeypatch):
+        import importlib
+
+        hv = importlib.import_module("mlx_spatial.haversine")  # the function shadows the name
+        a = rng.uniform(-180, 180, size=(300, 2)) * [1.0, 0.5]
+        b = rng.uniform(-180, 180, size=(700, 2)) * [1.0, 0.5]
+        calls = []
+        original = hv._hav
+
+        def spy(*args, **kwargs):
+            calls.append(1)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(hv, "_hav", spy)
+        default = np.array(ms.haversine_cross(a, b))
+        assert len(calls) == 1
+        calls.clear()
+        explicit_none = np.array(ms.haversine_cross(a, b, chunk_bytes=None))
+        assert len(calls) == 1
+        calls.clear()
+        chunked = np.array(ms.haversine_cross(a, b, chunk_bytes=7 * 700 * 16))  # 7 rows/launch
+        assert len(calls) == 43
+        np.testing.assert_array_equal(default, chunked)
+        np.testing.assert_array_equal(explicit_none, chunked)
