@@ -85,9 +85,9 @@ them by design; keep the raw lon/lat around for `haversine*`.
 | `haversine(a, b)` | elementwise/broadcast great-circle distance |
 | `haversine_cross(a, b)` | all-pairs `(N, M)` distance matrix |
 | `haversine_knn(q, r, k)` | k nearest references per query, `(dist, idx)` |
-| `point_in_polygon(pts, polys)` | first containing polygon per point (`-1` none); `all_matches=True` for pairs |
+| `point_in_polygon(pts, polys)` | first containing polygon per point (`-1` none); `all_matches=True` for pairs; `exact_boundary=True` for exact GEOS `predicate` semantics on boundary points |
 | `contains_matrix(pts, polys)` | dense `(N, M)` bool containment (small M) |
-| `sjoin(left, right)` | GeoPandas-flavored point-in-polygon join |
+| `sjoin(left, right)` | GeoPandas-flavored point-in-polygon join (`predicate="intersects"` default, `exact_boundary=`) |
 | `PolygonSet(geoms)` | ingested, re-centered, GPU-resident polygons |
 | `PolygonSet.to_local(points)` | re-center points once into the set's fp32 frame → `LocalPoints` |
 | `LocalPoints` | device-resident query points; sliceable; joins on them return MLX arrays |
@@ -135,10 +135,19 @@ structurally rather than hopefully:
 - **Boundary tolerance policy**: points within `PolygonSet.boundary_tolerance`
   (a few fp32 ulps of the local extent — centimeters for a metro area) of a
   polygon edge may classify either way. Outside that band, results match
-  shapely/GEOS; the test suite enforces exactly this contract. The band
-  scales with the *dataset* extent: one stray geometry far from the rest
-  (a placeholder at (0, 0), a wrong-hemisphere typo) widens it for everyone,
-  so clean outliers before ingesting.
+  shapely/GEOS; the test suite enforces exactly this contract. `predicate`
+  (`"intersects"`, the default, or `"within"`) only matters for points exactly
+  on a boundary, inside that band, so by default both give the same answer;
+  pass `exact_boundary=True` to re-check the near-boundary points with GEOS
+  and get the predicate honored exactly. Finding them is a host pass over all
+  points (an STRtree over tolerance-widened edge boxes plus a float64 distance
+  test: about 0.3 s per million points on 48-vertex zones, 0.5 s on 10k
+  zones), cheaper than a shapely join but far from GPU speed, so reserve it
+  for boundary-sensitive work; only the band is re-checked, so interior points
+  of invalid geometry keep the even-odd answer. The band scales with the
+  *dataset* extent: one stray geometry far from the rest (a placeholder at
+  (0, 0), a wrong-hemisphere typo) widens it for everyone, so clean outliers
+  before ingesting.
 - Cell assignment runs on the GPU in fp32. Polygon cell ranges are planned in
   float64 and padded by 16 ulps of the local extent — more than the kernel's
   bbox widening plus the fp32 assignment error — so whichever cell a point
@@ -155,11 +164,21 @@ structurally rather than hopefully:
   once per call site; silence it with `warnings.filterwarnings("ignore",
   category=ms.PrecisionWarning)` or make it strict with
   `warnings.simplefilter("error", ms.PrecisionWarning)`.
-- **Valid geometry assumed**: containment is the even-odd rule over all rings,
-  which equals GEOS fill semantics for valid polygons. On invalid input
-  (self-intersections, overlapping multipolygon parts) even-odd differs from
-  GEOS, and the CPU fallback will disagree with the GPU. Pass
-  `PolygonSet(geoms, validate=True)` to reject invalid geometry up front.
+- **One containment contract**: containment is the even-odd rule over all
+  rings on every backend. The CPU fallback assigns grid cells with the device
+  graph's fp32 arithmetic and evaluates the same fp32 predicate in NumPy with
+  the kernels' operation order, so `backend="cpu"` and `backend="gpu"` are
+  bit-identical for every input and auto dispatch can never change an answer
+  (the one escape is fp32 subnormals, below ~1e-38, which Metal flushes to
+  zero and NumPy keeps: a coordinate, an edge delta or an intermediate of the
+  crossing test that small can differ, which needs local coordinates
+  themselves near 1e-38 and never occurs for real-world units). Even-odd
+  equals GEOS
+  fill semantics for valid polygons; on invalid input (self-intersections,
+  overlapping multipolygon parts) it differs from GEOS, which you meet only
+  through `exact_boundary=True`, and only for the near-boundary points it
+  re-checks. Pass `PolygonSet(geoms, validate=True)` to reject invalid
+  geometry up front.
 - **Long polygons are adaptive**: Metal containment chooses scalar traversal,
   one 32-lane SIMDgroup, or one 128-thread group per predicate. Lanes evaluate
   disjoint edges and XOR integer crossing parity, so the cooperative paths
@@ -172,17 +191,22 @@ structurally rather than hopefully:
   antipode, arcsin amplification grows absolute error to 10²-10⁴ m (relative
   error stays < 2e-4).
 
-Small host-resident workloads automatically fall back to shapely: auto
-dispatch compares the GEOS cost (per point plus per candidate polygon edge,
-estimated from the index) with the fixed GPU cost of the route, which puts
-the crossover at roughly 500-800 points for simple polygons and a few dozen
-for detailed ones, later for all-match queries whose compaction passes cost
-more (measured in the crossover table below; `python bench/bench.py --op
-crossover` re-derives the constants for another machine).
-Device-resident inputs (`mx.array`, `LocalPoints`) run on the GPU whenever
-Metal is available, because the fallback would need a host copy. Force a path
-with `backend="gpu" | "cpu"` or `MLX_SPATIAL_BACKEND`; `backend="cpu"` on
-device inputs runs GEOS on the fp32 local coordinates (a parity/debug path).
+Small host-resident workloads automatically fall back to the NumPy evaluation
+of the same predicate: auto dispatch compares its cost (per point plus per
+candidate polygon edge, estimated from the index) with the fixed GPU cost of
+the route, which puts the crossover at a few hundred points for typical zone
+layers, a couple of thousand for sparse tilings and under ten for detailed
+polygons, later for all-match queries whose compaction passes cost more
+(measured in the crossover table below; `python bench/bench.py --op crossover`
+re-derives the constants for another machine). The fallback exists for
+consistency, not speed: it is about 1.5-2x slower than GEOS per point on
+48-vertex zones (up to ~7x on 2048-vertex zones, faster on sparse tilings)
+and carries ~50 µs of fixed setup, so a loop of tiny queries pays roughly
+0.05-0.2 ms per call. Device-resident inputs (`mx.array`, `LocalPoints`) run on
+the GPU whenever Metal is available, because the fallback would need a host
+copy. Force a path with `backend="gpu" | "cpu"` or `MLX_SPATIAL_BACKEND`;
+`backend="cpu"` on device inputs copies the fp32 local coordinates to the host
+and runs the same predicate there (a parity/debug path).
 
 ## Benchmarks
 
@@ -208,40 +232,65 @@ polygon ingestion and index construction included: 3.8 ms at 1M × 260 zones,
 | 1M pts × 10k zones | **3.1 ms** | 1.6 ms | 892 ms (290x) | 692 ms (225x) | 576 ms (188x) |
 
 **Crossover** (`python bench/bench.py --op crossover`; 260 zones, warm index,
-host-resident NumPy points, best of 7). The CPU column is the shapely STRtree
-fallback the auto dispatch uses. First-match queries:
+host-resident NumPy points, best of 7). The CPU column is the host fallback the
+auto dispatch uses: the same fp32 even-odd predicate evaluated in NumPy, so it
+returns exactly what the GPU returns. GPU cells are steady-state numbers,
+measured in a back-to-back burst with the GPU clocks warmed first; the note
+below the tables says what an isolated query costs. First-match queries:
 
-| points | 48-vertex zones: shapely / GPU | auto | 2048-vertex zones: shapely / GPU | auto |
+| points | 48-vertex zones: NumPy / GPU | auto | 2048-vertex zones: NumPy / GPU | auto |
 | --- | --- | --- | --- | --- |
-| 100 | **59 µs** / 412 µs | cpu | 704 µs / **303 µs** | gpu |
-| 200 | **109 µs** / 203 µs | cpu | 1.5 ms / **343 µs** | gpu |
-| 500 | 267 µs / **195 µs** | cpu | 3.8 ms / **442 µs** | gpu |
-| 1,000 | 536 µs / **208 µs** | gpu | 7.6 ms / **499 µs** | gpu |
-| 2,000 | 1.1 ms / **198 µs** | gpu | 15.7 ms / **565 µs** | gpu |
-| 10,000 | 6.0 ms / **445 µs** | gpu | 77 ms / **1.8 ms** | gpu |
-| 50,000 | 30.7 ms / **696 µs** | gpu | 400 ms / **3.1 ms** | gpu |
+| 100 | **188 µs** / 419 µs | cpu | 4.9 ms / **343 µs** | gpu |
+| 200 | 311 µs / **277 µs** | cpu | 10.3 ms / **334 µs** | gpu |
+| 500 | 705 µs / **196 µs** | gpu | 26.0 ms / **344 µs** | gpu |
+| 1,000 | 1.4 ms / **190 µs** | gpu | 52.6 ms / **329 µs** | gpu |
+| 2,000 | 2.7 ms / **200 µs** | gpu | 108 ms / **358 µs** | gpu |
+| 10,000 | 13.5 ms / **216 µs** | gpu | 540 ms / **1.8 ms** | gpu |
+| 50,000 | 68.9 ms / **289 µs** | gpu | 2.74 s / **3.2 ms** | gpu |
+
+An axis-aligned square tiling of 256 tiles has only ~9 candidate edges per
+point, so the fallback stays cheap for longer (first match / all matches):
+
+| points | square tiling: NumPy / GPU | auto | all matches: NumPy / GPU | auto |
+| --- | --- | --- | --- | --- |
+| 500 | **99 µs** / 145 µs | cpu | **94 µs** / 1.1 ms | cpu |
+| 1,000 | **154 µs** / 156 µs | cpu | **148 µs** / 1.0 ms | cpu |
+| 2,000 | 276 µs / **148 µs** | cpu | **265 µs** / 1.0 ms | cpu |
+| 5,000 | 607 µs / **148 µs** | gpu | **588 µs** / 1.0 ms | cpu |
+| 10,000 | 1.2 ms / **145 µs** | gpu | 1.1 ms / **1.1 ms** | gpu |
+| 50,000 | 6.5 ms / **193 µs** | gpu | 6.3 ms / **1.3 ms** | gpu |
 
 All-match queries (`all_matches=True`) carry a larger fixed GPU cost for the
 count, scan and compaction passes, so they switch later:
 
-| points | 48-vertex zones: shapely / GPU | auto | 2048-vertex zones: shapely / GPU | auto |
+| points | 48-vertex zones: NumPy / GPU | auto | 2048-vertex zones: NumPy / GPU | auto |
 | --- | --- | --- | --- | --- |
-| 100 | **60 µs** / 1.3 ms | cpu | **696 µs** / 1.3 ms | cpu |
-| 500 | **279 µs** / 1.2 ms | cpu | 3.8 ms / **1.7 ms** | gpu |
-| 2,000 | **1.2 ms** / 2.1 ms | cpu | 15.8 ms / **1.9 ms** | gpu |
-| 5,000 | 3.3 ms / **1.4 ms** | gpu | 39.7 ms / **1.8 ms** | gpu |
-| 50,000 | 34.9 ms / **1.7 ms** | gpu | 405 ms / **3.8 ms** | gpu |
+| 100 | **198 µs** / 1.5 ms | cpu | 4.8 ms / **1.3 ms** | gpu |
+| 500 | **701 µs** / 1.2 ms | cpu | 26.1 ms / **1.3 ms** | gpu |
+| 1,000 | 1.3 ms / **1.1 ms** | cpu | 52.5 ms / **1.4 ms** | gpu |
+| 2,000 | 2.6 ms / **1.2 ms** | gpu | 108 ms / **1.3 ms** | gpu |
+| 50,000 | 68.0 ms / **1.5 ms** | gpu | 2.77 s / **4.1 ms** | gpu |
 
-`auto` picked the faster side in every row except first match at 500 points on
-48-vertex zones, where the GPU was 70 µs faster than the CPU path it chose: the
-model deliberately leans toward the GPU only where a wrong CPU choice would
-cost milliseconds. The GPU path is a near-constant launch cost until kernel
-work shows (tens of thousands of points for simple polygons, a few thousand
-for detailed ones) while GEOS grows per point and per candidate edge, so the
-dispatch model switches first-match queries at about 550 points for 48-vertex
-zones and about 40 for 2048-vertex zones, and all-match queries roughly four
-times later. Device-resident inputs skip the comparison and run on the GPU
-whenever Metal is available.
+`auto` picked the faster side in every row except three near the thresholds
+(first match at 200 simple points and at 2,000 tiles, all matches at 1,000
+simple points), each within about 0.2 ms. The fixed GPU cost depends on what the
+GPU was doing just before: about 0.2 ms per first-match query and 1.1 ms per
+all-match query inside a burst, but roughly 0.8-1.1 ms and 2.5 ms for a query
+issued after tens of milliseconds of host-only work have let the GPU idle
+(`bench.py --op crossover` prints both). The dispatch constants
+(`GPU_LAUNCH_US = 350`, `GPU_ALL_MATCHES_LAUNCH_US = 1500`) sit between the
+two regimes: picking the CPU while the GPU was warm loses at most ~0.2 ms
+(~0.45 ms for all matches), picking the GPU after it has idled loses up to
+~0.6 ms (~1 ms for all matches) just above the threshold, so a loop of small
+host queries interleaved with heavy host work may prefer `backend="cpu"` for a
+few hundred points more. The GPU path is a near-constant
+launch cost until kernel work shows (tens of thousands of points for simple
+polygons, a few thousand for detailed ones) while the fallback grows per point
+and per candidate edge, so the model switches first-match queries at about 250
+points for 48-vertex zones, about 2,100 for the square tiling and under ten
+for 2048-vertex zones, and all-match queries roughly four times later.
+Device-resident inputs skip the comparison and run on the GPU whenever Metal is
+available.
 
 **Haversine** (`mx.compile`-fused distances; kNN via adaptive scalar/SIMDgroup
 selection kernels):
@@ -263,9 +312,9 @@ the full reference set. In the 1k × 1M row, the GPU-resident selector core is
 26.6 ms includes host ingestion and transfer. With `k > 32` (or without an
 active Metal device) kNN falls back to a chunked distance-matrix +
 `argpartition` path that is sort-bound; at large reference sets a BallTree can
-win there. Below roughly 500-800 host points (fewer for detailed polygons)
-the join auto-dispatches to shapely, because the fixed GPU launch overhead
-dominates there; the crossover table shows both sides.
+win there. Below a few hundred host points (fewer for detailed polygons) the
+join auto-dispatches to the host fallback, because the fixed GPU launch
+overhead dominates there; the crossover table shows both sides.
 
 ## Limitations (v0.1)
 
@@ -277,9 +326,10 @@ dominates there; the crossover table shows both sides.
   without NumPy candidate-pair expansion. A long-ring candidate or at least
   8,192 candidate edges in one used grid cell selects the pair-parallel route;
   its returned arrays still require memory proportional to the number of hits.
-- `sjoin` implements point-`within`-polygon with first-match (lowest polygon
-  index) semantics; use `all_matches=True` on `point_in_polygon` for
-  multi-match joins.
+- `sjoin` is a first-match (lowest polygon index) point-in-polygon join with
+  the GeoPandas default predicate `intersects`; `predicate="within"` only
+  differs on boundary points and needs `exact_boundary=True` to be honored.
+  Use `all_matches=True` on `point_in_polygon` for multi-match joins.
 
 ## License
 

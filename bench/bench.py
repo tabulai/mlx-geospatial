@@ -204,6 +204,52 @@ def bench_knn(n: int, m: int, k: int, rng) -> list[tuple[str, float | None]]:
 
 # ---------------------------------------------------------------- join
 
+def make_tiling(m: int) -> np.ndarray:
+    """Axis-aligned square tiling of the extent with about ``m`` tiles.
+
+    Four edges per tile and about nine candidate edges per point: the
+    low-edge layer that pins the dispatch model's per-point cost.
+    """
+    x0, y0, x1, y1 = EXTENT
+    side = max(1, int(round(np.sqrt(m))))
+    xs = np.linspace(x0, x1, side + 1)
+    ys = np.linspace(y0, y1, side + 1)
+    return np.array(
+        [shapely.box(xs[i], ys[j], xs[i + 1], ys[j + 1]) for j in range(side) for i in range(side)],
+        dtype=object,
+    )
+
+
+def _gpu_warm(fn, seconds: float = 0.05) -> None:
+    """Run ``fn`` for a short while so GPU clocks ramp before timing it."""
+    end = time.perf_counter() + seconds
+    while time.perf_counter() < end:
+        fn()
+
+
+def _launch_probe(index, pts, *, idle_s: float = 0.2, repeats: int = 7) -> dict:
+    """Fixed GPU cost per route with warm clocks and after the GPU has idled.
+
+    Returns microseconds: ``{"first": (warm, idle), "all": (warm, idle)}``.
+    The idle number is the median single query after ``idle_s`` of sleep (a
+    host-only program issuing one small query); the warm number is the best of
+    a back-to-back burst (a loop of small GPU queries).
+    """
+    out = {}
+    for key, kw in (("first", {}), ("all", {"all_matches": True})):
+        fn = lambda: index.query(pts, backend="gpu", **kw)  # noqa: E731
+        _gpu_warm(fn)
+        warm = timeit(fn, warmup=2, repeats=repeats)
+        idle = []
+        for _ in range(repeats):
+            time.sleep(idle_s)
+            t = time.perf_counter()
+            fn()
+            idle.append(time.perf_counter() - t)
+        out[key] = (warm * 1e6, float(np.median(idle)) * 1e6)
+    return out
+
+
 def densify_zones(zones: np.ndarray, vertices: int) -> np.ndarray:
     """Resample each zone's exterior ring to ``vertices`` points (same shape)."""
     out = []
@@ -222,12 +268,15 @@ def densify_zones(zones: np.ndarray, vertices: int) -> np.ndarray:
 def bench_crossover(m: int, rng) -> None:
     """Where does the GPU start winning for host-resident points?
 
-    Sweeps N for forced CPU (shapely STRtree fallback), forced GPU and the
+    Sweeps N for forced CPU (the NumPy even-odd fallback), forced GPU and the
     default auto dispatch, for first-match and all-match queries, on ``m``
-    zones with 48 and 2048 vertices, then fits the constants of the dispatch
-    cost model used by ``mlx_spatial._dispatch`` (GEOS cost per point and per
+    zones with 48 and 2048 vertices and on an axis-aligned square tiling of
+    about ``m`` tiles, then fits the constants of the dispatch cost model used
+    by ``mlx_spatial._dispatch`` (the host fallback's cost per point and per
     candidate edge versus the fixed GPU cost of each route) so they can be
-    re-derived on another machine.
+    re-derived on another machine. The tiling, with only ~9 candidate edges
+    per point, pins the per-point term; from the two zone layers alone it
+    would be the difference of two nearly equal numbers.
     """
     from mlx_spatial import _dispatch
 
@@ -235,15 +284,20 @@ def bench_crossover(m: int, rng) -> None:
     ns = [100, 200, 500, 1_000, 2_000, 5_000, 10_000, 50_000]
     layers = [
         ("48-vertex zones", make_zones(m, rng)),
+        ("square tiling", make_tiling(m)),
         ("2048-vertex zones", densify_zones(make_zones(m, rng), 2048)),
     ]
-    slopes = []
+    fits = []  # (candidate edges per point, us per point, us fixed at n=1) per layer
     gpu_fixed, gpu_all_fixed = [], []
+    probe = None
     for label, zones in layers:
         polyset = ms.PolygonSet(zones)
         index = ms.GridIndex(polyset)
         edges = index._edges_per_point
-        print(f"\n### crossover: {m:,} {label} (~{edges:.0f} candidate edges per point)")
+        fixed = timeit(lambda: index.query(pts_all[:1], backend="cpu"), warmup=5, repeats=50) * 1e6
+        if probe is None:
+            probe = _launch_probe(index, pts_all[:500])
+        print(f"\n### crossover: {len(zones):,} {label} (~{edges:.0f} candidate edges per point)")
         print(
             f"  {'points':>8}  {'first match: cpu':>16}  {'gpu':>8}  {'auto':>8}  pick"
             f"  | {'all matches: cpu':>16}  {'gpu':>8}  {'auto':>8}  pick"
@@ -255,10 +309,15 @@ def bench_crossover(m: int, rng) -> None:
             for all_matches in (False, True):
                 kw = {"all_matches": True} if all_matches else {}
                 cpu = timeit(lambda: index.query(pts, backend="cpu", **kw), warmup=2, repeats=7)
+                # Let the GPU clocks ramp after the CPU-only timings so the
+                # forced-GPU column (and the fitted launch cost) is not biased.
+                _gpu_warm(lambda: index.query(pts, backend="gpu", **kw))
                 gpu = timeit(lambda: index.query(pts, backend="gpu", **kw), warmup=2, repeats=7)
                 auto = timeit(lambda: index.query(pts, **kw), warmup=2, repeats=7)
                 picks = _dispatch.resolve_backend(None, n, edges_per_point=edges, all_matches=all_matches)
-                flag = "" if (picks == "gpu") == (gpu <= cpu) else "!"
+                # flag a wrong pick only beyond a 5% tie band
+                wrong = (picks == "gpu") != (gpu <= cpu) and abs(gpu - cpu) > 0.05 * min(gpu, cpu)
+                flag = "!" if wrong else ""
                 row.append(f"{fmt(cpu):>16}  {fmt(gpu):>8}  {fmt(auto):>8}  {picks}{flag:<1}")
                 if not all_matches:
                     xs.append(n)
@@ -269,23 +328,50 @@ def bench_crossover(m: int, rng) -> None:
                     gpu_all_fixed.append(gpu * 1e6)
             print(f"  {n:>8,}  {row[0]}  | {row[1]}")
         slope = float(np.polyfit(xs, ys, 1)[0])  # us per point on the CPU path
-        slopes.append((edges, slope))
-    print("  ('!' marks a row where auto picked the slower side)")
-    (e0, s0), (e1, s1) = slopes
-    per_edge = (s1 - s0) / (e1 - e0) if e1 != e0 else 0.0
-    per_point = s0 - per_edge * e0
+        fits.append((edges, slope, fixed))
+    print("  ('!' marks a row where auto picked the slower side by more than 5%)")
+    # slope(layer) = per_point + per_edge * edges(layer): least squares over the
+    # three layers; the per-point term cannot be negative.
+    e = np.array([f[0] for f in fits])
+    slopes = np.array([f[1] for f in fits])
+    per_point, per_edge = np.linalg.lstsq(np.column_stack([np.ones_like(e), e]), slopes, rcond=None)[0]
+    per_point = max(float(per_point), 0.0)
+    per_edge = float(per_edge)
+    fixed = float(np.median([f[2] for f in fits]))
     launch = float(np.median(gpu_fixed))
     launch_all = float(np.median(gpu_all_fixed))
     print("\n  dispatch constants          current -> measured here")
     print(f"  CPU_US_PER_POINT            {_dispatch.CPU_US_PER_POINT:.3f} -> {per_point:.3f}")
     print(f"  CPU_US_PER_EDGE             {_dispatch.CPU_US_PER_EDGE:.5f} -> {per_edge:.5f}")
-    print(f"  GPU_LAUNCH_US               {_dispatch.GPU_LAUNCH_US:.0f} -> {launch:.0f}")
-    print(f"  GPU_ALL_MATCHES_LAUNCH_US   {_dispatch.GPU_ALL_MATCHES_LAUNCH_US:.0f} -> {launch_all:.0f}")
-    e48, e2048 = slopes[0][0], slopes[1][0]
     print(
-        f"  gpu_min_points()            first match {_dispatch.gpu_min_points(e48)} / "
-        f"{_dispatch.gpu_min_points(e2048)} points (48- / 2048-vertex layer); all matches "
-        f"{_dispatch.gpu_min_points(e48, all_matches=True)} / {_dispatch.gpu_min_points(e2048, all_matches=True)}"
+        f"  GPU_LAUNCH_US               {_dispatch.GPU_LAUNCH_US:.0f} -> {launch:.0f} warm"
+        f" ({probe['first'][0]:.0f} warm / {probe['first'][1]:.0f} after the GPU idled 200 ms, 500 points)"
+    )
+    print(
+        f"  GPU_ALL_MATCHES_LAUNCH_US   {_dispatch.GPU_ALL_MATCHES_LAUNCH_US:.0f} -> {launch_all:.0f} warm"
+        f" ({probe['all'][0]:.0f} warm / {probe['all'][1]:.0f} idle)"
+    )
+    def _where(constant, warm_idle):
+        warm, idle = warm_idle
+        if constant < warm:
+            return f"sits below the warm cost measured here ({warm:.0f} us)"
+        if constant > idle:
+            return f"sits above the idle cost measured here ({idle:.0f} us)"
+        return "sits between the warm and the idle cost measured here"
+
+    print(
+        f"  (GPU columns are steady-state, clocks warmed before each timing. GPU_LAUNCH_US"
+        f" {_where(_dispatch.GPU_LAUNCH_US, probe['first'])}; GPU_ALL_MATCHES_LAUNCH_US"
+        f" {_where(_dispatch.GPU_ALL_MATCHES_LAUNCH_US, probe['all'])}. The host fallback's"
+        f" ~{fixed:.0f} us fixed cost per call is not a model term.)"
+    )
+    names = [label for label, _ in layers]
+    print(
+        "  gpu_min_points()            first match "
+        + " / ".join(f"{_dispatch.gpu_min_points(f[0])}" for f in fits)
+        + " points; all matches "
+        + " / ".join(f"{_dispatch.gpu_min_points(f[0], all_matches=True)}" for f in fits)
+        + f" ({', '.join(names)})"
     )
 
 

@@ -183,8 +183,8 @@ def _as_geometry_array(geoms) -> np.ndarray:
     if isinstance(geoms, shapely.Geometry):
         geoms = [geoms]
     # Own snapshot (np.array copies): PolygonSet must not alias caller storage,
-    # or mutating the source array desynchronizes the CPU fallback from the
-    # GPU-resident data.
+    # or mutating the source array desynchronizes the exact_boundary STRtrees
+    # (built lazily from this snapshot) from the GPU-resident data.
     arr = np.array(geoms, dtype=object)
     if arr.ndim != 1:
         raise ValueError(f"expected a 1-D sequence of geometries, got shape {arr.shape}")
@@ -251,10 +251,12 @@ class PolygonSet:
     """Flat, GPU-resident ragged representation of a set of (multi)polygons.
 
     Containment follows the even-odd (crossing-number) rule over all rings of
-    a geometry. For *valid* geometries this matches GEOS fill semantics; for
-    invalid ones (self-intersections, overlapping multipolygon parts) even-odd
-    differs from GEOS — and the CPU fallback, which uses GEOS, will then
-    disagree with the GPU. Pass ``validate=True`` to reject invalid input at
+    a geometry, on every backend (the CPU fallback evaluates the same fp32
+    rule, bit for bit). For *valid* geometries this matches GEOS fill
+    semantics; for invalid ones (self-intersections, overlapping multipolygon
+    parts) even-odd differs from GEOS, which you meet only through
+    ``exact_boundary=True`` (it re-checks near-boundary points with GEOS and
+    assumes valid geometry). Pass ``validate=True`` to reject invalid input at
     ingestion.
 
     Attributes
@@ -347,8 +349,8 @@ class PolygonSet:
             # different, still valid, origin.)
             origin = compute_origin(self.bboxes[:, 0:2], self.bboxes[:, 2:4])
         # Own, frozen copy: aliasing a caller-owned (writable) array would let
-        # a later mutation desynchronize the CPU fallback (which re-centers
-        # query points with self.origin) from the already-uploaded GPU coords.
+        # a later mutation desynchronize query re-centering (host points are
+        # re-centered with self.origin) from the already-uploaded GPU coords.
         origin = np.array(origin, dtype=np.float64).reshape(2).copy()
         if not np.isfinite(origin).all():
             raise ValueError(f"origin must be finite, got {origin.tolist()}")
@@ -445,6 +447,10 @@ class PolygonSet:
         # Lazy caches.
         self._edge_data: EdgeData | None = None
         self._strtree = None
+        self._edge_box_strtree = None
+        self._edges_f64_cache = None
+        self._edges_np_cache = None
+        self._bboxes_local_np_cache = None
         self._grid_index = None
         self._origin_f64_mx = None
         self._origin_hi_lo_mx = None
@@ -486,10 +492,66 @@ class PolygonSet:
 
     @property
     def strtree(self) -> shapely.STRtree:
-        """Cached shapely STRtree over the original geometries (CPU fallback)."""
+        """Cached shapely STRtree over the original geometries.
+
+        Used only by ``exact_boundary=True`` refinement (and as a test oracle);
+        the query path itself never calls GEOS.
+        """
         if self._strtree is None:
             self._strtree = shapely.STRtree(self._shapely)
         return self._strtree
+
+    def _edges_f64(self) -> np.ndarray:
+        """``(E, 4)`` float64 edge table in original coordinates.
+
+        Same edge order as :attr:`edges` (rings in ragged order, the closing
+        vertex of each ring dropped), rebuilt from the geometry snapshot so
+        the float64 values are exact. Used by ``exact_boundary=True`` to
+        measure point-to-edge distances on the host.
+        """
+        if self._edges_f64_cache is None:
+            _, coords, _ = shapely.to_ragged_array(self._shapely)
+            coords = np.asarray(coords, dtype=np.float64)[:, :2]
+            keep = np.ones(len(coords), dtype=bool)
+            keep[self._ring_offsets[1:] - 1] = False
+            start_idx = np.flatnonzero(keep)
+            self._edges_f64_cache = np.concatenate(
+                [coords[start_idx], coords[start_idx + 1]], axis=1
+            )
+        return self._edges_f64_cache
+
+    def _edge_box_tree(self) -> shapely.STRtree:
+        """Cached STRtree over every edge's envelope widened by the tolerance.
+
+        A point within ``boundary_tolerance`` of an edge lies inside that
+        edge's widened envelope, so an envelope-only query against this tree
+        yields a superset of the near-boundary (point, edge) pairs that a
+        NumPy distance test then settles (see ``GridIndex._near_boundary``).
+        """
+        if self._edge_box_strtree is None:
+            e = self._edges_f64()
+            tol = self.boundary_tolerance
+            self._edge_box_strtree = shapely.STRtree(
+                shapely.box(
+                    np.minimum(e[:, 0], e[:, 2]) - tol,
+                    np.minimum(e[:, 1], e[:, 3]) - tol,
+                    np.maximum(e[:, 0], e[:, 2]) + tol,
+                    np.maximum(e[:, 1], e[:, 3]) + tol,
+                )
+            )
+        return self._edge_box_strtree
+
+    def _edges_np(self) -> np.ndarray:
+        """Host view of the ``(E, 4)`` float32 edge table (see :attr:`edges`)."""
+        if self._edges_np_cache is None:
+            self._edges_np_cache = np.asarray(self.edges.edges)
+        return self._edges_np_cache
+
+    def _bboxes_local_np(self) -> np.ndarray:
+        """Host view of the widened float32 kernel bboxes."""
+        if self._bboxes_local_np_cache is None:
+            self._bboxes_local_np_cache = np.asarray(self.bboxes_local)
+        return self._bboxes_local_np_cache
 
     def to_local(self, points) -> LocalPoints:
         """Re-center query points into this set's frame, once, for GPU queries.
@@ -530,14 +592,16 @@ class PolygonSet:
             pts64 = self._host_coords(local)
         return pts64, local
 
-    def _ingest_points(self, points, *, stacklevel: int = 4):
+    def _ingest_points(self, points, *, stacklevel: int = 4, defer_local: bool = False):
         """Normalize any point input for the kernels.
 
         Returns ``(points_f64_or_None, points_local_mx, on_device)``:
         host inputs (numpy, sequences, shapely, GeoSeries) provide float64
         coordinates and a float32 local-frame array; ``mx.array`` and
         :class:`LocalPoints` inputs stay on device (``points_f64`` is None)
-        and mark the result container as MLX.
+        and mark the result container as MLX. With ``defer_local=True`` host
+        inputs return ``None`` for the local array, for callers that may not
+        need it (the host fallback re-centers in NumPy instead).
         """
         if isinstance(points, LocalPoints):
             self._check_local(points)
@@ -546,7 +610,7 @@ class PolygonSet:
             return None, self._local_coords(points, stacklevel=stacklevel), True
         self._check_crs(_crs_of(points))
         pts64 = as_point_array(points)
-        return pts64, self._local_from_f64(pts64), False
+        return pts64, (None if defer_local else self._local_from_f64(pts64)), False
 
     def _check_crs(self, crs) -> None:
         if crs is not None and self.crs is not None and crs != self.crs:

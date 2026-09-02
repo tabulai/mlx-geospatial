@@ -85,10 +85,33 @@ heavy launches on the scalar path.
 Boundary semantics: the half-open crossing rule avoids double-counting ray
 crossings at vertices. Within the tolerance band — including every exact
 boundary point — results are undefined, so a shared-edge point may match either
-adjacent polygon, both, or neither. Valid geometry is assumed: even-odd equals
-GEOS fill semantics only for valid polygons; on self-intersections or
-overlapping multipolygon parts the GPU (even-odd) and the CPU fallback (GEOS)
-diverge — `PolygonSet(geoms, validate=True)` rejects such input at ingestion.
+adjacent polygon, both, or neither; `predicate` (`intersects`/`within`, kept
+for GeoPandas compatibility) therefore changes nothing by default, and
+`exact_boundary=True` re-checks the points within the band with GEOS so the
+predicate is honored exactly. The band is found without GEOS distances: an
+STRtree over every edge's envelope widened by the tolerance (cached on the
+polygon set) returns candidate (point, edge) pairs by envelope alone and a
+float64 point-to-segment test in NumPy settles them, 3-5x cheaper than
+`dwithin` against whole boundaries (about 0.3 s per million points on
+48-vertex zones, 0.5 s on 10k zones; still two orders of magnitude slower
+than the GPU query itself, so the opt-in is for boundary-sensitive work). The
+work is bounded by candidate pairs: the distance test runs over pair chunks and
+a point slice whose widened envelopes return too many pairs (a few large
+polygons with extent-spanning edges) is retried shorter. Non-finite rows are
+skipped. One
+contract on every backend: the host fallback assigns cells with the device
+graph's fp32 arithmetic (against the outward-nudged bounds, so a point a
+fraction of an ulp outside the float64 extent is admitted on both routes) and
+evaluates the same fp32 even-odd predicate in NumPy with the kernels'
+operation order, so it is bit-identical to the GPU for every input, valid or
+not; the single documented exception is fp32 subnormals (below ~1e-38), which
+Metal flushes to zero and NumPy keeps, so a coordinate, an edge delta or an
+intermediate of the crossing test that small can differ (this needs local
+coordinates themselves near 1e-38 and never occurs for real-world units).
+Even-odd equals GEOS fill semantics only for valid polygons; on
+self-intersections or overlapping multipolygon parts it differs from GEOS,
+which only `exact_boundary` consults, and only for the band —
+`PolygonSet(geoms, validate=True)` rejects such input at ingestion.
 
 ## k-nearest neighbors
 
@@ -161,28 +184,41 @@ contracts.
 
 ## Dispatch
 
-For host-resident inputs, `auto` compares a two-term cost model: the GEOS
-path costs `CPU_US_PER_POINT` per point plus `CPU_US_PER_EDGE` per expected
+For host-resident inputs, `auto` compares a two-term cost model: the NumPy
+fallback costs `CPU_US_PER_POINT` per point plus `CPU_US_PER_EDGE` per expected
 candidate polygon edge (the index's mean per-cell edge work), the GPU path a
 fixed cost that dominates until kernel work shows (tens of thousands of points
 for simple polygons, a few thousand for detailed ones): `GPU_LAUNCH_US` for
 first match (upload, cell assignment, one launch, sync) and the larger
 `GPU_ALL_MATCHES_LAUNCH_US` for all-match compaction (count, scan and write
 passes with their syncs). With the shipped constants the model switches at
-~550 points for 48-vertex zones, ~810 for an axis-aligned square tiling (only
-~9 candidate edges per point) and ~40 for 2048-vertex zones for first match,
-and about four times later for all matches; on an M4 Max the bench measured
-547 and 36 for the two zone layers. The constants live in `_dispatch.py` and
-`bench.py --op crossover` re-fits them. The asymmetry favors the GPU: a wrong
-GPU choice costs at most the launch overhead, a wrong CPU choice costs
-milliseconds on detailed polygons, so `GPU_LAUNCH_US` sits slightly below the
-measured 400-500 us. The fallback is a shapely STRtree with
-matching first-match semantics, honoring the caller's `predicate` exactly
-(the GPU kernel serves both predicates — they differ only on boundary points,
-inside the fp32 tolerance band). No candidate counting is needed to dispatch.
-Device-resident inputs run on the GPU whenever Metal is available, since the
-fallback would need a host copy; `backend="cpu"` on them runs GEOS on the fp32
-local coordinates. Override per call (`backend=`) or via
+~250 points for 48-vertex zones, ~2,100 for an axis-aligned square tiling
+(only ~9 candidate edges per point) and under ten for 2048-vertex zones for
+first match, and about four times later for all matches. The constants live
+in `_dispatch.py` and `bench.py --op crossover` re-fits them. The asymmetry
+is bounded on both sides. The fixed GPU cost depends on the GPU's clock
+state: on an M4 Max about 200 us per first-match query in a back-to-back burst
+but 0.8-1.1 ms for a query issued after host-only work has let the GPU idle
+(1.1 ms versus 2.5 ms for all matches), so `GPU_LAUNCH_US` (350) and
+`GPU_ALL_MATCHES_LAUNCH_US` (1500) sit between the two regimes and the sweep
+reports both: picking the CPU while the GPU was warm loses at most the gap to
+the warm launch (~0.2 ms first match, ~0.45 ms all matches, on every layer
+because the index supplies the edge estimate), picking the GPU after it has
+idled loses up to ~0.6 ms / ~1 ms just above the threshold. The fallback is
+the NumPy even-odd
+evaluation described above (bit-identical to the kernels; GEOS is not on the
+query path), so dispatch can never change an answer. It is about 1.5-2x slower
+than GEOS per point on 48-vertex zones (1.5 s per million points), up to ~7x
+on 2048-vertex zones and faster than GEOS on sparse axis-aligned tilings,
+with ~50 us of fixed setup per call; it exists for consistency and for
+Metal-less hosts, where the GPU path is unavailable, and processes points in
+slices bounded by candidate pairs so its memory does not grow with the point
+count (about 250-300 MB peak at 1-2M points on 260 zones). No candidate
+counting is needed to
+dispatch. Device-resident inputs run on the GPU whenever Metal is available,
+since the fallback would need a host copy; `backend="cpu"` on them copies the
+fp32 local coordinates to the host and runs the same NumPy predicate (a
+parity/debug path). Override per call (`backend=`) or via
 `MLX_SPATIAL_BACKEND`.
 
 ## Benchmark honesty rules

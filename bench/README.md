@@ -24,12 +24,14 @@ Methodology (the honesty rules):
   TABLE`) is built once outside the timed region, so DuckDB's number is
   comparable to our *warm* rows; points are scanned from a registered
   DataFrame inside the timed query for both.
-- **Crossover, not headlines**: `--op crossover` sweeps N for forced CPU,
-  forced GPU and the default auto dispatch on simple and detailed zones and
-  fits the dispatch cost model's constants. Small inputs lose to CPU on launch
-  overhead by design; the library auto-dispatches to shapely below roughly
-  500-800 host points (fewer for detailed polygons, more for all-match
-  queries).
+- **Crossover, not headlines**: `--op crossover` sweeps N for forced CPU (the
+  NumPy even-odd fallback), forced GPU and the default auto dispatch on
+  48-vertex zones, an axis-aligned square tiling and 2048-vertex zones, and
+  fits the dispatch cost model's constants (the tiling's ~9 candidate edges
+  per point pin the per-point term). Small inputs lose to CPU on launch
+  overhead by design; the library auto-dispatches to the host fallback below
+  a few hundred host points (fewer for detailed polygons, more for sparse
+  tilings and all-match queries).
 - Baselines that are not installed are reported `n/a`, never dropped.
 
 Run:

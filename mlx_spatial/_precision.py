@@ -106,7 +106,7 @@ def boundary_tolerance(max_abs_coord: float) -> float:
     Points within this distance of an edge (in re-centered coordinate units,
     which equal the input units — re-centering is a pure translation) may be
     classified either way by the fp32 crossing-number test. Golden tests
-    exclude such points; callers needing exact boundary semantics should
-    refine near-boundary hits with shapely.
+    exclude such points; callers needing exact boundary semantics pass
+    ``exact_boundary=True`` to the join, which re-checks the band with GEOS.
     """
     return 8.0 * float32_resolution(max_abs_coord)

@@ -86,12 +86,6 @@ def test_pip_long_polygon_strategy_boundaries(
     assert _pip_long_polygon_strategy(n_work, max_ring_edges) == expected
 
 
-@pytest.fixture(autouse=True)
-def _clean_backend_env(monkeypatch):
-    """Isolate every test from an ambient MLX_SPATIAL_BACKEND setting."""
-    monkeypatch.delenv("MLX_SPATIAL_BACKEND", raising=False)
-
-
 @pytest.fixture(scope="module")
 def grid_workload():
     """8x8 unit-square tiling + 100k strictly-interior points.
@@ -130,7 +124,7 @@ def test_auto_threshold_boundary():
     assert resolve_backend("auto", 1) == "cpu"
     # Device-resident inputs never wait for the CPU path under auto.
     assert resolve_backend(None, None) == "gpu"
-    # Detailed polygons make GEOS slower per point, so the GPU wins earlier.
+    # Detailed polygons make the host fallback slower per point, so the GPU wins earlier.
     heavy = gpu_min_points(edges_per_point=6000.0)
     assert heavy < t
     assert resolve_backend(None, heavy, edges_per_point=6000.0) == "gpu"
@@ -291,7 +285,7 @@ def test_auto_uses_gpu_above_threshold_end_to_end(grid_workload, monkeypatch):
 
 
 def test_auto_small_workload_takes_cpu_path(rng, monkeypatch):
-    """Below the threshold, auto must use the STRtree fallback (no kernel)."""
+    """Below the threshold, auto must use the NumPy fallback (no kernel)."""
     polys = make_grid_polygons(4, 4, cell=1.0)
     polyset = ms.PolygonSet(polys)
     index = ms.GridIndex(polyset)
@@ -311,7 +305,7 @@ def test_auto_small_workload_takes_cpu_path(rng, monkeypatch):
 @requires_metal
 @requires_metal
 def test_all_matches_auto_switches_later_than_first_match(rng, monkeypatch):
-    """Between the two thresholds, auto keeps all_matches on GEOS (cheaper)."""
+    """Between the two thresholds, auto keeps all_matches on the host fallback (cheaper)."""
     polys = make_grid_polygons(6, 6, cell=1.0)
     polyset = ms.PolygonSet(polys)
     index = ms.GridIndex(polyset)
@@ -336,7 +330,7 @@ def test_all_matches_auto_switches_later_than_first_match(rng, monkeypatch):
     monkeypatch.setattr(ms.GridIndex, "_query_gpu_all_matches", gpu_spy)
     monkeypatch.delenv("MLX_SPATIAL_BACKEND", raising=False)
 
-    index.query(pts[:t_first], all_matches=True)  # first-match threshold: still GEOS
+    index.query(pts[:t_first], all_matches=True)  # first-match threshold: still the fallback
     assert (len(cpu_calls), len(gpu_calls)) == (1, 0)
     index.query(pts[:t_first])  # the same point count runs first match on the GPU
     assert (len(cpu_calls), len(gpu_calls)) == (1, 0)

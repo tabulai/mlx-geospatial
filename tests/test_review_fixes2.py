@@ -139,26 +139,46 @@ def test_pip_accepts_far_apart_polygons_with_safe_edges():
 # ---------------------------------------------------------------------------
 
 
-def test_sjoin_predicate_honored_on_boundary():
-    """Small workloads run on GEOS, where within/intersects differ exactly on
-    boundary points — matching geopandas."""
+def test_sjoin_predicate_honored_on_boundary_only_with_exact_boundary():
+    """By default both predicates run the same even-odd rule on every backend;
+    exact_boundary=True re-checks near-boundary points with GEOS so
+    within/intersects differ exactly on boundary points, matching geopandas."""
     left = pd.DataFrame({"geometry": [Point(1.0, 0.5), Point(0.5, 0.5)]})
     right = pd.DataFrame({"geometry": [shapely.box(0, 0, 1, 1)]})
-    out_within = ms.sjoin(left, right, predicate="within")
-    out_intersects = ms.sjoin(left, right, predicate="intersects")
-    assert list(out_within.index) == [1]  # boundary point excluded
-    assert list(out_intersects.index) == [0, 1]  # boundary point included
+    for backend in ("cpu", "gpu"):
+        default_within = ms.sjoin(left, right, predicate="within", backend=backend)
+        default_intersects = ms.sjoin(left, right, predicate="intersects", backend=backend)
+        assert list(default_within.index) == list(default_intersects.index)
+        assert list(ms.sjoin(left, right, backend=backend).index) == list(default_intersects.index)
+        out_within = ms.sjoin(left, right, predicate="within", exact_boundary=True, backend=backend)
+        out_intersects = ms.sjoin(
+            left, right, predicate="intersects", exact_boundary=True, backend=backend
+        )
+        assert list(out_within.index) == [1]  # boundary point excluded
+        assert list(out_intersects.index) == [0, 1]  # boundary point included
 
 
 def test_point_in_polygon_predicate_param():
     boundary = [[1.0, 0.5]]
     polys = [shapely.box(0, 0, 1, 1)]
-    np.testing.assert_array_equal(
-        ms.point_in_polygon(boundary, polys, predicate="within", backend="cpu"), [-1]
-    )
-    np.testing.assert_array_equal(
-        ms.point_in_polygon(boundary, polys, predicate="intersects", backend="cpu"), [0]
-    )
+    for backend in ("cpu", "gpu"):
+        # Without exact_boundary the predicate cannot change the even-odd answer.
+        within = ms.point_in_polygon(boundary, polys, predicate="within", backend=backend)
+        intersects = ms.point_in_polygon(boundary, polys, predicate="intersects", backend=backend)
+        np.testing.assert_array_equal(within, intersects)
+        assert within[0] in (-1, 0)
+        np.testing.assert_array_equal(
+            ms.point_in_polygon(
+                boundary, polys, predicate="within", exact_boundary=True, backend=backend
+            ),
+            [-1],
+        )
+        np.testing.assert_array_equal(
+            ms.point_in_polygon(
+                boundary, polys, predicate="intersects", exact_boundary=True, backend=backend
+            ),
+            [0],
+        )
     with pytest.raises(ValueError, match="predicate"):
         ms.point_in_polygon(boundary, polys, predicate="touches")
 
@@ -168,11 +188,15 @@ def test_predicate_through_prebuilt_index():
     index = ms.GridIndex(ms.PolygonSet([shapely.box(0, 0, 1, 1)]))
     boundary = [[1.0, 0.5]]
     np.testing.assert_array_equal(
-        ms.point_in_polygon(boundary, index=index, predicate="within", backend="cpu"),
+        ms.point_in_polygon(
+            boundary, index=index, predicate="within", exact_boundary=True, backend="cpu"
+        ),
         [-1],
     )
     np.testing.assert_array_equal(
-        ms.point_in_polygon(boundary, index=index, predicate="intersects", backend="cpu"),
+        ms.point_in_polygon(
+            boundary, index=index, predicate="intersects", exact_boundary=True, backend="cpu"
+        ),
         [0],
     )
     with pytest.raises(ValueError, match="predicate"):
