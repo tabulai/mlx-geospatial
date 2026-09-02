@@ -19,6 +19,7 @@ Usage:
     python bench/bench.py --op knn --n 200000 --m 200000 --k 10
     python bench/bench.py --op dense-pip --n 100000 --m 32 --vertices 48
     python bench/bench.py --op join --n 1000000 --m 260
+    python bench/bench.py --op crossover --m 260   # CPU/GPU dispatch sweep + constant fit
     python bench/bench.py --all            # quick representative sweep
 """
 
@@ -203,6 +204,91 @@ def bench_knn(n: int, m: int, k: int, rng) -> list[tuple[str, float | None]]:
 
 # ---------------------------------------------------------------- join
 
+def densify_zones(zones: np.ndarray, vertices: int) -> np.ndarray:
+    """Resample each zone's exterior ring to ``vertices`` points (same shape)."""
+    out = []
+    for poly in zones:
+        ring = np.asarray(poly.exterior.coords)
+        t_src = np.arange(len(ring))
+        t_dst = np.linspace(0.0, len(ring) - 1, vertices)
+        out.append(
+            shapely.Polygon(
+                np.column_stack([np.interp(t_dst, t_src, ring[:, 0]), np.interp(t_dst, t_src, ring[:, 1])])
+            )
+        )
+    return np.array(out, dtype=object)
+
+
+def bench_crossover(m: int, rng) -> None:
+    """Where does the GPU start winning for host-resident points?
+
+    Sweeps N for forced CPU (shapely STRtree fallback), forced GPU and the
+    default auto dispatch, for first-match and all-match queries, on ``m``
+    zones with 48 and 2048 vertices, then fits the constants of the dispatch
+    cost model used by ``mlx_spatial._dispatch`` (GEOS cost per point and per
+    candidate edge versus the fixed GPU cost of each route) so they can be
+    re-derived on another machine.
+    """
+    from mlx_spatial import _dispatch
+
+    pts_all = make_points(200_000, rng)
+    ns = [100, 200, 500, 1_000, 2_000, 5_000, 10_000, 50_000]
+    layers = [
+        ("48-vertex zones", make_zones(m, rng)),
+        ("2048-vertex zones", densify_zones(make_zones(m, rng), 2048)),
+    ]
+    slopes = []
+    gpu_fixed, gpu_all_fixed = [], []
+    for label, zones in layers:
+        polyset = ms.PolygonSet(zones)
+        index = ms.GridIndex(polyset)
+        edges = index._edges_per_point
+        print(f"\n### crossover: {m:,} {label} (~{edges:.0f} candidate edges per point)")
+        print(
+            f"  {'points':>8}  {'first match: cpu':>16}  {'gpu':>8}  {'auto':>8}  pick"
+            f"  | {'all matches: cpu':>16}  {'gpu':>8}  {'auto':>8}  pick"
+        )
+        xs, ys = [], []
+        for n in ns:
+            pts = pts_all[:n]
+            row = []
+            for all_matches in (False, True):
+                kw = {"all_matches": True} if all_matches else {}
+                cpu = timeit(lambda: index.query(pts, backend="cpu", **kw), warmup=2, repeats=7)
+                gpu = timeit(lambda: index.query(pts, backend="gpu", **kw), warmup=2, repeats=7)
+                auto = timeit(lambda: index.query(pts, **kw), warmup=2, repeats=7)
+                picks = _dispatch.resolve_backend(None, n, edges_per_point=edges, all_matches=all_matches)
+                flag = "" if (picks == "gpu") == (gpu <= cpu) else "!"
+                row.append(f"{fmt(cpu):>16}  {fmt(gpu):>8}  {fmt(auto):>8}  {picks}{flag:<1}")
+                if not all_matches:
+                    xs.append(n)
+                    ys.append(cpu * 1e6)
+                    if n <= 5_000:
+                        gpu_fixed.append(gpu * 1e6)
+                elif n <= 2_000:
+                    gpu_all_fixed.append(gpu * 1e6)
+            print(f"  {n:>8,}  {row[0]}  | {row[1]}")
+        slope = float(np.polyfit(xs, ys, 1)[0])  # us per point on the CPU path
+        slopes.append((edges, slope))
+    print("  ('!' marks a row where auto picked the slower side)")
+    (e0, s0), (e1, s1) = slopes
+    per_edge = (s1 - s0) / (e1 - e0) if e1 != e0 else 0.0
+    per_point = s0 - per_edge * e0
+    launch = float(np.median(gpu_fixed))
+    launch_all = float(np.median(gpu_all_fixed))
+    print("\n  dispatch constants          current -> measured here")
+    print(f"  CPU_US_PER_POINT            {_dispatch.CPU_US_PER_POINT:.3f} -> {per_point:.3f}")
+    print(f"  CPU_US_PER_EDGE             {_dispatch.CPU_US_PER_EDGE:.5f} -> {per_edge:.5f}")
+    print(f"  GPU_LAUNCH_US               {_dispatch.GPU_LAUNCH_US:.0f} -> {launch:.0f}")
+    print(f"  GPU_ALL_MATCHES_LAUNCH_US   {_dispatch.GPU_ALL_MATCHES_LAUNCH_US:.0f} -> {launch_all:.0f}")
+    e48, e2048 = slopes[0][0], slopes[1][0]
+    print(
+        f"  gpu_min_points()            first match {_dispatch.gpu_min_points(e48)} / "
+        f"{_dispatch.gpu_min_points(e2048)} points (48- / 2048-vertex layer); all matches "
+        f"{_dispatch.gpu_min_points(e48, all_matches=True)} / {_dispatch.gpu_min_points(e2048, all_matches=True)}"
+    )
+
+
 def bench_join(n: int, m: int, rng) -> list[tuple[str, float | None]]:
     pts = make_points(n, rng)
     zones = make_zones(m, rng)
@@ -311,7 +397,7 @@ def report(title: str, rows: list[tuple[str, float | None]]):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--op", choices=["haversine", "knn", "dense-pip", "join"])
+    parser.add_argument("--op", choices=["haversine", "knn", "dense-pip", "join", "crossover"])
     parser.add_argument("--n", type=int, default=1_000_000)
     parser.add_argument("--m", type=int, default=260)
     parser.add_argument("--k", type=int, default=10)
@@ -344,6 +430,7 @@ def main():
         for n in (100_000, 1_000_000, 10_000_000):
             report(f"join {n:,} points x 260 zones", bench_join(n, 260, rng))
         report("join 1,000,000 points x 10,000 zones", bench_join(1_000_000, 10_000, rng))
+        bench_crossover(260, rng)
         return
 
     if args.op == "haversine":
@@ -361,6 +448,8 @@ def main():
         )
     elif args.op == "join":
         report(f"join {args.n:,} points x {args.m:,} zones", bench_join(args.n, args.m, rng))
+    elif args.op == "crossover":
+        bench_crossover(args.m, rng)
     else:
         parser.error("pass --op or --all")
 

@@ -16,10 +16,13 @@ determined by the kernel alone. Device-resident inputs (``mx.array``,
 :class:`~mlx_spatial.LocalPoints`) therefore never touch the host, and the
 output container follows the input container.
 
-Small host-resident workloads (fewer candidate pairs than
-``mlx_spatial._dispatch.GPU_MIN_CANDIDATE_PAIRS``) automatically fall back to
-a shapely STRtree, which beats kernel-launch overhead there; device-resident
-inputs run on the GPU whenever Metal is available.
+Small host-resident workloads automatically fall back to a shapely STRtree:
+``mlx_spatial._dispatch`` compares the GEOS cost (per point plus per candidate
+edge, estimated from the index's per-cell edge work) with the fixed GPU launch
+cost, which puts the crossover at roughly 500-800 points for simple polygons
+and a few dozen for detailed ones (later for all-match queries, whose
+compaction passes cost more). Device-resident inputs run on the GPU whenever
+Metal is available.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ import numpy as np
 import mlx.core as mx
 import shapely
 
-from ._dispatch import GPU_MIN_CANDIDATE_PAIRS, resolve_backend
+from ._dispatch import resolve_backend
 from ._ingest import LocalPoints, PolygonSet, as_point_array
 from ._pip import (
     _ALL_MATCHES_EDGE_WORK_THRESHOLD,
@@ -51,10 +54,6 @@ _GRID_DIRECT_MIN_ENTRIES = 65_536
 _GRID_DIRECT_MIN_CELLS_PER_POLYGON = 256
 _GRID_PACKED_MIN_ENTRIES = 65_536
 _GRID_PACKED_MIN_CELLS_PER_POLYGON = 8
-
-# Host queries small enough that settling an undecided auto dispatch with the
-# float64 host cell lookup is cheaper than a device round trip.
-_HOST_DISPATCH_MAX_POINTS = 65_536
 
 # Default per-launch candidate-pair caps. The fused first-match kernel
 # allocates nothing per pair, so its cap only bounds launch duration (~70-110
@@ -319,6 +318,7 @@ class GridIndex:
             self._cell_all_long_rings = None
             self._max_cell_ring_edges = 0
             self._max_cell_edge_work = 0
+            self._edges_per_point = 0.0
             return
         fb = bboxes[finite]
         self.x0 = float(fb[:, 0].min())
@@ -416,7 +416,8 @@ class GridIndex:
                 ny,
             )
 
-        # Cheap upper bound on candidate pairs for small host queries.
+        # Largest per-cell candidate count: n * _max_cell_count bounds a
+        # query's candidate pairs for the single-launch first-match fast path.
         self._max_cell_count = int(counts.max(initial=0))
 
         # Host selectors need the actual candidate complexity of each cell.
@@ -440,6 +441,12 @@ class GridIndex:
             edge_work, u16_max
         ).astype(np.uint16)
         self._max_cell_edge_work = int(self._cell_edge_work.max(initial=0))
+        # Expected candidate edge work per query point for the CPU/GPU
+        # dispatch cost model: a per-cell mean over candidate-bearing cells,
+        # not a point-density mean, so skewed layers err toward the GPU.
+        self._edges_per_point = (
+            float(self._cell_edge_work[nonempty_cell].mean()) if nonempty_cell.any() else 0.0
+        )
 
         if polyset.max_edges_per_ring >= _PIP_LONG_RING_THRESHOLD:
             geom_ring_edges = np.minimum(
@@ -661,8 +668,11 @@ class GridIndex:
         kernel launch suffices (the call itself does not synchronize); call
         ``mx.eval`` when you need the values.
 
-        Backend: host inputs dispatch on the candidate count (small workloads
-        go to shapely); device inputs run on the GPU whenever Metal is
+        Backend: host inputs dispatch on a cost model (GEOS cost per point and
+        per candidate edge versus the fixed GPU cost of the route), so roughly
+        500-800 simple-polygon points or a few dozen detailed-polygon points
+        already run on the GPU for first match, and all-match queries switch
+        later; device inputs run on the GPU whenever Metal is
         available, since the fallback would need a host copy. ``backend=`` and
         ``MLX_SPATIAL_BACKEND`` override both.
 
@@ -705,37 +715,23 @@ class GridIndex:
             resolve_backend(backend, 0)
             return _empty_result(all_matches, on_device, 0)
 
-        # Resolve the backend before touching the device where the answer does
-        # not depend on the candidate count: explicit or env requests, and
-        # Metal-less hosts, give the same result for 0 and threshold pairs.
-        low = resolve_backend(backend, 0)
-        high = resolve_backend(backend, GPU_MIN_CANDIDATE_PAIRS)
-        bound = n * self._max_cell_count  # >= the candidate-pair total
-        if low == high:
-            chosen = low
-        elif on_device:
-            # auto with device-resident input: the shapely fallback would need
-            # a host copy, so stay on the GPU.
-            chosen = "gpu"
-        elif bound < GPU_MIN_CANDIDATE_PAIRS:
-            # auto: the cheap upper bound already settles small host queries.
-            chosen = "cpu"
-        elif n <= _HOST_DISPATCH_MAX_POINTS:
-            # auto, undecided by the bound, but small: the float64 host lookup
-            # is cheaper than a device round trip, so settle the count there.
-            chosen = resolve_backend(
-                backend, self._candidates(pts64, include_starts=False)[2]
-            )
-        else:
-            chosen = None
-
+        # Dispatch needs no candidate count: the cost model compares the GEOS
+        # cost of n points (per point plus per expected candidate edge) with
+        # the fixed GPU launch cost; device-resident inputs stay on the GPU.
+        chosen = resolve_backend(
+            backend,
+            None if on_device else n,
+            edges_per_point=self._edges_per_point,
+            all_matches=all_matches,
+        )
         if chosen == "cpu":
             if pts64 is None:
                 pts64 = polyset._host_coords(local)
             out = self._query_cpu(pts64, all_matches=all_matches, predicate=predicate)
             return _to_container(out, on_device)
 
-        if chosen == "gpu" and not all_matches and bound <= max_pairs_per_batch:
+        bound = n * self._max_cell_count  # >= the candidate-pair total
+        if not all_matches and bound <= max_pairs_per_batch:
             # Settled GPU first match that fits one launch: assign cells lazily
             # and hand back the lazy kernel result without a device round trip.
             # An empty candidate list simply yields -1 inside the kernel.
@@ -750,14 +746,7 @@ class GridIndex:
             )
             return _to_container(out, on_device)
 
-        cells = self._device_candidates(local)
-        if chosen is None:
-            chosen = resolve_backend(backend, cells[2])
-            if chosen == "cpu":
-                out = self._query_cpu(pts64, all_matches=all_matches, predicate=predicate)
-                return _to_container(out, on_device)
-
-        cell, counts, total_pairs, max_count = cells
+        cell, counts, total_pairs, max_count = self._device_candidates(local)
         if total_pairs == 0:
             return _empty_result(all_matches, on_device, n)
         if all_matches:
