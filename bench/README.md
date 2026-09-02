@@ -4,9 +4,14 @@ Methodology (the honesty rules):
 
 - **End-to-end**: every timing starts from host-resident numpy/shapely inputs
   and includes ingestion, host→device input transfer, device result
-  evaluation, and synchronization. It does not copy MLX results back to
-  NumPy. DuckDB reads from registered in-memory tables; conversion costs count
-  against every framework equally.
+  evaluation, and synchronization. Host-input join rows return NumPy labels
+  (a zero-copy view of the MLX result, so no copy-back is timed); haversine
+  rows leave results as MLX arrays. DuckDB reads from registered in-memory
+  tables; conversion costs count against every framework equally.
+- **Device-resident row**: the join also reports the array-native pattern,
+  ``LocalPoints`` re-centered once with ``PolygonSet.to_local`` and queried
+  many times: input already in unified memory, MLX array out, ``mx.eval``
+  inside the timed region. It is the number an MLX training loop sees.
 - **Dense-PIP exception**: the explicitly labeled dense-PIP microbenchmark
   uses a pre-ingested `PolygonSet` and GPU-resident point array. It isolates
   the direct 2-D Metal kernel from the retained composed fallback/oracle and

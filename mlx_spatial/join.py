@@ -5,13 +5,21 @@ the (sorted) list of polygons whose bbox intersects it, in CSR form. A query
 point maps to exactly one cell; its candidate polygons are that cell's list,
 so the first-match Metal kernel walks that list directly and returns on its
 first containment hit. All-match queries count, prefix-scan, and compact hits
-directly on the GPU without explicit candidate-pair arrays. Grid planning runs
-in float64 on original coordinates, so cell assignment can never disagree
-with the (widened-bbox) kernel test.
+directly on the GPU without explicit candidate-pair arrays.
 
-Small workloads (fewer candidate pairs than
+Cell assignment runs on the GPU in float32 local coordinates through one
+compiled graph. Polygon cell ranges are planned in float64 and padded by more
+than the fp32 assignment error plus the kernel's bbox widening, so every
+polygon whose kernel bbox accepts a point is in that point's cell list: cell
+assignment can only add candidates, never lose a hit, and the answer is
+determined by the kernel alone. Device-resident inputs (``mx.array``,
+:class:`~mlx_spatial.LocalPoints`) therefore never touch the host, and the
+output container follows the input container.
+
+Small host-resident workloads (fewer candidate pairs than
 ``mlx_spatial._dispatch.GPU_MIN_CANDIDATE_PAIRS``) automatically fall back to
-a shapely STRtree, which beats kernel-launch overhead there.
+a shapely STRtree, which beats kernel-launch overhead there; device-resident
+inputs run on the GPU whenever Metal is available.
 """
 
 from __future__ import annotations
@@ -20,8 +28,8 @@ import numpy as np
 import mlx.core as mx
 import shapely
 
-from ._dispatch import resolve_backend
-from ._ingest import PolygonSet, as_point_array
+from ._dispatch import GPU_MIN_CANDIDATE_PAIRS, resolve_backend
+from ._ingest import LocalPoints, PolygonSet, as_point_array
 from ._pip import (
     _ALL_MATCHES_EDGE_WORK_THRESHOLD,
     _PIP_LONG_RING_THRESHOLD,
@@ -43,6 +51,32 @@ _GRID_DIRECT_MIN_ENTRIES = 65_536
 _GRID_DIRECT_MIN_CELLS_PER_POLYGON = 256
 _GRID_PACKED_MIN_ENTRIES = 65_536
 _GRID_PACKED_MIN_CELLS_PER_POLYGON = 8
+
+# Host queries small enough that settling an undecided auto dispatch with the
+# float64 host cell lookup is cheaper than a device round trip.
+_HOST_DISPATCH_MAX_POINTS = 65_536
+
+
+def _cell_graph(x, y, x0, y0, x1, y1, inv_cell, nx, nx_m1, ny_m1, cell_offsets):
+    """fp32 cell assignment for local-frame points (see GridIndex docstring).
+
+    Every scalar arrives as a 0-d array so one compiled Metal kernel serves
+    every index; ``x``/``y`` are split by the caller because a shapeless
+    compile cannot slice inside the graph. NaN/inf coordinates fail the
+    in-grid test and get cell ``-1`` with zero candidates.
+    """
+    in_grid = (x >= x0) & (x <= x1) & (y >= y0) & (y <= y1)
+    ix = mx.clip(mx.floor((x - x0) * inv_cell), 0, nx_m1).astype(mx.int32)
+    iy = mx.clip(mx.floor((y - y0) * inv_cell), 0, ny_m1).astype(mx.int32)
+    cell = mx.where(in_grid, iy * nx + ix, -1)
+    safe = mx.where(in_grid, cell, 0)
+    counts = mx.where(
+        in_grid, mx.take(cell_offsets, safe + 1) - mx.take(cell_offsets, safe), 0
+    )
+    return cell, counts
+
+
+_device_cells = mx.compile(_cell_graph, shapeless=True)
 
 
 def _grid_csr_strategy(total: int, n_polygons: int, n_cells: int) -> str:
@@ -222,6 +256,9 @@ class GridIndex:
         self.polygons = polyset
         self._cell_poly_mx = None
         self._cell_offsets_mx = None
+        self._grid_params_mx = None
+        self._tables_mx = None
+        self._max_cell_count = 0
 
         bboxes = polyset.bboxes  # (M, 4) float64, original coordinates
         finite = np.isfinite(bboxes).all(axis=1)
@@ -266,6 +303,16 @@ class GridIndex:
         cell_size = max(cell_size, min_cell)
 
         # Coarsen until the grid and its CSR entry count are within budget.
+        # Polygon cell ranges are padded by twice the boundary tolerance
+        # (16 ulps of the local extent): more than the kernel's 4.5-ulp bbox
+        # widening plus the fp32 cell-assignment error on the device (under
+        # 8 ulps: the rounded, outward-nudged grid corner, the subtraction,
+        # and the multiply by inv_cell). Whichever cell a point near a cell
+        # line lands in therefore
+        # lists every polygon whose kernel bbox accepts it, and the answer is
+        # determined by the kernel alone. Bboxes that end exactly on a cell
+        # line (adjacent tilings) are listed on both sides.
+        pad = 2.0 * polyset.boundary_tolerance
         finite_idx = np.flatnonzero(finite)
         for _ in range(64):
             nx = max(1, int(np.ceil(width / cell_size)) if width > 0 else 1)
@@ -275,10 +322,10 @@ class GridIndex:
             if nx * ny > max_cells or nx * ny > _INT32_MAX:
                 cell_size *= 2.0
                 continue
-            ix0 = np.clip(np.floor((fb[:, 0] - self.x0) / cell_size), 0, nx - 1).astype(np.int64)
-            iy0 = np.clip(np.floor((fb[:, 1] - self.y0) / cell_size), 0, ny - 1).astype(np.int64)
-            ix1 = np.clip(np.floor((fb[:, 2] - self.x0) / cell_size), 0, nx - 1).astype(np.int64)
-            iy1 = np.clip(np.floor((fb[:, 3] - self.y0) / cell_size), 0, ny - 1).astype(np.int64)
+            ix0 = np.clip(np.floor((fb[:, 0] - pad - self.x0) / cell_size), 0, nx - 1).astype(np.int64)
+            iy0 = np.clip(np.floor((fb[:, 1] - pad - self.y0) / cell_size), 0, ny - 1).astype(np.int64)
+            ix1 = np.clip(np.floor((fb[:, 2] + pad - self.x0) / cell_size), 0, nx - 1).astype(np.int64)
+            iy1 = np.clip(np.floor((fb[:, 3] + pad - self.y0) / cell_size), 0, ny - 1).astype(np.int64)
             cells_per_poly = (ix1 - ix0 + 1) * (iy1 - iy0 + 1)
             total = int(cells_per_poly.sum())
             if total > max_entries:
@@ -323,6 +370,9 @@ class GridIndex:
                 nx,
                 ny,
             )
+
+        # Cheap upper bound on candidate pairs for small host queries.
+        self._max_cell_count = int(counts.max(initial=0))
 
         # Host selectors need the actual candidate complexity of each cell.
         # This avoids routing a query through a cooperative long-ring kernel
@@ -382,7 +432,12 @@ class GridIndex:
         )
 
     def _candidates(self, pts64: np.ndarray, *, include_starts: bool = True):
-        """Cell lookup: candidate counts, CSR starts, total, and cell IDs."""
+        """Float64 host cell lookup: candidate counts, CSR starts, total, cell IDs.
+
+        This is the reference cell assignment (tests compare the device graph
+        against it) and feeds nothing on the query path any more: queries
+        assign cells on the GPU through :meth:`_device_candidates`.
+        """
         x, y = pts64[:, 0], pts64[:, 1]
         # NaN coordinates (empty points) compare False everywhere -> not in grid.
         in_grid = (x >= self.x0) & (x <= self.x1) & (y >= self.y0) & (y <= self.y1)
@@ -408,6 +463,61 @@ class GridIndex:
             self._cell_offsets_mx = mx.array(self._cell_offsets)
             self._cell_poly_mx = mx.array(self._cell_poly)
         return self._cell_offsets_mx, self._cell_poly_mx
+
+    def _device_grid(self) -> tuple:
+        """Lazily cache the fp32 local-frame grid parameters as 0-d arrays.
+
+        Every per-index scalar travels as an ``mx.array``: Python constants
+        would be baked into the compiled graph's Metal source and force a
+        fresh JIT for every index. The outer bounds are rounded outward so the
+        fp32 in-grid test admits every point the float64 test admits.
+        """
+        if self._grid_params_mx is None:
+            ox, oy = self.polygons.origin
+            f32 = np.float32
+            neg_inf, pos_inf = f32(-np.inf), f32(np.inf)
+            cell_offsets_mx, _ = self._device_csr()
+            self._grid_params_mx = (
+                mx.array(np.nextafter(f32(self.x0 - ox), neg_inf)),
+                mx.array(np.nextafter(f32(self.y0 - oy), neg_inf)),
+                mx.array(np.nextafter(f32(self.x1 - ox), pos_inf)),
+                mx.array(np.nextafter(f32(self.y1 - oy), pos_inf)),
+                mx.array(f32(1.0 / self.cell_size)),
+                mx.array(self.nx, dtype=mx.int32),
+                mx.array(self.nx - 1, dtype=mx.int32),
+                mx.array(self.ny - 1, dtype=mx.int32),
+                cell_offsets_mx,
+            )
+        return self._grid_params_mx
+
+    def _device_tables(self) -> tuple:
+        """Lazily cache the per-cell selector summaries on device."""
+        if self._tables_mx is None:
+            self._tables_mx = (
+                None
+                if self._cell_max_ring_edges is None
+                else mx.array(self._cell_max_ring_edges),
+                None
+                if self._cell_all_long_rings is None
+                else mx.array(self._cell_all_long_rings),
+                mx.array(self._cell_edge_work),
+            )
+        return self._tables_mx
+
+    def _device_candidates(self, local: mx.array):
+        """GPU cell lookup for fp32 local points: cell IDs, counts, total, max.
+
+        One synchronization returns the two scalars the dispatcher and the
+        batcher need. Polygon cell ranges were padded at build time by more
+        than the fp32 assignment error, so whichever cell a point near a cell
+        line lands in lists every polygon whose kernel bbox accepts it.
+        """
+        with mx.stream(mx.gpu):
+            cell, counts = _device_cells(local[:, 0], local[:, 1], *self._device_grid())
+            total = counts.sum()
+            cmax = counts.max()
+            mx.eval(cell, counts, total, cmax)
+        return cell, counts, int(total.item()), int(cmax.item())
 
     def _candidate_edge_bounds(
         self, point_cell: np.ndarray
@@ -447,6 +557,40 @@ class GridIndex:
             return 0
         return int(self._cell_max_ring_edges[cells].max(initial=0))
 
+    def _device_first_match_bound(self, cell: mx.array, counts: mx.array) -> int:
+        """Device twin of :meth:`_first_match_ring_bound` (one sync if needed)."""
+        if self._max_cell_ring_edges < _PIP_LONG_RING_THRESHOLD:
+            return 0
+        max_ring_mx, all_long_mx, _ = self._device_tables()
+        with mx.stream(mx.gpu):
+            used = counts > 0
+            safe = mx.maximum(cell, 0)
+            all_long = mx.where(used, mx.take(all_long_mx, safe), True).all()
+            max_ring = mx.where(used, mx.take(max_ring_mx, safe), 0).max()
+            mx.eval(all_long, max_ring)
+        if not bool(all_long.item()):
+            return 0
+        return int(max_ring.item())
+
+    def _device_edge_bounds(self, cells: mx.array) -> tuple[int, int]:
+        """Device twin of :meth:`_candidate_edge_bounds` for candidate-bearing cells."""
+        if (
+            self._max_cell_ring_edges < _PIP_LONG_RING_THRESHOLD
+            and self._max_cell_edge_work < _ALL_MATCHES_EDGE_WORK_THRESHOLD
+        ):
+            return self._max_cell_ring_edges, self._max_cell_edge_work
+        if int(cells.shape[0]) == 0:
+            return 0, 0
+        max_ring_mx, _, edge_work_mx = self._device_tables()
+        with mx.stream(mx.gpu):
+            edge_work = mx.take(edge_work_mx, cells).max()
+            if max_ring_mx is None:
+                mx.eval(edge_work)
+                return 0, int(edge_work.item())
+            max_ring = mx.take(max_ring_mx, cells).max()
+            mx.eval(max_ring, edge_work)
+        return int(max_ring.item()), int(edge_work.item())
+
     def query(
         self,
         points,
@@ -455,13 +599,27 @@ class GridIndex:
         backend: str | None = None,
         predicate: str = "intersects",
         max_pairs_per_batch: int = 16_000_000,
+        _stacklevel: int = 4,
     ):
         """Assign each point to a containing polygon.
 
-        Returns an ``(N,)`` int32 array with the lowest index of a containing
-        polygon, or ``-1``. With ``all_matches=True`` returns
-        ``(point_indices, polygon_indices)`` for every containment pair,
-        sorted by point then polygon.
+        Returns the lowest index of a containing polygon per point (``-1``
+        for none) as an ``(N,)`` int32 array, or with ``all_matches=True``
+        the ``(point_indices, polygon_indices)`` int64 arrays of every
+        containment pair, sorted by point then polygon.
+
+        The output container follows the input: numpy arrays, sequences,
+        shapely points and GeoSeries return NumPy arrays; ``mx.array`` and
+        :class:`~mlx_spatial.LocalPoints` inputs return MLX arrays and the
+        whole query, cell assignment included, runs on the GPU without a host
+        round trip. Device-resident first-match results are lazy when one
+        kernel launch suffices (the call itself does not synchronize); call
+        ``mx.eval`` when you need the values.
+
+        Backend: host inputs dispatch on the candidate count (small workloads
+        go to shapely); device inputs run on the GPU whenever Metal is
+        available, since the fallback would need a host copy. ``backend=`` and
+        ``MLX_SPATIAL_BACKEND`` override both.
 
         ``max_pairs_per_batch`` is a hard upper bound on each GPU kernel
         launch, including when one point alone has more candidates than the
@@ -471,119 +629,172 @@ class GridIndex:
         ``"within"`` (it does not). The two differ only for points exactly on
         a polygon boundary — inside the documented fp32 tolerance band, where
         the GPU result is undefined anyway — so the GPU kernel serves both;
-        the CPU fallback honors the predicate exactly via GEOS.
+        the CPU fallback honors the predicate exactly via GEOS. For
+        device-resident inputs the CPU path sees float32 local coordinates
+        plus the origin, i.e. it is exact only up to that same band.
         """
         if predicate not in ("within", "intersects"):
             raise ValueError(
                 f"predicate must be 'within' or 'intersects', got {predicate!r}"
             )
-        polyset = self.polygons
-        pts64, pts_local = polyset.recenter_points(points)
-        n = len(pts64)
-        if n >= 2**31:
-            raise ValueError("more than 2^31 points per query is not supported")
-
         max_pairs_per_batch = int(max_pairs_per_batch)
         if not 1 <= max_pairs_per_batch < 2**31:
             raise ValueError(
                 f"max_pairs_per_batch must be in [1, 2**31), got {max_pairs_per_batch}"
             )
+        polyset = self.polygons
+        pts64, local, on_device = polyset._ingest_points(points, stacklevel=_stacklevel)
+        n = int(local.shape[0])
+        if n >= 2**31:
+            raise ValueError("more than 2^31 points per query is not supported")
+        if n == 0:
+            resolve_backend(backend, 0)
+            return _empty_result(all_matches, on_device, 0)
 
-        counts, _, total_pairs, point_cell = self._candidates(
-            pts64, include_starts=False
-        )
-        chosen = resolve_backend(backend, total_pairs)
+        # Resolve the backend before touching the device where the answer does
+        # not depend on the candidate count: explicit or env requests, and
+        # Metal-less hosts, give the same result for 0 and threshold pairs.
+        low = resolve_backend(backend, 0)
+        high = resolve_backend(backend, GPU_MIN_CANDIDATE_PAIRS)
+        bound = n * self._max_cell_count  # >= the candidate-pair total
+        if low == high:
+            chosen = low
+        elif on_device:
+            # auto with device-resident input: the shapely fallback would need
+            # a host copy, so stay on the GPU.
+            chosen = "gpu"
+        elif bound < GPU_MIN_CANDIDATE_PAIRS:
+            # auto: the cheap upper bound already settles small host queries.
+            chosen = "cpu"
+        elif n <= _HOST_DISPATCH_MAX_POINTS:
+            # auto, undecided by the bound, but small: the float64 host lookup
+            # is cheaper than a device round trip, so settle the count there.
+            chosen = resolve_backend(
+                backend, self._candidates(pts64, include_starts=False)[2]
+            )
+        else:
+            chosen = None
+
         if chosen == "cpu":
-            del point_cell
-            return self._query_cpu(pts64, all_matches=all_matches, predicate=predicate)
+            if pts64 is None:
+                pts64 = polyset._host_coords(local)
+            out = self._query_cpu(pts64, all_matches=all_matches, predicate=predicate)
+            return _to_container(out, on_device)
 
+        if chosen == "gpu" and not all_matches and bound <= max_pairs_per_batch:
+            # Settled GPU first match that fits one launch: assign cells lazily
+            # and hand back the lazy kernel result without a device round trip.
+            # An empty candidate list simply yields -1 inside the kernel.
+            with mx.stream(mx.gpu):
+                cell, counts = _device_cells(local[:, 0], local[:, 1], *self._device_grid())
+            out = self._query_gpu_first_match(
+                local,
+                cell,
+                counts,
+                total_pairs=bound,
+                max_pairs_per_batch=max_pairs_per_batch,
+            )
+            return _to_container(out, on_device)
+
+        cells = self._device_candidates(local)
+        if chosen is None:
+            chosen = resolve_backend(backend, cells[2])
+            if chosen == "cpu":
+                out = self._query_cpu(pts64, all_matches=all_matches, predicate=predicate)
+                return _to_container(out, on_device)
+
+        cell, counts, total_pairs, max_count = cells
         if total_pairs == 0:
-            if all_matches:
-                return (np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64))
-            return np.full(n, -1, dtype=np.int32)
-
+            return _empty_result(all_matches, on_device, n)
         if all_matches:
-            return self._query_gpu_all_matches(
-                pts_local,
-                point_cell,
+            out = self._query_gpu_all_matches(
+                local,
+                cell,
                 counts,
                 total_pairs=total_pairs,
                 max_pairs_per_batch=max_pairs_per_batch,
             )
-
-        if not all_matches and int(counts.max(initial=0)) <= max_pairs_per_batch:
-            return self._query_gpu_first_match(
-                pts_local,
-                point_cell,
+        elif max_count <= max_pairs_per_batch:
+            out = self._query_gpu_first_match(
+                local,
+                cell,
                 counts,
                 total_pairs=total_pairs,
                 max_pairs_per_batch=max_pairs_per_batch,
             )
-
-        # A first-match query uses this bounded legacy path when one point
-        # alone has more candidates than max_pairs_per_batch and therefore
-        # cannot fit in a whole-point fused launch.
-        cand_starts = self._cell_offsets[np.maximum(point_cell, 0)]
-        return self._query_gpu_pairs(
-            pts_local,
-            counts,
-            cand_starts,
-            total_pairs=total_pairs,
-            max_pairs_per_batch=max_pairs_per_batch,
-        )
+        else:
+            # One point alone has more candidates than the cap, so it cannot
+            # fit in a whole-point fused launch: use the splittable pair path.
+            out = self._query_gpu_pairs(
+                local,
+                cell,
+                counts,
+                total_pairs=total_pairs,
+                max_pairs_per_batch=max_pairs_per_batch,
+            )
+        return _to_container(out, on_device)
 
     def _query_gpu_all_matches(
         self,
-        pts_local: mx.array,
-        point_cell: np.ndarray,
-        counts: np.ndarray,
+        local: mx.array,
+        cell: mx.array,
+        counts: mx.array,
         *,
         total_pairs: int,
         max_pairs_per_batch: int,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[mx.array, mx.array]:
         """GPU count/scan/write compaction, batched by candidate rank."""
-        # Zero-candidate points cannot contribute output. Removing them keeps
-        # every launch compact even when millions of outside rows separate two
-        # candidate-bearing points; active_point remains globally ascending.
-        active_point = np.flatnonzero(counts).astype(np.int32)
-        active_count = counts[active_point].astype(np.int64, copy=False)
-        candidate_offsets = np.concatenate(
-            [np.zeros(1, dtype=np.int64), np.cumsum(active_count, dtype=np.int64)]
-        )
-        if int(candidate_offsets[-1]) != total_pairs:
-            raise RuntimeError("active candidate offsets do not cover all pairs")
-        active_cell = point_cell[active_point]
-
-        active_point_mx = mx.array(active_point)
-        active_cell_mx = mx.array(active_cell)
-        candidate_offsets_mx = mx.array(candidate_offsets)
         cell_offsets_mx, cell_poly_mx = self._device_csr()
+        n = int(local.shape[0])
+        empty = (
+            mx.zeros((0,), dtype=mx.int64),
+            mx.zeros((0,), dtype=mx.int64),
+        )
+        with mx.stream(mx.gpu):
+            # Zero-candidate points cannot contribute output. Compact the
+            # candidate-bearing points on device (their ascending order is the
+            # output order) so millions of outside rows cost no host work.
+            active = counts > 0
+            n_active = int(active.sum().item())
+            if n_active == 0:
+                return empty
+            dest = mx.cumsum(active.astype(mx.int32)) - 1
+            active_point = mx.zeros((n_active + 1,), dtype=mx.int32)
+            # Inactive rows all scatter into the spare last slot, dropped below.
+            active_point[mx.where(active, dest, n_active)] = mx.arange(n, dtype=mx.int32)
+            active_point = active_point[:n_active]
+            active_cell = mx.take(cell, active_point)
+            active_count = mx.take(counts, active_point)
+            candidate_offsets = mx.concatenate(
+                [mx.zeros((1,), dtype=mx.int64), mx.cumsum(active_count)]
+            )
+            mx.eval(active_point, active_cell, candidate_offsets)
+        if int(candidate_offsets[-1].item()) != total_pairs:
+            raise RuntimeError("active candidate offsets do not cover all pairs")
 
-        matches_pt: list[np.ndarray] = []
-        matches_pg: list[np.ndarray] = []
+        matches_pt: list[mx.array] = []
+        matches_pg: list[mx.array] = []
         pair0 = 0
         while pair0 < total_pairs:
             pair1 = min(pair0 + max_pairs_per_batch, total_pairs)
-            active0 = int(np.searchsorted(candidate_offsets, pair0, side="right")) - 1
-            active1 = int(
-                np.searchsorted(candidate_offsets, pair1 - 1, side="right")
-            )
-            # Clip the active prefix offsets to this exact pair-rank batch.
-            # The largest difference detects a single skewed candidate list
-            # even when its cost is hidden by a tiny chunk-wide average.
-            clipped_offsets = np.clip(
-                candidate_offsets[active0 : active1 + 1], pair0, pair1
-            )
-            max_point_pairs = int(np.diff(clipped_offsets).max())
-            max_ring_edges, max_candidate_edges = self._candidate_edge_bounds(
+            with mx.stream(mx.gpu):
+                # searchsorted equivalents: counts of offsets <= a rank.
+                active0 = int((candidate_offsets <= pair0).sum().item()) - 1
+                active1 = int((candidate_offsets <= pair1 - 1).sum().item())
+                # Clip the active prefix offsets to this exact pair-rank batch.
+                # The largest difference detects a single skewed candidate
+                # list even when its cost is hidden by a tiny chunk average.
+                clipped = mx.clip(candidate_offsets[active0 : active1 + 1], pair0, pair1)
+                max_point_pairs = int((clipped[1:] - clipped[:-1]).max().item())
+            max_ring_edges, max_candidate_edges = self._device_edge_bounds(
                 active_cell[active0:active1]
             )
             out_point, out_poly = pip_all_matches(
-                pts_local,
+                local,
                 self.polygons,
-                active_point_mx[active0:active1],
-                active_cell_mx[active0:active1],
-                candidate_offsets_mx[active0 : active1 + 1],
+                active_point[active0:active1],
+                active_cell[active0:active1],
+                candidate_offsets[active0 : active1 + 1],
                 cell_offsets_mx,
                 cell_poly_mx,
                 pair_begin=pair0,
@@ -593,80 +804,90 @@ class GridIndex:
                 max_candidate_edges=max_candidate_edges,
             )
             if int(out_point.shape[0]):
-                matches_pt.append(np.array(out_point))
-                matches_pg.append(np.array(out_poly))
+                matches_pt.append(out_point)
+                matches_pg.append(out_poly)
             pair0 = pair1
 
         if not matches_pt:
-            return (np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64))
+            return empty
         if len(matches_pt) == 1:
             return matches_pt[0], matches_pg[0]
-        return np.concatenate(matches_pt), np.concatenate(matches_pg)
+        with mx.stream(mx.gpu):
+            return mx.concatenate(matches_pt), mx.concatenate(matches_pg)
 
     def _query_gpu_first_match(
         self,
-        pts_local: mx.array,
-        point_cell: np.ndarray,
-        counts: np.ndarray,
+        local: mx.array,
+        cell: mx.array,
+        counts: mx.array,
         *,
         total_pairs: int,
         max_pairs_per_batch: int,
-    ) -> np.ndarray:
+    ) -> mx.array:
         """Point-centric CSR traversal, batched by candidate-work budget."""
         cell_offsets_mx, cell_poly_mx = self._device_csr()
-        point_cell_mx = mx.array(point_cell)
-        n = len(point_cell)
+        n = int(local.shape[0])
 
         if total_pairs <= max_pairs_per_batch:
-            max_ring_edges = self._first_match_ring_bound(point_cell)
-            return np.array(
-                pip_first_match(
-                    pts_local,
-                    self.polygons,
-                    point_cell_mx,
-                    cell_offsets_mx,
-                    cell_poly_mx,
-                    max_ring_edges=max_ring_edges,
-                )
+            max_ring_edges = self._device_first_match_bound(cell, counts)
+            return pip_first_match(
+                local,
+                self.polygons,
+                cell,
+                cell_offsets_mx,
+                cell_poly_mx,
+                max_ring_edges=max_ring_edges,
             )
 
         # Whole-point batches preserve the public hard cap on candidate work
         # per launch. The caller has already routed any individually oversized
-        # point to the splittable explicit-pair path.
-        cum = np.concatenate([[0], np.cumsum(counts)])
-        result = np.empty(n, dtype=np.int32)
+        # point to the splittable explicit-pair path. Batch boundaries come
+        # from the device prefix sum; each needs one small synchronization.
+        with mx.stream(mx.gpu):
+            cum = mx.cumsum(counts)  # inclusive, int64
+            mx.eval(cum)
+        results: list[mx.array] = []
         point0 = 0
+        base = 0
         while point0 < n:
-            pair_limit = int(cum[point0]) + max_pairs_per_batch
-            point1 = int(np.searchsorted(cum, pair_limit, side="right")) - 1
+            with mx.stream(mx.gpu):
+                point1 = int((cum <= base + max_pairs_per_batch).sum().item())
             if point1 <= point0:  # defensive: counts.max() was checked above
                 raise RuntimeError("could not form a bounded fused point batch")
-            max_ring_edges = self._first_match_ring_bound(
-                point_cell[point0:point1]
+            max_ring_edges = self._device_first_match_bound(
+                cell[point0:point1], counts[point0:point1]
             )
-            result[point0:point1] = np.array(
+            results.append(
                 pip_first_match(
-                    pts_local[point0:point1],
+                    local[point0:point1],
                     self.polygons,
-                    point_cell_mx[point0:point1],
+                    cell[point0:point1],
                     cell_offsets_mx,
                     cell_poly_mx,
                     max_ring_edges=max_ring_edges,
                 )
             )
+            base = int(cum[point1 - 1].item())
             point0 = point1
-        return result
+        with mx.stream(mx.gpu):
+            return mx.concatenate(results)
 
     def _query_gpu_pairs(
         self,
-        pts_local: mx.array,
-        counts: np.ndarray,
-        cand_starts: np.ndarray,
+        local: mx.array,
+        cell: mx.array,
+        counts: mx.array,
         *,
         total_pairs: int,
         max_pairs_per_batch: int,
-    ) -> np.ndarray:
-        """Bounded explicit-pair fallback for oversized first-match cells."""
+    ) -> mx.array:
+        """Bounded explicit-pair fallback for oversized first-match cells.
+
+        Rare (one cell holds more polygons than the per-launch cap), so the
+        pair bookkeeping runs on the host from the device-assigned cells.
+        """
+        counts = np.asarray(counts).astype(np.int64, copy=False)
+        cand_starts = self._cell_offsets[np.maximum(np.asarray(cell), 0)]
         n = len(counts)
 
         # Expand candidate pairs in contiguous ranges of the conceptual flat
@@ -701,7 +922,7 @@ class GridIndex:
             )
             flags = np.array(
                 pip_pairs(
-                    pts_local,
+                    local,
                     self.polygons,
                     mx.array(pair_point.astype(np.int32)),
                     mx.array(pair_poly.astype(np.int32)),
@@ -713,7 +934,7 @@ class GridIndex:
             pair0 = pair1
 
         result[result == _INT32_MAX] = -1
-        return result
+        return mx.array(result)
 
     def _query_cpu(
         self, pts64: np.ndarray, *, all_matches: bool, predicate: str = "intersects"
@@ -730,6 +951,40 @@ class GridIndex:
         return result
 
 
+def _empty_result(all_matches: bool, on_device: bool, n: int):
+    """Typed empty/no-match results in the caller's container."""
+    if all_matches:
+        if on_device:
+            return (mx.zeros((0,), dtype=mx.int64), mx.zeros((0,), dtype=mx.int64))
+        return (np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64))
+    if on_device:
+        return mx.full((n,), -1, dtype=mx.int32)
+    return np.full(n, -1, dtype=np.int32)
+
+
+def _to_container(out, on_device: bool):
+    """Output container follows input: MLX for device inputs, NumPy otherwise."""
+    if isinstance(out, tuple):
+        return tuple(_to_container(o, on_device) for o in out)
+    if on_device:
+        return out if isinstance(out, mx.array) else mx.array(out)
+    return out if isinstance(out, np.ndarray) else np.asarray(out)
+
+
+def _point_count(points) -> int:
+    if isinstance(points, LocalPoints):
+        return len(points)
+    if isinstance(points, mx.array):
+        if points.ndim == 1 and points.shape[0] == 2:
+            return 1
+        if points.ndim != 2 or points.shape[1] != 2:
+            raise ValueError(
+                f"expected points of shape (N, 2), got {tuple(points.shape)}"
+            )
+        return int(points.shape[0])
+    return len(as_point_array(points))
+
+
 def point_in_polygon(
     points,
     polygons=None,
@@ -740,6 +995,13 @@ def point_in_polygon(
     predicate: str = "intersects",
 ):
     """First containing polygon per point (``-1`` for none), or all pairs.
+
+    ``points`` may be a numpy array or sequence of ``(lon, lat)`` pairs,
+    shapely Points, a GeoSeries/GeoDataFrame, an ``mx.array``, or
+    :class:`~mlx_spatial.LocalPoints` from :meth:`PolygonSet.to_local`. The
+    output container follows the input: host inputs return NumPy (an int32
+    label array, or two int64 pair arrays with ``all_matches=True``); MLX
+    inputs return MLX arrays computed entirely on the GPU.
 
     ``polygons`` may be shapely geometries, a GeoSeries/GeoDataFrame, or a
     prebuilt :class:`~mlx_spatial.PolygonSet` (reused across queries). The
@@ -756,7 +1018,11 @@ def point_in_polygon(
                 "wraps a different PolygonSet; pass one or the other"
             )
         return index.query(
-            points, all_matches=all_matches, backend=backend, predicate=predicate
+            points,
+            all_matches=all_matches,
+            backend=backend,
+            predicate=predicate,
+            _stacklevel=5,
         )
     if polygons is None:
         raise ValueError("point_in_polygon requires polygons (or a prebuilt index=)")
@@ -775,19 +1041,20 @@ def point_in_polygon(
                 raise ValueError(
                     f"predicate must be 'within' or 'intersects', got {predicate!r}"
                 )
-            pts64 = as_point_array(points)
+            n_points = _point_count(points)
             resolve_backend(backend, 0)
-            if all_matches:
-                return (
-                    np.empty(0, dtype=np.int64),
-                    np.empty(0, dtype=np.int64),
-                )
-            return np.full(len(pts64), -1, dtype=np.int32)
+            return _empty_result(
+                all_matches, isinstance(points, (mx.array, LocalPoints)), n_points
+            )
     polyset = polygons if isinstance(polygons, PolygonSet) else PolygonSet(polygons)
     if polyset._grid_index is None:
         polyset._grid_index = GridIndex(polyset)
     return polyset._grid_index.query(
-        points, all_matches=all_matches, backend=backend, predicate=predicate
+        points,
+        all_matches=all_matches,
+        backend=backend,
+        predicate=predicate,
+        _stacklevel=5,
     )
 
 
@@ -841,8 +1108,8 @@ def sjoin(
         resolve_backend(backend, 0)
         assigned = np.full(len(as_point_array(left_geom)), -1, dtype=np.int32)
     else:
-        assigned = point_in_polygon(
-            left_geom, right_geom, predicate=predicate, backend=backend
+        assigned = np.asarray(
+            point_in_polygon(left_geom, right_geom, predicate=predicate, backend=backend)
         )
     matched = assigned >= 0
 
