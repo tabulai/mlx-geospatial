@@ -35,6 +35,22 @@ pytestmark = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 
 
+def _spy_routes(monkeypatch, routes: dict[str, str]) -> dict[str, int]:
+    """Count calls to ``pip_impl`` entry points; ``routes`` maps label -> attr."""
+    calls = dict.fromkeys(routes, 0)
+
+    def spy(label, original):
+        def wrapped(*args, **kwargs):
+            calls[label] += 1
+            return original(*args, **kwargs)
+
+        return wrapped
+
+    for label, attr in routes.items():
+        monkeypatch.setattr(pip_impl, attr, spy(label, getattr(pip_impl, attr)))
+    return calls
+
+
 def _pair_matrix(pts: np.ndarray, polyset: ms.PolygonSet) -> np.ndarray:
     """Exhaustive (N, M) containment flags through the Metal pair kernel."""
     n, m = len(pts), polyset.n_polygons
@@ -589,42 +605,14 @@ def test_multipolygon_parts_share_vertex():
 
 def test_high_vertex_count_circle(rng, monkeypatch):
     """10k-vertex circle: correctness outside the band, no crash, paths agree."""
-    route_calls = {
-        "pairs_threadgroup": 0,
-        "dense_threadgroup": 0,
-        "first_threadgroup": 0,
-        "all_threadgroup": 0,
-    }
-
-    def spy(name, original):
-        def wrapped(*args, **kwargs):
-            route_calls[name] += 1
-            return original(*args, **kwargs)
-
-        return wrapped
-
-    monkeypatch.setattr(
-        pip_impl,
-        "_pip_pairs_threadgroup",
-        spy("pairs_threadgroup", pip_impl._pip_pairs_threadgroup),
-    )
-    monkeypatch.setattr(
-        pip_impl,
-        "_pip_dense_threadgroup",
-        spy("dense_threadgroup", pip_impl._pip_dense_threadgroup),
-    )
-    monkeypatch.setattr(
-        pip_impl,
-        "_pip_first_match_threadgroup",
-        spy("first_threadgroup", pip_impl._pip_first_match_threadgroup),
-    )
-    monkeypatch.setattr(
-        pip_impl,
-        "_get_all_matches_pair_threadgroup_count_kernel",
-        spy(
-            "all_threadgroup",
-            pip_impl._get_all_matches_pair_threadgroup_count_kernel,
-        ),
+    route_calls = _spy_routes(
+        monkeypatch,
+        {
+            "pairs_threadgroup": "_pip_pairs_threadgroup",
+            "dense_threadgroup": "_pip_dense_threadgroup",
+            "first_threadgroup": "_pip_first_match_threadgroup",
+            "all_threadgroup": "_get_all_matches_pair_threadgroup_count_kernel",
+        },
     )
 
     k = 10_000
@@ -793,3 +781,198 @@ def test_negative_coordinates_and_axis_straddle():
     onb_matrix = _paths_agree(onb, polyset)
     _join_matches_matrix(onb, polyset, onb_matrix)
     assert onb_matrix[0, :2].sum() <= 1, "shared corner claimed by both boxes"
+
+
+# ---------------------------------------------------------------------------
+# 9. cooperative first-match candidate loops (threadgroup-memory reuse)
+# ---------------------------------------------------------------------------
+#
+# The 128-thread first-match kernel reuses one threadgroup-memory slot across
+# every candidate polygon of a cell. A missing barrier between reading one
+# candidate's verdict and the next candidate's write let a lagging SIMDgroup
+# read the wrong verdict, return early, and leave a stale partial parity for
+# the rest of the loop: nondeterministic false matches at low polygon indices,
+# well outside the tolerance band. The hazard needs at least two long
+# candidates per cell and shows up stochastically, more often the more
+# candidates each point visits, so these tests build worst-case candidate
+# lists (every candidate a bbox hit but a parity miss) and require bit-exact
+# agreement with the scalar kernel or shapely on every one of many launches.
+#
+# Scope: the tests detect the loop-carried hazard (reading one verdict versus
+# the next candidate's write, a window as wide as an edge loop). They are not
+# expected to catch removal of the kernel's first caller barrier, which orders
+# the reduction against the read within one candidate and leaves only a
+# window of a few instructions; that barrier is justified by the memory-model
+# argument in the kernel comments. The SIMDgroup first-match route has no
+# threadgroup memory and is included as a same-geometry control. Geometry
+# helpers below are local to this section.
+
+
+def _annulus_with_slit(
+    rng: np.random.Generator, half: int, rotation: float | None = None
+) -> Polygon:
+    """Single-ring annulus: outer boundary, then the reversed inner boundary.
+
+    The two joining edges are radial, at angles ``rotation`` and
+    ``rotation - 2*pi/half``, and form a thin slit, so the ring is simple and
+    valid. Its bbox is ~[-1, 1]^2 while the disc r < 0.45 lies outside the
+    polygon: a point there is a bbox hit and a parity miss for every such
+    candidate, which forces the first-match loop through the whole list. The
+    rotation moves the crossing edges between lanes so each SIMDgroup's
+    partial parity varies from candidate to candidate.
+    """
+    if rotation is None:
+        rotation = rng.uniform(0.0, 2.0 * np.pi)
+    ang = np.linspace(0.0, 2.0 * np.pi, half, endpoint=False) + rotation
+    r_out = rng.uniform(0.85, 1.0, half)
+    r_in = rng.uniform(0.55, 0.7, half)
+    outer = np.column_stack([np.cos(ang) * r_out, np.sin(ang) * r_out])
+    inner = np.column_stack([np.cos(ang) * r_in, np.sin(ang) * r_in])[::-1]
+    return Polygon(np.concatenate([outer, inner]))
+
+
+def _disc(radius: float, k: int) -> Polygon:
+    ang = np.linspace(0.0, 2.0 * np.pi, k, endpoint=False)
+    return Polygon(np.column_stack([radius * np.cos(ang), radius * np.sin(ang)]))
+
+
+def _hole_points(rng: np.random.Generator, n: int) -> np.ndarray:
+    theta = rng.uniform(0.0, 2.0 * np.pi, n)
+    rad = rng.uniform(0.0, 0.45, n)
+    return np.column_stack([np.cos(theta) * rad, np.sin(theta) * rad])
+
+
+def _corner_points(rng: np.random.Generator, n: int) -> np.ndarray:
+    """Points with 1.02 <= |x|, |y| <= 1.18: they miss every annulus bbox (outer
+    radius <= 1), so the loop takes the bbox-miss early write for each annulus,
+    but sit inside the 1.2-disc's bbox and outside the disc (r >= 1.44), so the
+    final candidate runs a full cooperative predicate that misses. Expected -1.
+    """
+    return rng.uniform(1.02, 1.18, (n, 2)) * rng.choice([-1.0, 1.0], (n, 2))
+
+
+def test_first_match_threadgroup_loop_is_race_free():
+    """Many launches of the TG128 first-match kernel on worst-case candidate lists.
+
+    Calls the kernel directly with one cell holding 256 long-ring annuli (all
+    bbox hits, all parity misses for points in the hole) followed by a disc
+    that contains every hole point, so those threadgroups run the candidate
+    loop 257 times and the correct answer is the last index. Corner points
+    take the bbox-miss early write for every annulus instead and end at -1.
+    Detection scales with candidate visits per launch (3584 x 257 here), and
+    1040-edge rings match the production routing range; on the unpatched
+    kernel every launch of this configuration returned wrong answers. Every
+    launch must match the scalar kernel exactly.
+    """
+    # Seeds are pinned rather than taken from the shared rng fixture so the
+    # geometry calibrated against the unpatched kernel is reproduced exactly.
+    rng = np.random.default_rng(20260902)
+    n_annuli, n_hole, n_corner, launches = 256, 3584, 512, 20
+    polys = [_annulus_with_slit(rng, half=520) for _ in range(n_annuli)]
+    polys.append(_disc(1.2, 1100))
+    polys = np.array(polys, dtype=object)
+    assert all(p.is_valid for p in polys)
+    polyset = ms.PolygonSet(polys, origin=(0.0, 0.0))
+    m = polyset.n_polygons
+
+    pts = np.concatenate([_hole_points(rng, n_hole), _corner_points(rng, n_corner)])
+    n_points = len(pts)
+    expected = np.concatenate(
+        [np.full(n_hole, m - 1, dtype=np.int32), np.full(n_corner, -1, dtype=np.int32)]
+    )
+    _, pts_local = polyset.recenter_points(pts)
+    # One grid cell containing every polygon in ascending index order.
+    point_cell = mx.array(np.zeros(n_points, dtype=np.int32))
+    cell_offsets = mx.array(np.array([0, m], dtype=np.int64))
+    cell_poly = mx.array(np.arange(m, dtype=np.int32))
+
+    scalar = np.array(
+        pip_impl.pip_first_match(
+            pts_local, polyset, point_cell, cell_offsets, cell_poly, max_ring_edges=0
+        )
+    )
+    np.testing.assert_array_equal(scalar, expected)
+
+    for launch in range(launches):
+        got = np.array(
+            pip_impl._pip_first_match_threadgroup(
+                pts_local, polyset, point_cell, cell_offsets, cell_poly
+            )
+        )
+        bad = np.flatnonzero(got != scalar)
+        assert bad.size == 0, (
+            f"launch {launch}: {bad.size} points disagree with the scalar kernel, "
+            f"e.g. point {bad[0]} got {got[bad[0]]} expected {scalar[bad[0]]}"
+        )
+
+
+@pytest.mark.parametrize(
+    ("n_points", "route", "launches"),
+    [(1000, "first_threadgroup", 50), (1200, "first_simdgroup", 10)],
+)
+def test_first_match_cooperative_routes_repeat_exactly(
+    n_points, route, launches, monkeypatch
+):
+    """Public join on >= 1024-edge candidates: same answer on every launch.
+
+    Sixty-four 1040-edge annuli plus a 1100-edge disc share one grid cell, so
+    the index routes first-match to the cooperative kernels (threadgroup for
+    n <= max ring edges, SIMDgroup above that). Points in the hole visit all
+    64 parity misses before the disc; points in the annulus band (away from
+    every slit) hit candidate 0 at once; corner points miss all 64 annulus
+    bboxes and then the disc. Every launch must equal the shapely reference.
+    No point is within 1e-2 of a boundary by construction (radii 0.45 /
+    0.55-0.7 / 0.775 / 0.85-1.0 / 1.2 / 1.44+, slits excluded by angle), four
+    orders of magnitude outside the fp32 tolerance band, so no band mask is
+    needed. The threadgroup case detected the race on the unpatched kernel in
+    about 80% of launches; the SIMDgroup case is a control (no threadgroup
+    memory), hence fewer launches.
+    """
+    route_calls = _spy_routes(
+        monkeypatch,
+        {
+            "first_threadgroup": "_pip_first_match_threadgroup",
+            "first_simdgroup": "_pip_first_match_simdgroup",
+        },
+    )
+
+    # Pinned seed: the slit-avoiding band sample below depends on the stream.
+    rng = np.random.default_rng(20260902 + n_points)
+    half = 520
+    rotations = rng.uniform(0.0, 2.0 * np.pi, 64)
+    polys = [_annulus_with_slit(rng, half, rotation=rot) for rot in rotations]
+    polys.append(_disc(1.2, 1100))
+    polys = np.array(polys, dtype=object)
+    assert all(p.is_valid for p in polys)
+    polyset = ms.PolygonSet(polys, origin=(0.0, 0.0))
+    assert polyset.max_edges_per_ring == 1100
+    index = ms.GridIndex(polyset, cell_size=4.0)
+    assert index.n_cells == 1
+
+    n_side = n_points // 10
+    n_hole = n_points - 2 * n_side
+    # Band points stay at least two slit widths away from every slit edge.
+    theta = rng.uniform(0.0, 2.0 * np.pi, 20 * n_side)
+    gap = 2.0 * np.pi / half
+    offset = (theta[:, None] - rotations[None, :] + np.pi) % (2.0 * np.pi) - np.pi
+    theta = theta[(np.abs(offset) > 3.0 * gap).all(axis=1)][:n_side]
+    assert len(theta) == n_side
+    band = np.column_stack([0.775 * np.cos(theta), 0.775 * np.sin(theta)])
+    corners = _corner_points(rng, n_side)
+    pts = np.concatenate([_hole_points(rng, n_hole), band, corners], axis=0)
+
+    ref = reference_assign(pts, polys)
+    assert (ref[:n_hole] == 64).all()
+    assert (ref[n_hole:-n_side] == 0).all()
+    assert (ref[-n_side:] == -1).all()
+
+    for launch in range(launches):
+        got = np.asarray(index.query(pts, backend="gpu"), dtype=np.int64)
+        bad = np.flatnonzero(got != ref)
+        assert bad.size == 0, (
+            f"launch {launch}: {bad.size} points disagree with shapely, "
+            f"e.g. point {bad[0]} got {got[bad[0]]} expected {ref[bad[0]]}"
+        )
+    assert route_calls[route] == launches, route_calls
+    other = "first_simdgroup" if route == "first_threadgroup" else "first_threadgroup"
+    assert route_calls[other] == 0, route_calls
