@@ -132,7 +132,11 @@ _PIP_SIMDGROUP_HEADER = """
 _PIP_THREADGROUP_HEADER = """
     // Four SIMDgroups cooperatively evaluate one point/polygon predicate.
     // Lane zero receives the final parity in partial[0]. Callers that need
-    // every lane to observe it add one more threadgroup barrier.
+    // every lane to observe it add one more threadgroup barrier. Callers
+    // that reuse `partial` for several predicates in a loop must also
+    // barrier again after reading partial[0], before the next call: the next
+    // predicate writes partial[0] before its own reduction barrier, so a
+    // lagging SIMDgroup would otherwise read the next verdict as this one.
     #pragma clang fp contract(off)
     template <typename Coords, typename RingOffsets,
               typename GeomRingOffsets, typename Bboxes>
@@ -277,7 +281,16 @@ _FIRST_MATCH_THREADGROUP_KERNEL_SOURCE = """
         // Unlike the pair kernel, every SIMDgroup must observe the reduced
         // predicate before it can uniformly continue or return.
         threadgroup_barrier(mem_flags::mem_threadgroup);
-        if (partial[0]) {
+        uint hit = partial[0];
+        // The next candidate's predicate overwrites partial[0] (SIMDgroup 0
+        // publishes its own parity there before the reduction barrier, and a
+        // bbox miss writes 0 immediately). Without this second barrier a
+        // lagging SIMDgroup could read that later value as this candidate's
+        // verdict, return early, and leave its partial[simd] stale for every
+        // remaining candidate: a write-after-read hazard on threadgroup
+        // memory that produced false matches at low polygon indices.
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (hit) {
             if (local == 0) match[pt] = pg;
             return;
         }
