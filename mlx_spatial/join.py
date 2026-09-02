@@ -56,6 +56,48 @@ _GRID_PACKED_MIN_CELLS_PER_POLYGON = 8
 # float64 host cell lookup is cheaper than a device round trip.
 _HOST_DISPATCH_MAX_POINTS = 65_536
 
+# Default per-launch candidate-pair caps. The fused first-match kernel
+# allocates nothing per pair, so its cap only bounds launch duration (~70-110
+# ms for 256M pairs on an M4 Max, depending on candidates per point);
+# all-match compaction scans per pair, so its
+# batches stay small enough to keep those buffers around 100 MB.
+_FIRST_MATCH_MAX_PAIRS_PER_BATCH = 256_000_000
+_ALL_MATCHES_MAX_PAIRS_PER_BATCH = 16_000_000
+
+# The default grid refines below the median bbox side only while the padded
+# CSR stays this dense: uniform zone layers need ~24 entries per polygon at a
+# quarter of the median and edge-aligned tilings 36, whereas a few large
+# polygons among many small ones would need hundreds and inflate the index
+# 10x or more, so those layers back off to a half, then the median.
+_GRID_REFINE_MAX_ENTRIES_PER_POLYGON = 40
+
+
+def _plan_cells(cell_size, fb, x0, y0, width, height, pad, max_cells, max_entries):
+    """Coarsen ``cell_size`` until grid and padded CSR fit the budgets.
+
+    Returns ``(cell_size, nx, ny, ix0, iy0, ix1, iy1, cells_per_poly, total)``
+    or ``None`` when no doubling within 64 steps fits.
+    """
+    for _ in range(64):
+        nx = max(1, int(np.ceil(width / cell_size)) if width > 0 else 1)
+        ny = max(1, int(np.ceil(height / cell_size)) if height > 0 else 1)
+        # Cell ids are part of the public/internal int32 query contract.
+        # Coarsen even if a caller supplies a larger max_cells budget.
+        if nx * ny > max_cells or nx * ny > _INT32_MAX:
+            cell_size *= 2.0
+            continue
+        ix0 = np.clip(np.floor((fb[:, 0] - pad - x0) / cell_size), 0, nx - 1).astype(np.int64)
+        iy0 = np.clip(np.floor((fb[:, 1] - pad - y0) / cell_size), 0, ny - 1).astype(np.int64)
+        ix1 = np.clip(np.floor((fb[:, 2] + pad - x0) / cell_size), 0, nx - 1).astype(np.int64)
+        iy1 = np.clip(np.floor((fb[:, 3] + pad - y0) / cell_size), 0, ny - 1).astype(np.int64)
+        cells_per_poly = (ix1 - ix0 + 1) * (iy1 - iy0 + 1)
+        total = int(cells_per_poly.sum())
+        if total > max_entries:
+            cell_size *= 2.0
+            continue
+        return cell_size, nx, ny, ix0, iy0, ix1, iy1, cells_per_poly, total
+    return None
+
 
 def _cell_graph(x, y, x0, y0, x1, y1, inv_cell, nx, nx_m1, ny_m1, cell_offsets):
     """fp32 cell assignment for local-frame points (see GridIndex docstring).
@@ -287,53 +329,56 @@ class GridIndex:
         width = max(x1 - self.x0, 0.0)
         height = max(y1 - self.y0, 0.0)
 
-        if cell_size is None:
-            spans = np.maximum(fb[:, 2] - fb[:, 0], fb[:, 3] - fb[:, 1])
-            cell_size = float(np.median(spans))
-            if cell_size <= 0.0:
-                cell_size = max(width, height) / 64.0
-            if cell_size <= 0.0:
-                cell_size = 1.0
-        cell_size = float(cell_size)
-        if cell_size <= 0.0 or not np.isfinite(cell_size):
-            raise ValueError("cell_size must be positive and finite")
-        # Guard the coarsening loop against float overflow (width / cell_size
-        # -> inf) when the cell is absurdly small relative to the extent.
-        min_cell = max(width, height, 1.0) * 1e-12
-        cell_size = max(cell_size, min_cell)
-
-        # Coarsen until the grid and its CSR entry count are within budget.
         # Polygon cell ranges are padded by twice the boundary tolerance
         # (16 ulps of the local extent): more than the kernel's 4.5-ulp bbox
         # widening plus the fp32 cell-assignment error on the device (under
         # 8 ulps: the rounded, outward-nudged grid corner, the subtraction,
         # and the multiply by inv_cell). Whichever cell a point near a cell
-        # line lands in therefore
-        # lists every polygon whose kernel bbox accepts it, and the answer is
-        # determined by the kernel alone. Bboxes that end exactly on a cell
-        # line (adjacent tilings) are listed on both sides.
+        # line lands in therefore lists every polygon whose kernel bbox
+        # accepts it, and the answer is determined by the kernel alone. Bboxes
+        # that end exactly on a cell line (edge-aligned tilings) are listed on
+        # both sides.
         pad = 2.0 * polyset.boundary_tolerance
         finite_idx = np.flatnonzero(finite)
-        for _ in range(64):
-            nx = max(1, int(np.ceil(width / cell_size)) if width > 0 else 1)
-            ny = max(1, int(np.ceil(height / cell_size)) if height > 0 else 1)
-            # Cell ids are part of the public/internal int32 query contract.
-            # Coarsen even if a caller supplies a larger max_cells budget.
-            if nx * ny > max_cells or nx * ny > _INT32_MAX:
-                cell_size *= 2.0
-                continue
-            ix0 = np.clip(np.floor((fb[:, 0] - pad - self.x0) / cell_size), 0, nx - 1).astype(np.int64)
-            iy0 = np.clip(np.floor((fb[:, 1] - pad - self.y0) / cell_size), 0, ny - 1).astype(np.int64)
-            ix1 = np.clip(np.floor((fb[:, 2] + pad - self.x0) / cell_size), 0, nx - 1).astype(np.int64)
-            iy1 = np.clip(np.floor((fb[:, 3] + pad - self.y0) / cell_size), 0, ny - 1).astype(np.int64)
-            cells_per_poly = (ix1 - ix0 + 1) * (iy1 - iy0 + 1)
-            total = int(cells_per_poly.sum())
-            if total > max_entries:
-                cell_size *= 2.0
-                continue
-            break
+        # Guard the coarsening loop against float overflow (width / cell_size
+        # -> inf) when the cell is absurdly small relative to the extent.
+        min_cell = max(width, height, 1.0) * 1e-12
+
+        if cell_size is None:
+            # Default: a quarter of the median (longer) bbox side. Against the
+            # median itself it cuts candidates per point ~2.5x and kernel time
+            # ~40% on random zones and takes edge-aligned tilings from 9
+            # candidates per point to about 2, for a 4-6x larger but still
+            # small CSR. Refinement backs off (half, then the median) while the
+            # CSR would exceed _GRID_REFINE_MAX_ENTRIES_PER_POLYGON, which is
+            # what a few large polygons among many small ones would cause.
+            spans = np.maximum(fb[:, 2] - fb[:, 0], fb[:, 3] - fb[:, 1])
+            base = float(np.median(spans))
+            if base <= 0.0:
+                base = max(width, height) / 64.0
+            if base <= 0.0:
+                base = 1.0
+            ladder = [base / 4.0, base / 2.0, base]
         else:
+            cell_size = float(cell_size)
+            if cell_size <= 0.0 or not np.isfinite(cell_size):
+                raise ValueError("cell_size must be positive and finite")
+            ladder = [cell_size]
+
+        plan = None
+        for step, candidate in enumerate(ladder):
+            plan = _plan_cells(
+                max(candidate, min_cell), fb, self.x0, self.y0, width, height,
+                pad, max_cells, max_entries,
+            )
+            if plan is None:
+                continue
+            refining = step < len(ladder) - 1
+            if not refining or plan[8] <= _GRID_REFINE_MAX_ENTRIES_PER_POLYGON * finite_idx.size:
+                break
+        if plan is None:
             raise ValueError("could not build a grid within the memory budget")
+        cell_size, nx, ny, ix0, iy0, ix1, iy1, cells_per_poly, total = plan
 
         self.cell_size = cell_size
         self.nx, self.ny = nx, ny
@@ -598,7 +643,7 @@ class GridIndex:
         all_matches: bool = False,
         backend: str | None = None,
         predicate: str = "intersects",
-        max_pairs_per_batch: int = 16_000_000,
+        max_pairs_per_batch: int | None = None,
         _stacklevel: int = 4,
     ):
         """Assign each point to a containing polygon.
@@ -623,7 +668,10 @@ class GridIndex:
 
         ``max_pairs_per_batch`` is a hard upper bound on each GPU kernel
         launch, including when one point alone has more candidates than the
-        requested batch size.
+        requested batch size. ``None`` selects the route default: 256M
+        candidate pairs for first match, whose fused kernel allocates nothing
+        per pair, and 16M for all-match compaction, whose scan buffers scale
+        with the batch.
 
         ``predicate`` is ``"intersects"`` (boundary counts as a match) or
         ``"within"`` (it does not). The two differ only for points exactly on
@@ -636,6 +684,12 @@ class GridIndex:
         if predicate not in ("within", "intersects"):
             raise ValueError(
                 f"predicate must be 'within' or 'intersects', got {predicate!r}"
+            )
+        if max_pairs_per_batch is None:
+            max_pairs_per_batch = (
+                _ALL_MATCHES_MAX_PAIRS_PER_BATCH
+                if all_matches
+                else _FIRST_MATCH_MAX_PAIRS_PER_BATCH
             )
         max_pairs_per_batch = int(max_pairs_per_batch)
         if not 1 <= max_pairs_per_batch < 2**31:

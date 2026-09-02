@@ -429,16 +429,17 @@ def test_empty_nan_and_zero_polygon_device_results(workload):
 def test_padded_ranges_cover_cell_line_points_on_a_tiling():
     """Points within a few ulps of cell lines get one answer on every route.
 
-    An 8x8 unit tiling puts every bbox edge exactly on a cell line, the
-    worst case for fp32 assignment. Padding lists each tile in the
-    neighbouring cells too (9 candidates for an interior point instead of
-    4), so host float64 planning and device fp32 assignment agree bit for bit
-    and match shapely outside the band.
+    An 8x8 unit tiling puts every bbox edge exactly on a cell line (every
+    fourth line with the default quarter-median cells), the worst case for
+    fp32 assignment. Padding lists each tile on both sides of those lines, so
+    host float64 planning and device fp32 assignment agree bit for bit and
+    match shapely outside the band; a point in a tile's central cells sees
+    one candidate, edge cells two, corner cells four.
     """
     polys = make_grid_polygons(8, 8)
     polyset = PolygonSet(polys)
     index = GridIndex(polyset)
-    assert index.cell_size == 1.0 and (index.nx, index.ny) == (8, 8)
+    assert index.cell_size == 0.25 and (index.nx, index.ny) == (32, 32)
     ulp = float32_resolution(polyset.max_abs_coord)
     lines = np.arange(0.0, 9.0)
     ks = np.array([-32, -16, -8, -4, -2, -1, 1, 2, 4, 8, 16, 32])
@@ -452,8 +453,9 @@ def test_padded_ranges_cover_cell_line_points_on_a_tiling():
             np.array([[4.5, 4.5], [0.5, 7.5]]),
         ]
     )
-    counts, _, _, _ = index._candidates(np.array([[4.5, 4.5]]))
-    assert counts[0] == 9  # conscious cost of padding on tilings
+    counts, _, _, _ = index._candidates(np.array([[4.5, 4.5], [4.0, 4.5]]))
+    assert counts[0] == 1  # interior point: only its own tile
+    assert counts[1] == 2  # on a shared edge: padding lists both tiles
 
     host = index.query(pts, backend="gpu")
     device = index.query(polyset.to_local(pts))

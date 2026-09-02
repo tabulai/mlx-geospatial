@@ -104,10 +104,17 @@ without leaving unified memory (float32 inputs and `LocalPoints` entirely on
 the GPU; float64 re-centering on the MLX CPU stream). The distance functions
 always return MLX arrays; `sjoin` returns pandas.
 
-`GridIndex` construction is adaptive: low-coverage bbox expansions use stable
+`GridIndex` cells default to a quarter of the median polygon bbox's longer
+side (about three candidates per point on typical zone layers), backing off
+to a half or the median itself when a few large polygons among many small
+ones would inflate the index, and coarsening further to fit the cell/entry
+budgets. Construction is adaptive: low-coverage bbox expansions use stable
 integer sorting, more expanded grids use lower-memory packed-key sorting, and
 material high-occupancy grids use a sort-free direct CSR fill. Every route
-retains ascending polygon IDs within each cell.
+retains ascending polygon IDs within each cell. Pass a prebuilt `PolygonSet`
+to `point_in_polygon`/`sjoin`, or a `GridIndex` via
+`point_in_polygon(points, index=grid)`, to reuse ingestion and the index
+across calls.
 
 Conventions: coordinates are `(x, y)` = `(lon, lat)`, degrees; planar math
 for containment (project first if you need metric correctness near poles);
@@ -137,8 +144,8 @@ structurally rather than hopefully:
   bbox widening plus the fp32 assignment error — so whichever cell a point
   near a cell line lands in lists every polygon whose kernel bbox accepts it:
   rounding can only add candidate pairs, never lose a true hit, and host and
-  device inputs give bit-identical answers. Adjacent tilings pay for this with
-  each tile listed in the neighbouring cells too (9 candidates instead of 4).
+  device inputs give bit-identical answers. Tilings whose edges fall on cell
+  lines pay for this with each tile listed on both sides of those lines.
 - **Device inputs**: host float64 coordinates and `mx.array` float64 inputs
   (build them with `mx.array(x, dtype=mx.float64)`; a plain `mx.array` of a
   float64 NumPy array is silently float32) are re-centered in float64 and keep
@@ -185,22 +192,22 @@ NYC-like extent; mlx-spatial numbers use a warm index. The first mlx-spatial
 column is NumPy in → NumPy out; the second is the array-native pattern:
 `LocalPoints` re-centered once, MLX array out, `mx.eval` inside the timing.
 Speedups are against the NumPy column. The harness also reports cold runs with
-polygon ingestion and index construction included: 6.8 ms at 1M × 260 zones,
-31 ms at 1M × 10k zones):
+polygon ingestion and index construction included: 3.8 ms at 1M × 260 zones,
+19 ms at 1M × 10k zones):
 
 | workload | mlx-spatial (NumPy) | mlx-spatial (LocalPoints) | shapely STRtree | GeoPandas sjoin | DuckDB spatial |
 | --- | --- | --- | --- | --- | --- |
-| 100k pts × 260 zones | **1.8 ms** | 1.6 ms | 60 ms (33x) | 28 ms (16x) | 118 ms (66x) |
-| 1M pts × 260 zones | **5.0 ms** | 3.9 ms | 611 ms (122x) | 576 ms (115x) | 550 ms (110x) |
-| 10M pts × 260 zones | **44 ms** | 33 ms | 6.4 s (145x) | 10.1 s (230x) | 6.6 s (150x) |
-| 1M pts × 10k zones | **5.1 ms** | 2.9 ms | 896 ms (177x) | 710 ms (140x) | 577 ms (114x) |
+| 100k pts × 260 zones | **1.0 ms** | 0.95 ms | 61 ms (59x) | 28 ms (28x) | 118 ms (116x) |
+| 1M pts × 260 zones | **2.5 ms** | 1.5 ms | 608 ms (247x) | 581 ms (236x) | 550 ms (224x) |
+| 10M pts × 260 zones | **24 ms** | 13 ms | 6.4 s (262x) | 10.3 s (426x) | 6.6 s (273x) |
+| 1M pts × 10k zones | **3.1 ms** | 1.6 ms | 892 ms (290x) | 692 ms (225x) | 576 ms (188x) |
 
 **Haversine** (`mx.compile`-fused distances; kNN via adaptive scalar/SIMDgroup
 selection kernels):
 
 | workload | mlx-spatial | numpy float64 | scikit-learn |
 | --- | --- | --- | --- |
-| cross 20k × 20k | **19 ms** | 2.64 s (139x) | 3.91 s (206x) |
+| cross 20k × 20k | **9.6 ms** | 2.67 s (278x) | 3.91 s (406x) |
 | knn 1k queries × 1M refs, k=10 | **26.6 ms** | — | BallTree 328 ms (12.3x) |
 | knn 1M queries × 10k refs, k=10 | **154 ms** | — | BallTree 4.54 s (30x) |
 | knn 200k queries × 200k refs, k=10 | **562 ms** | — | BallTree 1.22 s (2.2x) |

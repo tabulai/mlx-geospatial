@@ -228,11 +228,16 @@ def as_point_array(points) -> np.ndarray:
         # empty points below.
         if not np.all((type_ids == GeometryType.POINT.value) | (type_ids == -1)):
             raise ValueError("object arrays must contain only Point geometries")
+        coords = shapely.get_coordinates(arr)
+        if len(coords) == len(arr):
+            # Every geometry produced one row: no empty or missing points, so
+            # the is_empty pass and the masked copy are unnecessary.
+            return np.ascontiguousarray(coords, dtype=np.float64)
         # get_coordinates emits no row for empty or missing points; preserve
         # alignment with NaN rows instead of silently shifting every later row.
         out = np.full((len(arr), 2), np.nan, dtype=np.float64)
         present = (type_ids == GeometryType.POINT.value) & ~shapely.is_empty(arr)
-        out[present] = shapely.get_coordinates(arr[present])
+        out[present] = coords
         return out
     pts = np.asarray(arr, dtype=np.float64)
     if pts.ndim == 1 and pts.size == 2:
@@ -334,7 +339,13 @@ class PolygonSet:
         self.bboxes = shapely.bounds(arr).astype(np.float64)
 
         if origin is None:
-            origin = compute_origin(coords)
+            # shapely.bounds is exact, so for valid geometries the bbox
+            # extremes are the vertex extremes and this is the vertex-derived
+            # origin bit for bit, at 20-45x less cost than an axis-0 reduction
+            # over every vertex. (GEOS envelopes use the shell only, so an
+            # invalid polygon whose hole pokes outside its shell gets a
+            # different, still valid, origin.)
+            origin = compute_origin(self.bboxes[:, 0:2], self.bboxes[:, 2:4])
         # Own, frozen copy: aliasing a caller-owned (writable) array would let
         # a later mutation desynchronize the CPU fallback (which re-centers
         # query points with self.origin) from the already-uploaded GPU coords.
@@ -361,8 +372,14 @@ class PolygonSet:
             # by either PIP implementation. The cheap global-span test avoids
             # allocating a full delta array for ordinary coordinate ranges;
             # only a globally extreme set needs the edge-precise check.
-            local_lo = coords_local.min(axis=0).astype(np.float64)
-            local_hi = coords_local.max(axis=0).astype(np.float64)
+            # Column-wise reductions: numpy's axis-0 reduction over a (C, 2)
+            # array walks row by row and is ~30x slower.
+            local_lo = np.array(
+                [coords_local[:, 0].min(), coords_local[:, 1].min()], dtype=np.float64
+            )
+            local_hi = np.array(
+                [coords_local[:, 0].max(), coords_local[:, 1].max()], dtype=np.float64
+            )
             if np.any(local_hi - local_lo > float(np.finfo(np.float32).max)):
                 with np.errstate(over="ignore", invalid="ignore"):
                     consecutive_delta = coords_local[1:] - coords_local[:-1]

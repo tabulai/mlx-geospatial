@@ -963,3 +963,67 @@ def test_padded_cell_ranges_make_rounding_boundary_route_independent():
     assert host_set <= {(0, 1)}
     np.testing.assert_array_equal(device_pairs[0], host_pairs[0])
     np.testing.assert_array_equal(device_pairs[1], host_pairs[1])
+
+
+class TestRouteDefaults:
+    def test_default_cell_size_is_a_quarter_of_the_median_span(self):
+        index = GridIndex(make_grid_polygons(6, 5))
+        assert index.cell_size == 0.25 and (index.nx, index.ny) == (24, 20)
+        rng = np.random.default_rng(11)
+        polys = make_convex_polygons(200, rng)
+        bb = shapely.bounds(polys)
+        median = float(np.median(np.maximum(bb[:, 2] - bb[:, 0], bb[:, 3] - bb[:, 1])))
+        assert GridIndex(polys).cell_size == median / 4.0
+        assert GridIndex(polys, cell_size=median).cell_size == median
+
+    def test_max_pairs_per_batch_none_selects_route_defaults(self, rng, monkeypatch):
+        import mlx_spatial.join as join
+
+        assert join._FIRST_MATCH_MAX_PAIRS_PER_BATCH > join._ALL_MATCHES_MAX_PAIRS_PER_BATCH
+        polys = make_grid_polygons(10, 10)
+        pts = rng.uniform(-0.5, 10.5, size=(6000, 2))
+        index = GridIndex(polys)
+        first_calls, all_calls = [], []
+
+        def first_spy(*args, **kwargs):
+            first_calls.append(1)
+            return pip_first_match(*args, **kwargs)
+
+        def all_spy(*args, **kwargs):
+            all_calls.append(1)
+            return pip_all_matches(*args, **kwargs)
+
+        monkeypatch.setattr("mlx_spatial.join.pip_first_match", first_spy)
+        monkeypatch.setattr("mlx_spatial.join.pip_all_matches", all_spy)
+        expected = np.asarray(index.query(pts, backend="gpu"))
+        assert len(first_calls) == 1  # 6000 points fit one launch under the real default
+        # Shrink the route defaults: None must pick each route's own constant.
+        monkeypatch.setattr(join, "_FIRST_MATCH_MAX_PAIRS_PER_BATCH", 1000)
+        monkeypatch.setattr(join, "_ALL_MATCHES_MAX_PAIRS_PER_BATCH", 500)
+        first_calls.clear()
+        np.testing.assert_array_equal(index.query(pts, backend="gpu"), expected)
+        assert len(first_calls) > 1
+        index.query(pts, backend="gpu", all_matches=True)
+        assert len(all_calls) > 1
+        with pytest.raises(ValueError):
+            index.query(pts, backend="gpu", max_pairs_per_batch=0)
+
+    def test_default_cell_refinement_backs_off_on_skewed_layers(self, rng):
+        """A few huge polygons among many small ones must not inflate the CSR."""
+        from mlx_spatial import join
+
+        small = make_convex_polygons(3000, rng, radius_frac=0.005)
+        huge = [shapely.box(-1.2, -1.2, 1.2, 1.2), shapely.box(-1.1, -1.0, 0.9, 1.1)]
+        polys = np.concatenate([small, np.array(huge, dtype=object)])
+        bb = shapely.bounds(polys)
+        median = float(np.median(np.maximum(bb[:, 2] - bb[:, 0], bb[:, 3] - bb[:, 1])))
+        index = GridIndex(polys)
+        assert index.cell_size in (median / 2.0, median)  # backed off from the quarter
+        assert len(index._cell_poly) <= join._GRID_REFINE_MAX_ENTRIES_PER_POLYGON * len(polys)
+        forced = GridIndex(polys, cell_size=median / 4.0)  # explicit sizes are honoured
+        assert forced.cell_size == median / 4.0
+        assert len(forced._cell_poly) > len(index._cell_poly)
+        pts = rng.uniform(-1.2, 1.2, size=(20_000, 2))
+        np.testing.assert_array_equal(
+            index.query(pts, backend="gpu"), forced.query(pts, backend="gpu")
+        )

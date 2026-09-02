@@ -11,8 +11,10 @@ far below the ~0.5% sphere-vs-ellipsoid modeling error inherent to
 haversine. Exception: within ~2 degrees of the exact antipode the arcsin
 amplifies fp32 rounding, growing absolute error to 10^2-10^4 m (relative
 error stays below ~2e-4). Degree-to-radian conversion happens in float64
-whenever the input is a CPU array. Chunked paths peak at ~2x the result size
-(chunks are concatenated at the end).
+whenever the input is a CPU array. ``haversine_cross`` runs as one fused
+launch by default (the result is the only allocation); an explicit
+``chunk_bytes`` bounds the rows per launch and then peaks at ~2x the result
+size while chunks are concatenated.
 """
 
 from __future__ import annotations
@@ -365,9 +367,16 @@ def haversine_cross(
     *,
     radius: float = R_EARTH_M,
     degrees: bool = True,
-    chunk_bytes: int = 512 * 1024 * 1024,
+    chunk_bytes: int | None = None,
 ) -> mx.array:
-    """All-pairs distance matrix: ``(N, 2) x (M, 2) -> (N, M)``."""
+    """All-pairs distance matrix: ``(N, 2) x (M, 2) -> (N, M)``.
+
+    The distance graph is compiled into one fused kernel, so by default the
+    whole matrix is a single launch and the result is the only allocation
+    (MLX handles results beyond 2^31 elements). Pass ``chunk_bytes`` to
+    bound the rows per launch instead; the chunks are concatenated at the
+    end, so peak memory then reaches about twice the result size.
+    """
     radius = _check_radius(radius)
     a = _prep(a, degrees)
     b = _prep(b, degrees)
@@ -376,15 +385,15 @@ def haversine_cross(
     n, m = a.shape[0], b.shape[0]
     lon2 = b[:, 0][None, :]
     lat2 = b[:, 1][None, :]
-    rows_per_chunk = max(1, chunk_bytes // max(m * 4 * 4, 1))
+    if chunk_bytes is None:
+        return _hav(a[:, 0:1], a[:, 1:2], lon2, lat2, radius)
+    rows_per_chunk = max(1, operator.index(chunk_bytes) // max(m * 4 * 4, 1))
     if rows_per_chunk >= n:
         return _hav(a[:, 0:1], a[:, 1:2], lon2, lat2, radius)
-    chunks = []
-    for start in range(0, n, rows_per_chunk):
-        stop = min(start + rows_per_chunk, n)
-        d = _hav(a[start:stop, 0:1], a[start:stop, 1:2], lon2, lat2, radius)
-        mx.eval(d)
-        chunks.append(d)
+    chunks = [
+        _hav(a[start : start + rows_per_chunk, 0:1], a[start : start + rows_per_chunk, 1:2], lon2, lat2, radius)
+        for start in range(0, n, rows_per_chunk)
+    ]
     return mx.concatenate(chunks, axis=0)
 
 

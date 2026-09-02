@@ -93,18 +93,19 @@ def _clean_backend_env(monkeypatch):
 
 @pytest.fixture(scope="module")
 def grid_workload():
-    """8x8 unit-square tiling + 50k strictly-interior points.
+    """8x8 unit-square tiling + 100k strictly-interior points.
 
-    Enough candidate pairs (~3.5 per point) to exceed GPU_MIN_CANDIDATE_PAIRS,
-    so 'auto' would pick the GPU. Points stay >= 0.05 from every edge --
-    far outside the fp32 tolerance band -- so GPU and CPU answers are both
-    exactly the golden STRtree assignment.
+    Enough candidate pairs (~1.9 per point with the quarter-median default
+    grid) to exceed GPU_MIN_CANDIDATE_PAIRS, so 'auto' would pick the GPU.
+    Points stay >= 0.05 from every edge -- far outside the fp32 tolerance
+    band -- so GPU and CPU answers are both exactly the golden STRtree
+    assignment.
     """
     rng = np.random.default_rng(987654321)
     polys = make_grid_polygons(8, 8, cell=1.0)
     polyset = ms.PolygonSet(polys)
     index = ms.GridIndex(polyset)
-    n = 50_000
+    n = 100_000
     ij = rng.integers(0, 8, size=(n, 2)).astype(np.float64)
     offs = rng.uniform(0.05, 0.95, size=(n, 2))
     pts = ij + offs

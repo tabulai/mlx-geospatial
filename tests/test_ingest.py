@@ -646,3 +646,44 @@ def test_polygonset_validation_errors():
                 [[shapely.box(0, 0, 1, 1)], [shapely.box(1, 1, 2, 2)]], dtype=object
             )
         )
+
+
+# ---------------------------------------------------------------------------
+# ingestion fast paths (bit-identical shortcuts)
+# ---------------------------------------------------------------------------
+
+
+def test_origin_from_bounds_matches_vertex_origin():
+    """The default origin is derived from shapely bounds, not every vertex."""
+    rng = np.random.default_rng(7)
+    polys = list(make_convex_polygons(40, rng, extent=(-74.3, 40.5, -73.7, 40.9)))
+    polys += [Polygon(), MultiPolygon([shapely.box(-74.0, 40.6, -73.9, 40.7), shapely.box(-73.8, 40.8, -73.75, 40.85)])]
+    polys.append(Polygon([(-74.2, 40.55, 5.0), (-74.1, 40.55, 6.0), (-74.15, 40.65, 7.0)]))  # Z dropped
+    arr = np.array(polys, dtype=object)
+    ps = ms.PolygonSet(arr)
+    _, coords, _ = shapely.to_ragged_array(arr)
+    expected = compute_origin(coords[:, :2])
+    np.testing.assert_array_equal(ps.origin, expected)
+    # Bounds-derived and vertex-derived extremes agree exactly by construction.
+    bb = ps.bboxes
+    np.testing.assert_array_equal(np.nanmin(bb[:, 0:2], axis=0), coords[:, :2].min(axis=0))
+    np.testing.assert_array_equal(np.nanmax(bb[:, 2:4], axis=0), coords[:, :2].max(axis=0))
+
+
+def test_as_point_array_fast_path_matches_masked_path():
+    rng = np.random.default_rng(8)
+    xy = rng.uniform(-1, 1, size=(1000, 2))
+    pure = shapely.points(xy)
+    out = ms.as_point_array(pure)
+    np.testing.assert_array_equal(out, xy)
+    assert out.dtype == np.float64 and out.flags.c_contiguous
+    # Z coordinates are dropped on the fast path too.
+    with_z = shapely.points(np.column_stack([xy, np.arange(len(xy))]))
+    np.testing.assert_array_equal(ms.as_point_array(with_z), xy)
+    # Empty and missing points still become NaN rows in place.
+    mixed = np.array(list(pure[:3]) + [Point(), None] + list(pure[3:6]), dtype=object)
+    got = ms.as_point_array(mixed)
+    assert got.shape == (8, 2)
+    np.testing.assert_array_equal(got[:3], xy[:3])
+    assert np.isnan(got[3:5]).all()
+    np.testing.assert_array_equal(got[5:], xy[3:6])
