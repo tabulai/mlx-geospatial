@@ -8,7 +8,9 @@ semantics, error paths, empty results, and the GPU-forced backend.
 
 Golden comparisons exclude the documented fp32 boundary-tolerance band via
 ``near_boundary_mask`` (points within ``PolygonSet.boundary_tolerance`` of an
-edge may classify either way by contract).
+edge may classify either way by contract) and call ``geopandas.sjoin`` with
+its default predicate (``intersects``), which is also ours; outside the band
+``within`` would give the same golden.
 """
 
 from __future__ import annotations
@@ -90,7 +92,7 @@ def test_inner_rangeindex_row_for_row_golden(rng):
     right = gpd.GeoDataFrame({"zid": np.arange(25)}, geometry=list(polys))
 
     ours = ms.sjoin(left, right, how="inner")
-    theirs = gpd.sjoin(left, right, how="inner", predicate="within")
+    theirs = gpd.sjoin(left, right, how="inner")
     ok = ok_labels(left, pts, polys)
 
     # disjoint polygons: first-match == only-match, so the joins must agree
@@ -113,7 +115,7 @@ def test_left_rangeindex_golden(rng):
     right = gpd.GeoDataFrame({"zid": np.arange(25)}, geometry=list(polys))
 
     ours = ms.sjoin(left, right, how="left")
-    theirs = gpd.sjoin(left, right, how="left", predicate="within")
+    theirs = gpd.sjoin(left, right, how="left")
     ok = ok_labels(left, pts, polys)
 
     assert len(ours) == len(left)
@@ -153,7 +155,7 @@ def test_shuffled_int_index_labels_carried(rng):
 
     for how in ("inner", "left"):
         ours = ms.sjoin(left, right, how=how)
-        theirs = gpd.sjoin(left, right, how=how, predicate="within")
+        theirs = gpd.sjoin(left, right, how=how)
         ok = ok_labels(left, pts, polys)
         assert pair_counter(ours, ok) == pair_counter(theirs, ok)
         # index_right carries the right frame's ORIGINAL labels
@@ -180,7 +182,7 @@ def test_string_index_labels_on_right(rng):
     )
 
     ours = ms.sjoin(left, right, how="inner")
-    theirs = gpd.sjoin(left, right, how="inner", predicate="within")
+    theirs = gpd.sjoin(left, right, how="inner")
     ok = ok_labels(left, pts, polys)
     assert pair_counter(ours, ok) == pair_counter(theirs, ok)
     assert set(ours["index_right"]).issubset(set(labels))
@@ -288,7 +290,7 @@ def test_overlap_min_reduction_rangeindex(rng):
     right = gpd.GeoDataFrame({"zid": np.arange(60)}, geometry=list(polys))
 
     ours = ms.sjoin(left, right, how="inner")
-    theirs = gpd.sjoin(left, right, how="inner", predicate="within")
+    theirs = gpd.sjoin(left, right, how="inner")
     ok = ok_labels(left, pts, polys)
 
     # sanity: overlaps actually occur (some point matches >= 2 polygons)
@@ -319,7 +321,7 @@ def test_overlap_shuffled_labels_use_positional_min(rng):
     right = gpd.GeoDataFrame({"zid": np.arange(3)}, geometry=list(polys), index=labels)
 
     ours = ms.sjoin(left, right, how="inner")
-    theirs = gpd.sjoin(left, right, how="inner", predicate="within")
+    theirs = gpd.sjoin(left, right, how="inner")
     ok = ok_labels(left, pts, polys)
 
     # golden expectation: label of the *minimum position* among all matches
@@ -357,7 +359,7 @@ def test_plain_pandas_dataframes_roundtrip(rng):
     right_g = gpd.GeoDataFrame(right_pd.drop(columns="geometry"), geometry=list(polys), index=right_labels)
 
     ok = ok_labels(left_pd, pts, polys)
-    golden = gpd.sjoin(left_g, right_g, how="inner", predicate="within")
+    golden = gpd.sjoin(left_g, right_g, how="inner")
 
     out = ms.sjoin(left_pd, right_pd, how="inner")
     assert isinstance(out, pd.DataFrame)
@@ -502,7 +504,7 @@ def test_gpu_backend_golden(rng, monkeypatch):
     default = ms.sjoin(left, right, how="inner")  # auto -> CPU at this size
     monkeypatch.setenv("MLX_SPATIAL_BACKEND", "gpu")
     ours = ms.sjoin(left, right, how="inner")
-    theirs = gpd.sjoin(left, right, how="inner", predicate="within")
+    theirs = gpd.sjoin(left, right, how="inner")
     ok = ok_labels(left, pts, polys)
 
     theirs_min = theirs.groupby(level=0)["index_right"].min()  # RangeIndex: label==pos
@@ -545,7 +547,7 @@ def test_multipolygon_and_hole_right(rng):
         index=pd.Index(["H", "M"]),
     )
     ours = ms.sjoin(left, right, how="inner")
-    theirs = gpd.sjoin(left, right, how="inner", predicate="within")
+    theirs = gpd.sjoin(left, right, how="inner")
     assert pair_counter(ours) == pair_counter(theirs)
     assert pair_counter(ours) == Counter({(0, "H"): 1, (2, "M"): 1, (3, "M"): 1})
     out_l = ms.sjoin(left, right, how="left")
@@ -565,7 +567,7 @@ def test_duplicate_right_labels_no_row_fanout():
         {"zid": ["A", "B"]}, geometry=polys, index=pd.Index([5, 5])
     )
     ours = ms.sjoin(left, right, how="inner")
-    theirs = gpd.sjoin(left, right, how="inner", predicate="within")
+    theirs = gpd.sjoin(left, right, how="inner")
     # each point is in exactly one polygon: one row per point, and the right
     # attribute must come from the containing polygon
     assert len(ours) == len(theirs) == 2

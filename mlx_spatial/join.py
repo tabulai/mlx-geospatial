@@ -16,13 +16,20 @@ determined by the kernel alone. Device-resident inputs (``mx.array``,
 :class:`~mlx_spatial.LocalPoints`) therefore never touch the host, and the
 output container follows the input container.
 
-Small host-resident workloads automatically fall back to a shapely STRtree:
-``mlx_spatial._dispatch`` compares the GEOS cost (per point plus per candidate
-edge, estimated from the index's per-cell edge work) with the fixed GPU launch
-cost, which puts the crossover at roughly 500-800 points for simple polygons
-and a few dozen for detailed ones (later for all-match queries, whose
-compaction passes cost more). Device-resident inputs run on the GPU whenever
-Metal is available.
+One containment contract: the fp32 even-odd rule in re-centered coordinates,
+on every backend. The host fallback assigns cells with the device graph's fp32
+arithmetic and evaluates the same predicate in NumPy with the kernels'
+operation order, so CPU and GPU results are bit-identical for every input
+(valid geometry or not; the one exception is fp32 subnormals, below ~1e-38,
+which Metal flushes to zero and NumPy keeps: a coordinate, an edge delta or an
+intermediate of the crossing test that small can differ, which needs local
+coordinates themselves near 1e-38 and never occurs for real-world units) and
+auto dispatch can never change an answer. GEOS enters only through the
+opt-in ``exact_boundary=True`` re-check of near-boundary points. Small
+host-resident workloads take the fallback: ``mlx_spatial._dispatch`` compares
+its cost (per point plus per candidate edge, estimated from the index's
+per-cell edge work) with the fixed GPU launch cost. Device-resident inputs run
+on the GPU whenever Metal is available.
 """
 
 from __future__ import annotations
@@ -33,6 +40,7 @@ import shapely
 
 from ._dispatch import resolve_backend
 from ._ingest import LocalPoints, PolygonSet, as_point_array
+from ._precision import recenter
 from ._pip import (
     _ALL_MATCHES_EDGE_WORK_THRESHOLD,
     _PIP_LONG_RING_THRESHOLD,
@@ -69,6 +77,22 @@ _ALL_MATCHES_MAX_PAIRS_PER_BATCH = 16_000_000
 # polygons among many small ones would need hundreds and inflate the index
 # 10x or more, so those layers back off to a half, then the median.
 _GRID_REFINE_MAX_ENTRIES_PER_POLYGON = 40
+
+# Host fallback chunking. Pair-level arrays cost ~100 bytes per candidate pair
+# and the (pair, edge) crossing rows ~50 bytes each, so points are processed
+# in slices holding at most _CPU_PAIRS_PER_CHUNK candidate pairs and each
+# slice's crossing rows _CPU_ROWS_PER_CHUNK at a time: peak memory stays
+# around 250-300 MB whatever the point count (the fallback is the only route
+# on Metal-less hosts). Chunking changes nothing in the arithmetic.
+_CPU_PAIRS_PER_CHUNK = 1_000_000
+_CPU_ROWS_PER_CHUNK = 2_000_000
+# exact_boundary's near-boundary search: points per STRtree query, and the
+# candidate (point, edge) pair count above which a slice is retried shorter
+# (the tree output costs 16 bytes per pair; the distance test itself runs over
+# _CPU_ROWS_PER_CHUNK pairs at a time).
+_NEAR_BOUNDARY_POINTS_PER_SLICE = 1_000_000
+_NEAR_BOUNDARY_PAIRS_PER_SLICE = 8_000_000
+_NEAR_BOUNDARY_PROBE_POINTS = 4096
 
 
 def _plan_cells(cell_size, fb, x0, y0, width, height, pad, max_cells, max_entries):
@@ -298,6 +322,7 @@ class GridIndex:
         self._cell_poly_mx = None
         self._cell_offsets_mx = None
         self._grid_params_mx = None
+        self._grid_params_np = None
         self._tables_mx = None
         self._max_cell_count = 0
 
@@ -305,8 +330,8 @@ class GridIndex:
         finite = np.isfinite(bboxes).all(axis=1)
         if not finite.any():
             # Every geometry is empty: a degenerate grid whose bounds exclude
-            # all points, so every query yields zero candidates (and the CPU
-            # fallback's STRtree finds nothing either).
+            # all points, so every query yields zero candidates on either
+            # backend.
             self.x0 = self.y0 = 0.0
             self.x1 = self.y1 = -1.0
             self.cell_size = 1.0
@@ -486,9 +511,12 @@ class GridIndex:
     def _candidates(self, pts64: np.ndarray, *, include_starts: bool = True):
         """Float64 host cell lookup: candidate counts, CSR starts, total, cell IDs.
 
-        This is the reference cell assignment (tests compare the device graph
-        against it) and feeds nothing on the query path any more: queries
-        assign cells on the GPU through :meth:`_device_candidates`.
+        This is the exact-bounds reference cell assignment (tests compare the
+        device graph against it) and feeds nothing on the query path: GPU
+        queries assign cells through :meth:`_device_candidates` and the host
+        fallback through :meth:`_host_candidates`, both in fp32 against the
+        outward-nudged bounds, so a point a fraction of an ulp outside the
+        float64 extent gets the same answer on every route.
         """
         x, y = pts64[:, 0], pts64[:, 1]
         # NaN coordinates (empty points) compare False everywhere -> not in grid.
@@ -516,31 +544,74 @@ class GridIndex:
             self._cell_poly_mx = mx.array(self._cell_poly)
         return self._cell_offsets_mx, self._cell_poly_mx
 
+    def _host_grid(self) -> tuple:
+        """fp32 local-frame grid bounds and reciprocal cell size (np.float32).
+
+        The outer bounds are rounded outward so the fp32 in-grid test admits
+        every point the float64 test admits. Both the device graph and the
+        host fallback assign cells from exactly these five scalars.
+        """
+        if self._grid_params_np is None:
+            ox, oy = self.polygons.origin
+            f32 = np.float32
+            neg_inf, pos_inf = f32(-np.inf), f32(np.inf)
+            self._grid_params_np = (
+                np.nextafter(f32(self.x0 - ox), neg_inf),
+                np.nextafter(f32(self.y0 - oy), neg_inf),
+                np.nextafter(f32(self.x1 - ox), pos_inf),
+                np.nextafter(f32(self.y1 - oy), pos_inf),
+                f32(1.0 / self.cell_size),
+            )
+        return self._grid_params_np
+
     def _device_grid(self) -> tuple:
         """Lazily cache the fp32 local-frame grid parameters as 0-d arrays.
 
         Every per-index scalar travels as an ``mx.array``: Python constants
         would be baked into the compiled graph's Metal source and force a
-        fresh JIT for every index. The outer bounds are rounded outward so the
-        fp32 in-grid test admits every point the float64 test admits.
+        fresh JIT for every index. Bounds come from :meth:`_host_grid`.
         """
         if self._grid_params_mx is None:
-            ox, oy = self.polygons.origin
-            f32 = np.float32
-            neg_inf, pos_inf = f32(-np.inf), f32(np.inf)
+            x0, y0, x1, y1, inv_cell = self._host_grid()
             cell_offsets_mx, _ = self._device_csr()
             self._grid_params_mx = (
-                mx.array(np.nextafter(f32(self.x0 - ox), neg_inf)),
-                mx.array(np.nextafter(f32(self.y0 - oy), neg_inf)),
-                mx.array(np.nextafter(f32(self.x1 - ox), pos_inf)),
-                mx.array(np.nextafter(f32(self.y1 - oy), pos_inf)),
-                mx.array(f32(1.0 / self.cell_size)),
+                mx.array(x0),
+                mx.array(y0),
+                mx.array(x1),
+                mx.array(y1),
+                mx.array(inv_cell),
                 mx.array(self.nx, dtype=mx.int32),
                 mx.array(self.nx - 1, dtype=mx.int32),
                 mx.array(self.ny - 1, dtype=mx.int32),
                 cell_offsets_mx,
             )
         return self._grid_params_mx
+
+    def _host_candidates(self, pts32: np.ndarray):
+        """Host twin of :func:`_cell_graph`: candidate counts, CSR starts, total.
+
+        ``pts32`` is the ``(N, 2)`` float32 local-frame array the kernels see.
+        The in-grid test and the cell arithmetic run in float32 against the
+        same outward-nudged bounds and reciprocal cell size as the device
+        graph, so the fallback admits exactly the points the GPU admits. (A
+        one-ulp difference in the cell itself would not matter: padded cell
+        ranges make the answer independent of which cell a point lands in.)
+        NaN/inf coordinates fail the in-grid test and get zero candidates.
+        """
+        x0, y0, x1, y1, inv_cell = self._host_grid()
+        x, y = pts32[:, 0], pts32[:, 1]
+        in_grid = (x >= x0) & (x <= x1) & (y >= y0) & (y <= y1)
+        xs = np.where(in_grid, x, x0)
+        ys = np.where(in_grid, y, y0)
+        ix = np.clip(np.floor((xs - x0) * inv_cell), 0, self.nx - 1).astype(np.int64)
+        iy = np.clip(np.floor((ys - y0) * inv_cell), 0, self.ny - 1).astype(np.int64)
+        cell_id = np.where(in_grid, iy * self.nx + ix, 0)
+        counts = np.where(
+            in_grid,
+            self._cell_offsets[cell_id + 1] - self._cell_offsets[cell_id],
+            0,
+        )
+        return counts, self._cell_offsets[cell_id], int(counts.sum())
 
     def _device_tables(self) -> tuple:
         """Lazily cache the per-cell selector summaries on device."""
@@ -650,6 +721,7 @@ class GridIndex:
         all_matches: bool = False,
         backend: str | None = None,
         predicate: str = "intersects",
+        exact_boundary: bool = False,
         max_pairs_per_batch: int | None = None,
         _stacklevel: int = 4,
     ):
@@ -668,13 +740,16 @@ class GridIndex:
         kernel launch suffices (the call itself does not synchronize); call
         ``mx.eval`` when you need the values.
 
-        Backend: host inputs dispatch on a cost model (GEOS cost per point and
-        per candidate edge versus the fixed GPU cost of the route), so roughly
-        500-800 simple-polygon points or a few dozen detailed-polygon points
-        already run on the GPU for first match, and all-match queries switch
-        later; device inputs run on the GPU whenever Metal is
-        available, since the fallback would need a host copy. ``backend=`` and
-        ``MLX_SPATIAL_BACKEND`` override both.
+        Backend: host inputs dispatch on a cost model (the NumPy fallback's
+        cost per point and per candidate edge versus the fixed GPU cost of the
+        route), so a few hundred points against typical zone layers, a couple
+        of thousand against sparse tilings or fewer than ten against detailed
+        polygons already run on the GPU for first match, and all-match queries
+        switch about four times later; device inputs run on the GPU whenever
+        Metal is available, since the fallback would need a host copy.
+        ``backend=`` and ``MLX_SPATIAL_BACKEND`` override both; ``backend="cpu"``
+        on device inputs copies the fp32 local coordinates to the host and
+        runs the same predicate there.
 
         ``max_pairs_per_batch`` is a hard upper bound on each GPU kernel
         launch, including when one point alone has more candidates than the
@@ -683,17 +758,41 @@ class GridIndex:
         per pair, and 16M for all-match compaction, whose scan buffers scale
         with the batch.
 
+        One containment contract on every backend: the fp32 even-odd rule in
+        re-centered coordinates. The CPU fallback assigns cells with the
+        device graph's fp32 arithmetic and evaluates the same predicate in
+        NumPy with the kernels' operation order, so ``backend="cpu"`` and
+        ``backend="gpu"`` are bit-identical for every input, valid geometry or
+        not, and auto dispatch can never change an answer. (Only fp32
+        subnormals, below ~1e-38, escape this: Metal flushes them to zero and
+        NumPy keeps them, so a coordinate, an edge delta or an intermediate of
+        the crossing test that small can differ; that needs local coordinates
+        themselves near 1e-38 and never occurs for real-world units.)
+
         ``predicate`` is ``"intersects"`` (boundary counts as a match) or
-        ``"within"`` (it does not). The two differ only for points exactly on
-        a polygon boundary — inside the documented fp32 tolerance band, where
-        the GPU result is undefined anyway — so the GPU kernel serves both;
-        the CPU fallback honors the predicate exactly via GEOS. For
-        device-resident inputs the CPU path sees float32 local coordinates
-        plus the origin, i.e. it is exact only up to that same band.
+        ``"within"`` (it does not), accepted for GeoPandas compatibility. The
+        two differ only for points exactly on a polygon boundary, inside the
+        fp32 tolerance band where the even-odd result is undefined, so by
+        default both return the same result. ``exact_boundary=True`` re-checks
+        every point within ``PolygonSet.boundary_tolerance`` of a boundary with
+        GEOS honoring ``predicate``. Finding those points is a host pass over
+        all points (an STRtree over tolerance-widened edge boxes plus a
+        float64 distance test: roughly 0.3 s per million points on 48-vertex
+        zones, 0.5 s on 10k zones), cheaper than a full shapely join but far
+        from GPU speed, so reserve it for boundary-sensitive work. Only the
+        band is re-checked: interior points of invalid geometry keep the
+        even-odd answer (valid geometry assumed; ``validate=True`` rejects the
+        rest). It needs host coordinates, so it is not available for
+        device-resident inputs.
         """
         if predicate not in ("within", "intersects"):
             raise ValueError(
                 f"predicate must be 'within' or 'intersects', got {predicate!r}"
+            )
+        if exact_boundary and isinstance(points, (mx.array, LocalPoints)):
+            raise ValueError(
+                "exact_boundary=True needs host coordinates (GEOS re-checks the "
+                "near-boundary points); pass the original NumPy/GeoSeries points"
             )
         if max_pairs_per_batch is None:
             max_pairs_per_batch = (
@@ -707,28 +806,43 @@ class GridIndex:
                 f"max_pairs_per_batch must be in [1, 2**31), got {max_pairs_per_batch}"
             )
         polyset = self.polygons
-        pts64, local, on_device = polyset._ingest_points(points, stacklevel=_stacklevel)
-        n = int(local.shape[0])
+        # Host inputs defer the MLX local array: the fallback re-centers in
+        # NumPy (bit-identical) and never needs it.
+        pts64, local, on_device = polyset._ingest_points(
+            points, stacklevel=_stacklevel, defer_local=True
+        )
+        n = int(local.shape[0]) if on_device else len(pts64)
         if n >= 2**31:
             raise ValueError("more than 2^31 points per query is not supported")
         if n == 0:
             resolve_backend(backend, 0)
             return _empty_result(all_matches, on_device, 0)
 
-        # Dispatch needs no candidate count: the cost model compares the GEOS
-        # cost of n points (per point plus per expected candidate edge) with
-        # the fixed GPU launch cost; device-resident inputs stay on the GPU.
+        # Dispatch needs no candidate count: the cost model compares the
+        # fallback's cost for n points (per point plus per expected candidate
+        # edge) with the fixed GPU launch cost; device inputs stay on the GPU.
         chosen = resolve_backend(
             backend,
             None if on_device else n,
             edges_per_point=self._edges_per_point,
             all_matches=all_matches,
         )
-        if chosen == "cpu":
-            if pts64 is None:
-                pts64 = polyset._host_coords(local)
-            out = self._query_cpu(pts64, all_matches=all_matches, predicate=predicate)
+        def finish(out):
+            if exact_boundary:
+                out = self._refine_boundary(
+                    pts64, out, all_matches=all_matches, predicate=predicate
+                )
             return _to_container(out, on_device)
+
+        if chosen == "cpu":
+            # The fallback works on the very float32 local array the kernels
+            # would see: device inputs are copied out as they are (no lossy
+            # float64 round trip through the origin), host inputs re-centered
+            # in NumPy, bit for bit what the MLX CPU stream produces.
+            pts32 = np.asarray(local) if on_device else recenter(pts64, polyset.origin)
+            return finish(self._query_cpu(pts32, all_matches=all_matches, predicate=predicate))
+        if local is None:
+            local = polyset._local_from_f64(pts64)
 
         bound = n * self._max_cell_count  # >= the candidate-pair total
         if not all_matches and bound <= max_pairs_per_batch:
@@ -744,11 +858,11 @@ class GridIndex:
                 total_pairs=bound,
                 max_pairs_per_batch=max_pairs_per_batch,
             )
-            return _to_container(out, on_device)
+            return finish(out)
 
         cell, counts, total_pairs, max_count = self._device_candidates(local)
         if total_pairs == 0:
-            return _empty_result(all_matches, on_device, n)
+            return finish(_empty_result(all_matches, False, n))
         if all_matches:
             out = self._query_gpu_all_matches(
                 local,
@@ -775,7 +889,7 @@ class GridIndex:
                 total_pairs=total_pairs,
                 max_pairs_per_batch=max_pairs_per_batch,
             )
-        return _to_container(out, on_device)
+        return finish(out)
 
     def _query_gpu_all_matches(
         self,
@@ -980,18 +1094,215 @@ class GridIndex:
         return mx.array(result)
 
     def _query_cpu(
-        self, pts64: np.ndarray, *, all_matches: bool, predicate: str = "intersects"
+        self,
+        pts32: np.ndarray,
+        *,
+        all_matches: bool,
+        predicate: str = "intersects",
     ):
-        """shapely STRtree fallback with matching first-match semantics."""
-        tree = self.polygons.strtree
-        pt_idx, poly_idx = tree.query(shapely.points(pts64), predicate=predicate)
-        if all_matches:
-            order = np.lexsort((poly_idx, pt_idx))
-            return pt_idx[order].astype(np.int64), poly_idx[order].astype(np.int64)
-        result = np.full(len(pts64), _INT32_MAX, dtype=np.int32)
-        np.minimum.at(result, pt_idx, poly_idx.astype(np.int32))
-        result[result == _INT32_MAX] = -1
-        return result
+        """Host fallback: the kernels' fp32 even-odd predicate, in NumPy.
+
+        ``pts32`` is the ``(N, 2)`` float32 local-frame array the kernels
+        would see. Same cell assignment (:meth:`_host_candidates`, the device
+        graph's fp32 arithmetic against the outward-nudged bounds), same
+        widened float32 kernel bboxes, and the same float32 operation order as
+        the Metal kernels and the composed oracle (every op rounded on its
+        own, divide before multiply), so the result is bit-identical to the
+        GPU path for every input outside the fp32 subnormal range, valid
+        geometry or not. Points are processed
+        in slices bounded by candidate pairs and crossing rows
+        (``_CPU_PAIRS_PER_CHUNK``, ``_CPU_ROWS_PER_CHUNK``) so memory does not
+        grow with the point count. ``predicate`` is accepted for signature
+        compatibility; both predicates evaluate the same rule here as on the
+        GPU (see :meth:`query`).
+        """
+        pts32 = np.ascontiguousarray(pts32, dtype=np.float32)
+        n = len(pts32)
+        counts, starts, total = self._host_candidates(pts32)
+        if total == 0:
+            return _empty_result(all_matches, False, n)
+
+        cum = np.cumsum(counts)
+        result = None if all_matches else np.full(n, -1, dtype=np.int32)
+        pairs_pt: list[np.ndarray] = []
+        pairs_pg: list[np.ndarray] = []
+        point0 = 0
+        while point0 < n:
+            base = int(cum[point0 - 1]) if point0 else 0
+            point1 = int(np.searchsorted(cum, base + _CPU_PAIRS_PER_CHUNK, side="right"))
+            point1 = max(point1, point0 + 1)
+            hit_pt, hit_pg = self._cpu_hits(pts32, counts, starts, point0, point1)
+            if hit_pt.size:
+                if all_matches:
+                    pairs_pt.append(hit_pt.astype(np.int64))
+                    pairs_pg.append(hit_pg.astype(np.int64))
+                else:
+                    # Pairs are point-major and ascending in polygon, so the
+                    # first pair of each point is its lowest containing polygon.
+                    first = np.unique(hit_pt, return_index=True)[1]
+                    result[hit_pt[first]] = hit_pg[first]
+            point0 = point1
+
+        if not all_matches:
+            return result
+        if not pairs_pt:
+            return _empty_result(True, False, n)
+        return np.concatenate(pairs_pt), np.concatenate(pairs_pg)
+
+    def _cpu_hits(self, pts32, counts, starts, point0: int, point1: int):
+        """Containment pairs ``(point, polygon)`` (int32) for one point slice.
+
+        Explicit candidate pairs from the CSR lists (sorted, so pairs are
+        point-major and ascending in polygon), the kernel's bbox reject, then
+        the crossing test over ``(pair, edge)`` rows in bounded chunks.
+        """
+        polyset = self.polygons
+        c = counts[point0:point1]
+        total = int(c.sum())
+        empty = np.empty(0, dtype=np.int32)
+        if total == 0:
+            return empty, empty
+        pair_point = np.repeat(np.arange(point0, point1, dtype=np.int32), c)
+        run_start = np.repeat(np.cumsum(c) - c, c)
+        pair_poly = self._cell_poly[
+            np.repeat(starts[point0:point1], c) + (np.arange(total) - run_start)
+        ]
+        px = pts32[pair_point, 0]
+        py = pts32[pair_point, 1]
+        bb = polyset._bboxes_local_np()[pair_poly]
+        # The kernel rejects on any failing comparison; NaN coordinates fail
+        # none of them, reach the edge loop and never straddle an edge.
+        rejected = (px < bb[:, 0]) | (py < bb[:, 1]) | (px > bb[:, 2]) | (py > bb[:, 3])
+
+        edges = polyset._edges_np()
+        edge_offsets = polyset._geom_edge_offsets
+        n_edges = edge_offsets[pair_poly + 1] - edge_offsets[pair_poly]
+        n_edges = np.where(rejected, 0, n_edges)
+        parity = np.zeros(total, dtype=np.int64)
+        cum_edges = np.cumsum(n_edges)
+        pair0 = 0
+        while pair0 < total:
+            base = int(cum_edges[pair0 - 1]) if pair0 else 0
+            pair1 = int(np.searchsorted(cum_edges, base + _CPU_ROWS_PER_CHUNK, side="right"))
+            pair1 = max(pair1, pair0 + 1)
+            sel = slice(pair0, pair1)
+            reps = n_edges[sel]
+            n_rows = int(reps.sum())
+            if n_rows:
+                row_pair = np.repeat(np.arange(pair0, pair1), reps)
+                first_edge = np.repeat(edge_offsets[pair_poly[sel]], reps)
+                within = np.arange(n_rows) - np.repeat(np.cumsum(reps) - reps, reps)
+                e = edges[first_edge + within]
+                x1, y1, x2, y2 = e[:, 0], e[:, 1], e[:, 2], e[:, 3]
+                pxr = px[row_pair]
+                pyr = py[row_pair]
+                straddles = (y1 > pyr) != (y2 > pyr)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    xint = x1 + (pyr - y1) / (y2 - y1) * (x2 - x1)
+                crossed = straddles & (pxr < xint)
+                parity[pair0:pair1] = np.bincount(
+                    row_pair - pair0, weights=crossed, minlength=pair1 - pair0
+                ).astype(np.int64)
+            pair0 = pair1
+        hit = (parity & 1).astype(bool) & ~rejected
+        return pair_point[hit], pair_poly[hit].astype(np.int32)
+
+    def _refine_boundary(self, pts64: np.ndarray, out, *, all_matches: bool, predicate: str):
+        """Re-check points within the tolerance band of a boundary with GEOS.
+
+        Turns the fp32 even-odd answer into exact GEOS ``predicate`` semantics
+        for valid geometry: only points within ``boundary_tolerance`` of some
+        polygon boundary can differ, and those are re-evaluated with an
+        STRtree query honoring ``predicate``. Non-finite rows (empty or
+        missing points) are never near a boundary and keep their ``-1``.
+        """
+        polyset = self.polygons
+        near = self._near_boundary(pts64, polyset.boundary_tolerance)
+        if near.size == 0:
+            return out
+        pt_idx, poly_idx = polyset.strtree.query(
+            shapely.points(pts64[near]), predicate=predicate
+        )
+        if not all_matches:
+            fixed = np.full(near.size, _INT32_MAX, dtype=np.int32)
+            np.minimum.at(fixed, pt_idx, poly_idx.astype(np.int32))
+            fixed[fixed == _INT32_MAX] = -1
+            result = np.array(out, dtype=np.int32, copy=True)
+            result[near] = fixed
+            return result
+        pt_all, pg_all = (np.asarray(out[0], dtype=np.int64), np.asarray(out[1], dtype=np.int64))
+        keep = ~np.isin(pt_all, near)
+        new_pt = near[pt_idx].astype(np.int64)
+        new_pg = poly_idx.astype(np.int64)
+        pt_all = np.concatenate([pt_all[keep], new_pt])
+        pg_all = np.concatenate([pg_all[keep], new_pg])
+        order = np.lexsort((pg_all, pt_all))
+        return pt_all[order], pg_all[order]
+
+    def _near_boundary(self, pts64: np.ndarray, tol: float) -> np.ndarray:
+        """Sorted row indices of the finite points within ``tol`` of an edge.
+
+        An STRtree over the edge envelopes widened by ``tol`` (cached on the
+        polygon set) yields the candidate (point, edge) pairs by envelope
+        alone; a float64 point-to-segment distance test in NumPy settles them.
+        Every point within ``tol`` of an edge lies in that edge's widened
+        envelope, so nothing is missed, and GEOS is never asked for a distance:
+        3-5x cheaper than ``dwithin`` against whole boundaries, which has to
+        evaluate a GEOS distance for nearly every point on zone layers.
+
+        Work is bounded by candidate pairs, not points: a probe on a sample of
+        the slice estimates pairs per point and sizes the slice handed to the
+        tree to about ``_NEAR_BOUNDARY_PAIRS_PER_SLICE`` pairs (a slice that
+        still overshoots is retried shorter), and the distance test runs over
+        pair chunks of ``_CPU_ROWS_PER_CHUNK``, so layers whose edges span the
+        extent (a few large polygons with long diagonal edges put nearly every
+        point in many widened envelopes) stay near a few hundred MB instead of
+        scaling with points x long edges.
+        """
+        polyset = self.polygons
+        edges = polyset._edges_f64()
+        rows = np.flatnonzero(np.isfinite(pts64).all(axis=1))
+        if rows.size == 0 or edges.shape[0] == 0:
+            return np.empty(0, dtype=np.int64)
+        tree = polyset._edge_box_tree()
+        tol2 = float(tol) * float(tol)
+        near: list[np.ndarray] = []
+        budget = _NEAR_BOUNDARY_PAIRS_PER_SLICE
+        step = min(rows.size, _NEAR_BOUNDARY_POINTS_PER_SLICE)
+        if rows.size > _NEAR_BOUNDARY_PROBE_POINTS:
+            # Size the slices from a sample's pairs per point so the tree's
+            # 16-byte-per-pair output never has to be discarded and redone.
+            sample = rows[:: max(1, rows.size // _NEAR_BOUNDARY_PROBE_POINTS)]
+            density = tree.query(shapely.points(pts64[sample]))[0].size / sample.size
+            step = int(min(step, max(1.0, budget / max(density, 1e-3))))
+        i = 0
+        while i < rows.size:
+            r = rows[i : i + step]
+            p = pts64[r]
+            pt_i, seg_i = tree.query(shapely.points(p))
+            if pt_i.size > 2 * budget and r.size > 1:
+                # Far denser than the probe suggested: retry the slice shorter.
+                step = max(1, r.size // 2)
+                continue
+            for c0 in range(0, pt_i.size, _CPU_ROWS_PER_CHUNK):
+                sl = slice(c0, c0 + _CPU_ROWS_PER_CHUNK)
+                pi, e = pt_i[sl], edges[seg_i[sl]]
+                px, py = p[pi, 0], p[pi, 1]
+                dx, dy = e[:, 2] - e[:, 0], e[:, 3] - e[:, 1]
+                l2 = dx * dx + dy * dy
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    t = ((px - e[:, 0]) * dx + (py - e[:, 1]) * dy) / l2
+                t = np.where(l2 > 0.0, np.clip(t, 0.0, 1.0), 0.0)
+                qx = e[:, 0] + t * dx
+                qy = e[:, 1] + t * dy
+                d2 = (px - qx) ** 2 + (py - qy) ** 2
+                hit = pi[d2 <= tol2]
+                if hit.size:
+                    near.append(r[np.unique(hit)])
+            i += r.size
+        if not near:
+            return np.empty(0, dtype=np.int64)
+        return np.unique(np.concatenate(near))
 
 
 def _empty_result(all_matches: bool, on_device: bool, n: int):
@@ -1036,6 +1347,7 @@ def point_in_polygon(
     all_matches: bool = False,
     backend: str | None = None,
     predicate: str = "intersects",
+    exact_boundary: bool = False,
 ):
     """First containing polygon per point (``-1`` for none), or all pairs.
 
@@ -1050,9 +1362,11 @@ def point_in_polygon(
     prebuilt :class:`~mlx_spatial.PolygonSet` (reused across queries). The
     grid index is built lazily and cached on the polygon set. Alternatively
     pass a prebuilt ``index=`` (and then either omit ``polygons`` or pass the
-    exact PolygonSet the index wraps). See :meth:`GridIndex.query` for the
-    ``predicate`` semantics (they differ only on boundary points, inside the
-    fp32 tolerance band).
+    exact PolygonSet the index wraps). Containment is the fp32 even-odd rule
+    on every backend; see :meth:`GridIndex.query` for ``predicate`` (accepted
+    for GeoPandas compatibility; both values agree except for points exactly on
+    a boundary, inside the fp32 tolerance band) and ``exact_boundary`` (re-check
+    near-boundary points with GEOS so ``predicate`` is honored exactly).
     """
     if index is not None:
         if polygons is not None and polygons is not index.polygons:
@@ -1065,6 +1379,7 @@ def point_in_polygon(
             all_matches=all_matches,
             backend=backend,
             predicate=predicate,
+            exact_boundary=exact_boundary,
             _stacklevel=5,
         )
     if polygons is None:
@@ -1084,6 +1399,11 @@ def point_in_polygon(
                 raise ValueError(
                     f"predicate must be 'within' or 'intersects', got {predicate!r}"
                 )
+            if exact_boundary and isinstance(points, (mx.array, LocalPoints)):
+                raise ValueError(
+                    "exact_boundary=True needs host coordinates (GEOS re-checks the "
+                    "near-boundary points); pass the original NumPy/GeoSeries points"
+                )
             n_points = _point_count(points)
             resolve_backend(backend, 0)
             return _empty_result(
@@ -1097,6 +1417,7 @@ def point_in_polygon(
         all_matches=all_matches,
         backend=backend,
         predicate=predicate,
+        exact_boundary=exact_boundary,
         _stacklevel=5,
     )
 
@@ -1106,7 +1427,8 @@ def sjoin(
     right,
     *,
     how: str = "inner",
-    predicate: str = "within",
+    predicate: str = "intersects",
+    exact_boundary: bool = False,
     backend: str | None = None,
 ):
     """Spatial join: points in ``left`` matched to containing polygons in ``right``.
@@ -1117,11 +1439,13 @@ def sjoin(
     too. Returns the left rows with an ``index_right`` column plus the right
     table's non-geometry columns (suffixed ``_right`` on collision). Each
     point matches at most one polygon (the lowest polygon index wins when
-    polygons overlap). ``predicate`` follows GeoPandas: ``"within"`` excludes
-    points exactly on a polygon boundary, ``"intersects"`` includes them —
-    a distinction inside the fp32 tolerance band, honored exactly only on the
-    CPU path (see :meth:`GridIndex.query`). ``backend`` forces the execution
-    path as in :func:`point_in_polygon`.
+    polygons overlap). ``predicate`` defaults to ``"intersects"`` like
+    GeoPandas; ``"within"`` would exclude points exactly on a polygon
+    boundary, a distinction inside the fp32 tolerance band that the default
+    even-odd rule leaves undefined. Pass ``exact_boundary=True`` to re-check
+    near-boundary points with GEOS so the predicate is honored exactly (see
+    :meth:`GridIndex.query`). ``backend`` forces the execution path as in
+    :func:`point_in_polygon`.
     """
     import pandas as pd
 
@@ -1152,7 +1476,13 @@ def sjoin(
         assigned = np.full(len(as_point_array(left_geom)), -1, dtype=np.int32)
     else:
         assigned = np.asarray(
-            point_in_polygon(left_geom, right_geom, predicate=predicate, backend=backend)
+            point_in_polygon(
+                left_geom,
+                right_geom,
+                predicate=predicate,
+                exact_boundary=exact_boundary,
+                backend=backend,
+            )
         )
     matched = assigned >= 0
 

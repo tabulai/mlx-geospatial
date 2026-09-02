@@ -17,6 +17,7 @@ import mlx_spatial as ms
 import mlx_spatial._dispatch as dispatch
 from mlx_spatial._dispatch import metal_available
 from mlx_spatial._pip import pip_all_matches, pip_first_match
+from mlx_spatial._precision import recenter
 from mlx_spatial.join import GridIndex, _grid_csr_strategy
 
 from conftest import (
@@ -906,8 +907,43 @@ class TestGridMaxCorner:
         # full GPU query must run and only ever report the touching polygon
         got = np.asarray(index.query(corner, backend="gpu"))
         assert got[0] in (-1, 1) and got[1] in (-1, 1)
-        # CPU semantics (shapely intersects) deterministically match boundaries
-        np.testing.assert_array_equal(np.asarray(index.query(corner, backend="cpu")), [1, 1])
+        # One contract: the host fallback is the same fp32 predicate.
+        np.testing.assert_array_equal(index.query(corner, backend="cpu"), got)
+        # Exact GEOS boundary semantics are an opt-in on either backend.
+        for backend in ("cpu", "gpu"):
+            np.testing.assert_array_equal(
+                index.query(corner, backend=backend, exact_boundary=True), [1, 1]
+            )
+            np.testing.assert_array_equal(
+                index.query(corner, backend=backend, predicate="within", exact_boundary=True),
+                [-1, -1],
+            )
+
+    def test_sub_ulp_outside_extent_is_route_independent(self):
+        """Points a fraction of an fp32 ulp outside the float64 extent.
+
+        The exact float64 gate rejects them; the fp32 gate against the
+        outward-nudged bounds admits them, and in the kernel's frame they lie
+        exactly on the outer edge. Both backends must use the fp32 gate, or
+        a small batch (host fallback) and a large one (GPU) would disagree.
+        """
+        index = GridIndex(ms.PolygonSet([shapely.box(0, 0, 1, 1)]))
+        pts = np.array(
+            [[-1e-9, 0.5], [0.5, -1e-9], [1e-9, 0.5], [1 + 1e-9, 0.5], [0.5, 1 + 1e-9]]
+        )
+        counts, _, _, _ = index._candidates(pts)
+        assert not counts[[0, 1, 3, 4]].any()  # the float64 reference gate rejects them
+        cpu = index.query(pts, backend="cpu")
+        gpu = index.query(pts, backend="gpu")
+        np.testing.assert_array_equal(cpu, gpu)
+        # fp32 local frame: the first three sit on the left/bottom edge (x or
+        # y == -0.5, inside by the half-open rule), the last two on the
+        # right/top edge (outside)
+        np.testing.assert_array_equal(cpu, [0, 0, 0, -1, -1])
+        cpt, cpg = index.query(pts, backend="cpu", all_matches=True)
+        gpt, gpg = index.query(pts, backend="gpu", all_matches=True)
+        np.testing.assert_array_equal(cpt, gpt)
+        np.testing.assert_array_equal(cpg, gpg)
 
     def test_point_just_inside_corner_found_on_gpu(self):
         polys = np.array(
@@ -1025,3 +1061,324 @@ class TestRouteDefaults:
         np.testing.assert_array_equal(
             index.query(pts, backend="gpu"), forced.query(pts, backend="gpu")
         )
+
+
+@needs_metal
+class TestOneContainmentContract:
+    """The host fallback is the kernels' fp32 even-odd predicate, bit for bit.
+
+    Whatever the input (valid or invalid geometry, boundary points, NaN rows)
+    backend='cpu' and backend='gpu' agree exactly, so auto dispatch can never
+    change an answer. GEOS enters only through exact_boundary=True.
+    """
+
+    @staticmethod
+    def _layers(rng):
+        bowtie = Polygon([(0, 0), (2, 2), (2, 0), (0, 2)])  # self-intersecting
+        overlapping = MultiPolygon([shapely.box(3, 0, 5, 2), shapely.box(4, 1, 6, 3)])
+        hole_outside = Polygon(
+            [(7, 0), (9, 0), (9, 2), (7, 2)], holes=[[(8, 1), (10, 1), (10, 3), (8, 3)]]
+        )
+        invalid = np.array([bowtie, overlapping, hole_outside, Polygon()], dtype=object)
+        assert not shapely.is_valid(invalid[:3]).any()
+        ang = np.linspace(0, 2 * np.pi, 1500, endpoint=False)
+        long_ring = Polygon(np.column_stack([np.cos(ang), np.sin(ang)]))
+        return {
+            "random": make_convex_polygons(150, rng),
+            "lattice": make_grid_polygons(6, 6),
+            "invalid": invalid,
+            "long ring + boxes": np.array(
+                [long_ring, shapely.box(0.5, 0.5, 3, 3), shapely.box(-3, -3, -0.5, -0.5)],
+                dtype=object,
+            ),
+        }
+
+    @staticmethod
+    def _points(rng, polys):
+        x0, y0, x1, y1 = shapely.total_bounds(polys)
+        pad = 0.2 * max(x1 - x0, y1 - y0)
+        pts = rng.uniform([x0 - pad, y0 - pad], [x1 + pad, y1 + pad], size=(3000, 2))
+        # exact vertices and edge midpoints of every ring: deterministic
+        # boundary points, plus NaN/inf rows
+        coords = shapely.get_coordinates(polys)
+        mids = (coords[:-1] + coords[1:]) / 2.0
+        special = np.array([[np.nan, 0.0], [0.5, np.inf], [-np.inf, -np.inf]])
+        # the grid's outer edge, a fraction of an fp32 ulp outside the float64
+        # extent (rejected by an exact gate, admitted by the fp32 one)
+        ulp = float(np.spacing(np.float32(0.5 * max(x1 - x0, y1 - y0))))
+        xm, ym = 0.5 * (x0 + x1), 0.5 * (y0 + y1)
+        rim = []
+        for d in (0.25 * ulp, 0.5 * ulp, ulp):
+            rim += [[x0 - d, ym], [x1 + d, ym], [xm, y0 - d], [xm, y1 + d],
+                    [x0 - d, y0 - d], [x1 + d, y1 + d], [x0 - d, y1 + d]]
+        return np.concatenate([pts, coords, mids, special, np.array(rim)])
+
+    def test_host_grid_bounds_are_nudged_outward(self, rng):
+        index = GridIndex(make_convex_polygons(20, rng))
+        ox, oy = index.polygons.origin
+        x0, y0, x1, y1, inv_cell = index._host_grid()
+        f32 = np.float32
+        assert x0 < f32(index.x0 - ox) and y0 < f32(index.y0 - oy)
+        assert x1 > f32(index.x1 - ox) and y1 > f32(index.y1 - oy)
+        assert inv_cell == f32(1.0 / index.cell_size)
+
+    def test_cpu_and_gpu_are_bit_identical_on_every_layer(self, rng):
+        for name, polys in self._layers(rng).items():
+            index = GridIndex(polys)
+            pts = self._points(rng, polys)
+            if name != "random":
+                # the 21 rim rows are admitted by the fp32 gate but not by the
+                # float64 one (random layers have unequal extents, so they may
+                # miss on one axis; they are still valid probes there)
+                pts32 = recenter(pts, index.polygons.origin)
+                assert index._host_candidates(pts32)[0][-21:].any(), name
+                assert not index._candidates(pts)[0][-21:].any(), name
+            cpu = index.query(pts, backend="cpu")
+            gpu = index.query(pts, backend="gpu")
+            np.testing.assert_array_equal(cpu, gpu, err_msg=f"first match differs: {name}")
+            assert cpu.dtype == gpu.dtype == np.int32
+            cpt, cpg = index.query(pts, backend="cpu", all_matches=True)
+            gpt, gpg = index.query(pts, backend="gpu", all_matches=True)
+            np.testing.assert_array_equal(cpt, gpt, err_msg=f"all-match points differ: {name}")
+            np.testing.assert_array_equal(cpg, gpg, err_msg=f"all-match polygons differ: {name}")
+            # predicate cannot change the even-odd answer on either backend
+            for backend in ("cpu", "gpu"):
+                np.testing.assert_array_equal(
+                    index.query(pts, backend=backend, predicate="within"), cpu
+                )
+
+    def test_auto_dispatch_cannot_change_answers_on_invalid_geometry(self, rng):
+        """The audit's flip: 10 points alone vs the same 10 plus 200k copies."""
+        polys = np.array(
+            [
+                MultiPolygon([shapely.box(0, 0, 2, 2), shapely.box(1, 1, 3, 3)]),
+                Polygon([(4, 0), (6, 0), (6, 2), (4, 2)], holes=[[(5, 1), (7, 1), (7, 3), (5, 3)]]),
+                Polygon([(8, 0), (10, 2), (10, 0), (8, 2)]),
+            ],
+            dtype=object,
+        )
+        polyset = ms.PolygonSet(polys)
+        probes = np.array(
+            [[1.5, 1.5], [0.5, 0.5], [2.5, 2.5], [5.5, 1.5], [4.5, 0.5], [6.5, 2.5], [9.0, 1.0],
+             [9.0, 0.5], [8.5, 1.0], [11.0, 11.0]]
+        )
+        small = ms.point_in_polygon(probes, polyset)
+        # hand-derived even-odd: probe 0 sits inside both overlapping boxes
+        # (two crossings -> outside), where GEOS would say polygon 0; probe 4
+        # is in the hole part that lies inside the shell (one crossing).
+        np.testing.assert_array_equal(small, [-1, 0, 0, -1, 1, -1, 2, -1, 2, -1])
+        big = ms.point_in_polygon(np.concatenate([probes, np.tile(probes[-1], (200_000, 1))]), polyset)
+        np.testing.assert_array_equal(big[: len(probes)], small)
+        np.testing.assert_array_equal(ms.point_in_polygon(probes, polyset, backend="cpu"), small)
+        np.testing.assert_array_equal(ms.point_in_polygon(probes, polyset, backend="gpu"), small)
+
+    def test_auto_dispatch_cannot_change_answers_at_the_grid_edge(self):
+        """The review's flip: sub-ulp-outside points in a small vs a huge batch."""
+        polys = make_grid_polygons(8, 8)
+        polyset = ms.PolygonSet(polys)
+        half_ulp = 0.5 * float(np.spacing(np.float32(4.0)))  # local extent is [-4, 4]
+        probes = np.array(
+            [[-half_ulp, 0.4], [0.4, -half_ulp], [8 + half_ulp, 0.4], [0.4, 8 + half_ulp],
+             [-half_ulp, -half_ulp], [8 + half_ulp, 8 + half_ulp], [0.4, 0.4]]
+        )
+        assert not GridIndex(polyset)._candidates(probes)[0][:-1].any()
+        small = ms.point_in_polygon(probes, polyset)
+        far = np.tile([[100.0, 100.0]], (300_000, 1))
+        big = ms.point_in_polygon(np.concatenate([probes, far]), polyset)
+        np.testing.assert_array_equal(big[: len(probes)], small)
+        np.testing.assert_array_equal(ms.point_in_polygon(probes, polyset, backend="cpu"), small)
+        np.testing.assert_array_equal(ms.point_in_polygon(probes, polyset, backend="gpu"), small)
+        cpt, cpg = ms.point_in_polygon(probes, polyset, backend="cpu", all_matches=True)
+        gpt, gpg = ms.point_in_polygon(probes, polyset, backend="gpu", all_matches=True)
+        np.testing.assert_array_equal(cpt, gpt)
+        np.testing.assert_array_equal(cpg, gpg)
+
+    def test_cpu_path_on_device_inputs_uses_the_fp32_local_array(self):
+        """No float64 round trip through the origin for device inputs.
+
+        A local offset of 1e-10 next to a vertical edge is far below the
+        float64 resolution at an origin of 1e7, so reconstructing host
+        coordinates would put the point exactly on the edge and change the
+        even-odd answer. The fallback must consume the fp32 local array.
+        """
+        from mlx_spatial._ingest import LocalPoints
+
+        polyset = ms.PolygonSet(
+            [shapely.box(1e7, -1e7, 1e7 + 1, -1e7 + 1)], origin=(1e7, -1e7)
+        )
+        index = GridIndex(polyset)
+        local = LocalPoints(
+            mx.array([[-1e-10, 0.5], [1e-10, 0.5], [0.0, 0.5]], dtype=mx.float32),
+            polyset.origin,
+        )
+        assert np.all(polyset._host_coords(local.coords)[:, 0] == 1e7)  # lossy round trip
+        cpu = index.query(local, backend="cpu")
+        gpu = index.query(local, backend="gpu")
+        assert isinstance(cpu, mx.array) and isinstance(gpu, mx.array)
+        np.testing.assert_array_equal(cpu, gpu)
+        # left of x=0 crosses both vertical edges (outside); on or right of it, one
+        np.testing.assert_array_equal(cpu, [-1, 0, 0])
+        cpt, cpg = index.query(local, backend="cpu", all_matches=True)
+        gpt, gpg = index.query(local, backend="gpu", all_matches=True)
+        np.testing.assert_array_equal(cpt, gpt)
+        np.testing.assert_array_equal(cpg, gpg)
+
+    def test_fallback_chunking_is_arithmetic_neutral(self, rng, monkeypatch):
+        """Tiny pair and row budgets force many slices; results cannot move."""
+        from mlx_spatial import join
+
+        polys = make_convex_polygons(150, rng)
+        index = GridIndex(polys)
+        pts = self._points(rng, polys)
+        first = index.query(pts, backend="gpu")
+        pairs = index.query(pts, backend="gpu", all_matches=True)
+        calls = []
+        orig = GridIndex._cpu_hits
+
+        def spy(self, *args, **kwargs):
+            calls.append(1)
+            return orig(self, *args, **kwargs)
+
+        monkeypatch.setattr(GridIndex, "_cpu_hits", spy)
+        monkeypatch.setattr(join, "_CPU_PAIRS_PER_CHUNK", 64)
+        monkeypatch.setattr(join, "_CPU_ROWS_PER_CHUNK", 500)
+        np.testing.assert_array_equal(index.query(pts, backend="cpu"), first)
+        assert len(calls) > 10
+        cpt, cpg = index.query(pts, backend="cpu", all_matches=True)
+        np.testing.assert_array_equal(cpt, pairs[0])
+        np.testing.assert_array_equal(cpg, pairs[1])
+        # Unit budgets: every point with candidates and every pair with edges
+        # exceeds the budget, so the slice loops must still make progress
+        # (one point / one pair per slice) instead of hanging.
+        lattice = GridIndex(make_grid_polygons(4, 4))
+        corners = np.array([[1.0, 1.0], [2.0, 3.0], [0.5, 0.5], [3.0, 1.0], [5.0, 5.0]])
+        assert lattice._host_candidates(recenter(corners, lattice.polygons.origin))[0].max() == 4
+        monkeypatch.setattr(join, "_CPU_PAIRS_PER_CHUNK", 1)
+        monkeypatch.setattr(join, "_CPU_ROWS_PER_CHUNK", 1)
+        np.testing.assert_array_equal(
+            lattice.query(corners, backend="cpu"), lattice.query(corners, backend="gpu")
+        )
+        cpt, cpg = lattice.query(corners, backend="cpu", all_matches=True)
+        gpt, gpg = lattice.query(corners, backend="gpu", all_matches=True)
+        np.testing.assert_array_equal(cpt, gpt)
+        np.testing.assert_array_equal(cpg, gpg)
+
+    def test_near_boundary_matches_geos_distance(self, rng, monkeypatch):
+        """The band search is exact against a GEOS distance to the boundary.
+
+        Points on both sides of the band edge (0.55-0.95 and 1.05-1.5
+        tolerances from vertices and edge midpoints of diagonal-edged
+        polygons) pin the tolerance and the segment clipping; NaN/inf rows
+        are never near anything.
+        """
+        from mlx_spatial import join
+
+        polys = make_convex_polygons(60, rng)
+        index = GridIndex(polys)
+        tol = index.polygons.boundary_tolerance
+        coords = shapely.get_coordinates(polys)
+        anchors = np.concatenate([coords, (coords[:-1] + coords[1:]) / 2.0])
+        ang = rng.uniform(0, 2 * np.pi, len(anchors))
+        unit = np.column_stack([np.cos(ang), np.sin(ang)])
+        inside = anchors + unit * rng.uniform(0.55, 0.95, (len(anchors), 1)) * tol
+        outside = anchors + unit * rng.uniform(1.05, 1.5, (len(anchors), 1)) * tol
+        pts = np.concatenate(
+            [inside, outside, rng.uniform(-1.2, 1.2, size=(2000, 2)),
+             [[np.nan, 0.0], [0.5, np.inf], [-np.inf, np.nan]]]
+        )
+        finite = np.isfinite(pts).all(axis=1)
+        boundary = shapely.union_all(shapely.boundary(polys))
+        dist = np.full(len(pts), np.inf)
+        dist[finite] = shapely.distance(shapely.points(pts[finite]), boundary)
+        expected = np.flatnonzero(dist <= tol)
+        assert expected.size > 100 and np.count_nonzero(finite & (dist > tol)) > 100
+        np.testing.assert_array_equal(index._near_boundary(pts, tol), expected)
+        # bounded work: tiny pair budgets force short slices and pair chunks
+        monkeypatch.setattr(join, "_NEAR_BOUNDARY_POINTS_PER_SLICE", 1000)
+        monkeypatch.setattr(join, "_NEAR_BOUNDARY_PAIRS_PER_SLICE", 50)
+        monkeypatch.setattr(join, "_CPU_ROWS_PER_CHUNK", 7)
+        np.testing.assert_array_equal(index._near_boundary(pts, tol), expected)
+
+    def test_exact_boundary_skips_non_finite_rows(self):
+        """Empty/missing points are NaN rows; GEOS must never see them."""
+        gpd = pytest.importorskip("geopandas")
+        polys = [shapely.box(0, 0, 1, 1), shapely.box(2, 0, 3, 1)]
+        index = GridIndex(ms.PolygonSet(polys))
+        pts = np.array([[0.5, 0.5], [np.nan, np.nan], [np.nan, 0.5], [1.0, 0.5], [np.inf, 0.5]])
+        np.testing.assert_array_equal(index.query(pts, exact_boundary=True), [0, -1, -1, 0, -1])
+        np.testing.assert_array_equal(
+            index.query(pts, exact_boundary=True, predicate="within"), [0, -1, -1, -1, -1]
+        )
+        pt, pg = index.query(pts, exact_boundary=True, all_matches=True)
+        np.testing.assert_array_equal(pt, [0, 3])
+        np.testing.assert_array_equal(pg, [0, 0])
+        gs = gpd.GeoSeries(
+            [shapely.Point(0.5, 0.5), shapely.Point(), None, shapely.Point(2.5, 0.5), shapely.Point(1.0, 0.5)]
+        )
+        left = gpd.GeoDataFrame(geometry=gs)
+        right = gpd.GeoDataFrame(geometry=polys)
+        ours = ms.sjoin(left, right, exact_boundary=True)
+        theirs = gpd.sjoin(left, right, how="inner")
+        np.testing.assert_array_equal(ours.index.to_numpy(), theirs.index.to_numpy())
+        np.testing.assert_array_equal(ours["index_right"].to_numpy(), theirs["index_right"].to_numpy())
+
+    def test_exact_boundary_gives_geos_predicate_semantics(self, rng):
+        polys = make_grid_polygons(5, 4)
+        polyset = ms.PolygonSet(polys)
+        index = GridIndex(polyset)
+        # interior points, points exactly on shared edges and on lattice corners
+        interior = rng.uniform(0.1, 0.9, size=(400, 2)) + rng.integers(0, [5, 4], size=(400, 2))
+        edges = np.column_stack([rng.integers(0, 6, 200).astype(float), rng.uniform(0.1, 0.9, 200) + rng.integers(0, 4, 200)])
+        corners = np.column_stack([rng.integers(0, 6, 100), rng.integers(0, 5, 100)]).astype(float)
+        # inside the band but off the edge, on both sides of vertical edges:
+        # the widened edge envelopes must catch these too
+        tol = polyset.boundary_tolerance
+        off = np.column_stack(
+            [
+                rng.integers(0, 6, 200).astype(float) + rng.choice([-0.5, -0.25, 0.25, 0.5], 200) * tol,
+                rng.uniform(0.1, 0.9, 200) + rng.integers(0, 4, 200),
+            ]
+        )
+        pts = np.concatenate([interior, edges, corners, off])
+        tree = shapely.STRtree(polys)
+        for predicate in ("intersects", "within"):
+            pt_idx, poly_idx = tree.query(shapely.points(pts), predicate=predicate)
+            expected = np.full(len(pts), np.iinfo(np.int32).max, dtype=np.int64)
+            np.minimum.at(expected, pt_idx, poly_idx)
+            expected[expected == np.iinfo(np.int32).max] = -1
+            for backend in ("cpu", "gpu"):
+                got = index.query(pts, backend=backend, predicate=predicate, exact_boundary=True)
+                np.testing.assert_array_equal(got, expected, err_msg=f"{predicate}/{backend}")
+                gpt, gpg = index.query(
+                    pts, backend=backend, predicate=predicate, exact_boundary=True, all_matches=True
+                )
+                order = np.lexsort((poly_idx, pt_idx))
+                np.testing.assert_array_equal(gpt, pt_idx[order])
+                np.testing.assert_array_equal(gpg, poly_idx[order])
+        # interior points are never touched by the refinement
+        plain = index.query(interior, backend="gpu")
+        np.testing.assert_array_equal(index.query(interior, exact_boundary=True), plain)
+        # device-resident inputs cannot be refined (no host coordinates)
+        with pytest.raises(ValueError, match="exact_boundary"):
+            index.query(polyset.to_local(pts), exact_boundary=True)
+        with pytest.raises(ValueError, match="exact_boundary"):
+            ms.point_in_polygon(polyset.to_local(pts), polyset, exact_boundary=True)
+        with pytest.raises(ValueError, match="exact_boundary"):
+            ms.point_in_polygon(polyset.to_local(pts), [], exact_boundary=True)
+
+    def test_sjoin_default_predicate_matches_geopandas(self, rng):
+        gpd = pytest.importorskip("geopandas")
+        polys = make_grid_polygons(4, 4)
+        pts = np.concatenate(
+            [rng.uniform(0.1, 3.9, size=(300, 2)), np.array([[2.0, 1.5], [1.0, 2.0], [4.0, 4.0]])]
+        )
+        left = gpd.GeoDataFrame(geometry=list(shapely.points(pts)))
+        right = gpd.GeoDataFrame(geometry=list(polys))
+        ours = ms.sjoin(left, right, exact_boundary=True)  # default predicate
+        theirs = gpd.sjoin(left, right, how="inner")  # geopandas default: intersects
+        theirs_first = theirs.groupby(level=0)["index_right"].min()
+        np.testing.assert_array_equal(ours.index.to_numpy(), theirs_first.index.to_numpy())
+        np.testing.assert_array_equal(ours["index_right"].to_numpy(), theirs_first.to_numpy())
+        # explicit within on the boundary points excludes them
+        within = ms.sjoin(left, right, predicate="within", exact_boundary=True)
+        assert set(ours.index) - set(within.index) == {300, 301, 302}

@@ -83,6 +83,12 @@ def reference_assign(points_xy: np.ndarray, geoms) -> np.ndarray:
     return result
 
 
+@pytest.fixture(autouse=True)
+def _clean_backend_env(monkeypatch):
+    """Isolate every test from an ambient MLX_SPATIAL_BACKEND setting."""
+    monkeypatch.delenv("MLX_SPATIAL_BACKEND", raising=False)
+
+
 @pytest.fixture
 def rng() -> np.random.Generator:
     return np.random.default_rng(20260828)
