@@ -10,6 +10,7 @@ one parity count.
 
 from __future__ import annotations
 
+import warnings
 from collections import namedtuple
 
 import numpy as np
@@ -18,19 +19,163 @@ import shapely
 from shapely import GeometryType
 
 from ._precision import (
+    PrecisionWarning,
     boundary_tolerance,
     compute_origin,
     float32_resolution,
     recenter,
+    split_origin_fp32,
 )
 
-__all__ = ["PolygonSet", "from_shapely", "as_point_array"]
+__all__ = ["PolygonSet", "LocalPoints", "from_shapely", "as_point_array"]
 
 EdgeData = namedtuple("EdgeData", ["edges", "geom_offsets_np", "geom_offsets_mx"])
+
+_MX_INT_DTYPES = (
+    mx.int8,
+    mx.int16,
+    mx.int32,
+    mx.int64,
+    mx.uint8,
+    mx.uint16,
+    mx.uint32,
+    mx.uint64,
+)
+_MX_SMALL_FLOAT_DTYPES = (mx.float32, mx.float16, mx.bfloat16)
+
+_FP32_INPUT_MESSAGE = (
+    "query points are a {dtype} MLX array: raw lon/lat in float32 already "
+    "carries ~0.5 ulp of rounding (about 0.4 m at longitude 74), wider than the "
+    "local tolerance band at city or state extents, so results near polygon "
+    "edges cannot match GEOS outside the documented band. Re-center from the "
+    "float64 host array once "
+    "with polyset.to_local(np_points), or build the array with "
+    "mx.array(x, dtype=mx.float64). Silence with "
+    'warnings.filterwarnings("ignore", category=mlx_spatial.PrecisionWarning).'
+)
+
+
+def _crs_of(obj):
+    """CRS attribute of GeoSeries/GeoDataFrame-like inputs, else None."""
+    if isinstance(obj, (np.ndarray, mx.array, list, tuple, shapely.Geometry)):
+        return None
+    return getattr(obj, "crs", None)
+
+
+class LocalPoints:
+    """Query points already re-centered into a :class:`PolygonSet`'s frame.
+
+    Create with :meth:`PolygonSet.to_local`. ``coords`` is an ``(N, 2)``
+    float32 ``mx.array`` in unified memory and ``origin`` the float64 origin
+    that was subtracted. :func:`point_in_polygon`, :meth:`GridIndex.query`
+    and :func:`contains_matrix` accept it, run entirely on the GPU, and
+    return MLX arrays: no host round trip, so labels flow straight into an
+    MLX model. Re-center once, slice per batch (``local[i:j]`` or
+    ``local[index_array]``), query many times.
+
+    The wrapper is a safety device: local coordinates look like ordinary
+    small numbers, so every other entry point (``haversine``,
+    ``as_point_array``, ``PolygonSet``) rejects it, and a query against a
+    PolygonSet with a different origin raises. To share one frame across
+    several polygon layers, build them with
+    ``PolygonSet(geoms, origin=first.origin)``.
+    """
+
+    __slots__ = ("coords", "origin", "crs")
+
+    def __init__(self, coords, origin, crs=None):
+        if not isinstance(coords, mx.array):
+            raise TypeError(
+                "LocalPoints.coords must be an mx.array; create LocalPoints with "
+                "PolygonSet.to_local(points)"
+            )
+        if coords.dtype != mx.float32 or coords.ndim != 2 or coords.shape[1] != 2:
+            raise ValueError(
+                "LocalPoints.coords must be an (N, 2) float32 array, got shape "
+                f"{tuple(coords.shape)} and dtype {coords.dtype}"
+            )
+        origin = np.array(origin, dtype=np.float64).reshape(2).copy()
+        if not np.isfinite(origin).all():
+            raise ValueError(f"origin must be finite, got {origin.tolist()}")
+        origin.flags.writeable = False
+        object.__setattr__(self, "coords", coords)
+        object.__setattr__(self, "origin", origin)
+        object.__setattr__(self, "crs", crs)
+
+    def __setattr__(self, name, value):
+        raise AttributeError("LocalPoints is immutable; build a new one")
+
+    def __delattr__(self, name):
+        raise AttributeError("LocalPoints is immutable; build a new one")
+
+    def __reduce__(self):
+        return (LocalPoints, (self.coords, self.origin, self.crs))
+
+    def __len__(self) -> int:
+        return int(self.coords.shape[0])
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return tuple(self.coords.shape)
+
+    def __getitem__(self, key) -> LocalPoints:
+        """Slice or gather rows (int index arrays); the origin travels along."""
+        if isinstance(key, slice):
+            return LocalPoints(self.coords[key], self.origin, self.crs)
+        if isinstance(key, tuple):
+            raise TypeError(
+                "LocalPoints index over points only; read .coords[:, 0] for a "
+                "coordinate column"
+            )
+        if isinstance(key, (bool, np.bool_)) or (
+            isinstance(key, (int, np.integer)) and not isinstance(key, np.ndarray)
+        ):
+            raise TypeError(
+                "index LocalPoints with a slice or an integer index array, not a "
+                "single integer; read .coords for the raw array"
+            )
+        if isinstance(key, mx.array):
+            idx = key
+        else:
+            arr = np.asarray(key)
+            if arr.size == 0:
+                arr = arr.astype(np.int64)  # an empty list defaults to float64
+            try:
+                idx = mx.array(arr)
+            except Exception as exc:
+                raise TypeError(
+                    "LocalPoints index arrays must be 1-D integer arrays"
+                ) from exc
+        if idx.ndim != 1 or idx.dtype not in _MX_INT_DTYPES:
+            raise TypeError(
+                "LocalPoints index arrays must be 1-D integer arrays (boolean "
+                "masks are not supported by MLX indexing; select indices first)"
+            )
+        n = len(self)
+        if int(idx.shape[0]):
+            # mx.take does not bounds-check: out-of-range rows would silently
+            # read other memory (or crash on the CPU device).
+            if bool(((idx < -n) | (idx >= n)).any().item()):
+                raise IndexError(f"LocalPoints index out of range for {n} points")
+        return LocalPoints(mx.take(self.coords, idx, axis=0), self.origin, self.crs)
+
+    def __iter__(self):
+        raise TypeError("LocalPoints is not iterable; slice it or read .coords")
+
+    def __repr__(self) -> str:
+        return (
+            f"LocalPoints(n={len(self)}, origin={self.origin.tolist()}, "
+            f"dtype=float32)"
+        )
 
 
 def _as_geometry_array(geoms) -> np.ndarray:
     """Normalize GeoDataFrame / GeoSeries / sequence-of-geometries input."""
+    if isinstance(geoms, (LocalPoints, mx.array)):
+        raise TypeError(
+            "PolygonSet takes polygon geometries (shapely, GeoSeries, "
+            "GeoDataFrame), not point arrays"
+        )
     if hasattr(geoms, "geometry") and not isinstance(geoms, shapely.Geometry):
         geoms = geoms.geometry  # GeoDataFrame -> GeoSeries
     if hasattr(geoms, "values"):
@@ -57,6 +202,12 @@ def as_point_array(points) -> np.ndarray:
     rows, preserving row alignment: NaN coordinates never match any polygon
     and yield NaN distances.
     """
+    if isinstance(points, LocalPoints):
+        raise TypeError(
+            "LocalPoints hold re-centered polygon-frame coordinates, not lon/lat; "
+            "pass the original coordinates (or LocalPoints only to the join "
+            "functions)"
+        )
     if isinstance(points, mx.array):
         points = np.array(points)
     if hasattr(points, "geometry") and not isinstance(points, shapely.Geometry):
@@ -119,9 +270,13 @@ class PolygonSet:
         The shared re-centering origin. Query points must be re-centered with
         this same origin; the array is read-only so it cannot drift from the
         already-recentered GPU coordinates.
+    crs : optional
+        The CRS of the input GeoSeries/GeoDataFrame, if it had one. Only used
+        to reject query points that carry a different CRS.
     """
 
     def __init__(self, geoms, *, origin=None, validate=False):
+        self.crs = _crs_of(geoms)
         arr = _as_geometry_array(geoms)
         if len(arr) == 0:
             raise ValueError("PolygonSet requires at least one geometry")
@@ -274,6 +429,8 @@ class PolygonSet:
         self._edge_data: EdgeData | None = None
         self._strtree = None
         self._grid_index = None
+        self._origin_f64_mx = None
+        self._origin_hi_lo_mx = None
 
     def __len__(self) -> int:
         return self.n_polygons
@@ -317,15 +474,137 @@ class PolygonSet:
             self._strtree = shapely.STRtree(self._shapely)
         return self._strtree
 
+    def to_local(self, points) -> LocalPoints:
+        """Re-center query points into this set's frame, once, for GPU queries.
+
+        Accepts everything :func:`as_point_array` accepts plus ``mx.array``
+        inputs. Host float64 coordinates and ``mx.float64`` arrays are
+        re-centered in float64 (numpy inputs on the MLX CPU stream, bit for
+        bit the same values as NumPy) and cast to float32, so the documented
+        precision contract holds. float32 (or 16-bit) MLX arrays are
+        re-centered on the device with a split ``hi + lo`` origin and emit a
+        :class:`PrecisionWarning`, because raw lon/lat in float32 has already
+        lost more than the tolerance band. The result carries the input's CRS,
+        or this set's CRS when the input has none, so a later query against a
+        layer with another CRS raises; it is also rejected by every polygon set
+        with a different origin.
+        """
+        if isinstance(points, LocalPoints):
+            raise TypeError(
+                "points are already LocalPoints; pass the original lon/lat "
+                "coordinates to to_local"
+            )
+        crs = _crs_of(points)
+        self._check_crs(crs)
+        local = self._local_coords(points, stacklevel=3)
+        return LocalPoints(local, self.origin, crs=crs if crs is not None else self.crs)
+
     def recenter_points(self, points) -> tuple[np.ndarray, mx.array]:
         """Normalize + re-center query points with this set's origin.
 
-        Returns ``(points_f64, points_local_mx)``: the float64 originals for
-        CPU planning and the float32 local-frame array for kernels.
+        Returns ``(points_f64, points_local_mx)``: float64 coordinates for
+        CPU planning and the float32 local-frame array for kernels. For
+        device-resident inputs (``mx.array``, :class:`LocalPoints`) the
+        float64 coordinates are reconstructed from the float32 local frame,
+        so prefer :meth:`to_local` for GPU pipelines.
         """
+        pts64, local, _ = self._ingest_points(points, stacklevel=4)
+        if pts64 is None:
+            pts64 = self._host_coords(local)
+        return pts64, local
+
+    def _ingest_points(self, points, *, stacklevel: int = 4):
+        """Normalize any point input for the kernels.
+
+        Returns ``(points_f64_or_None, points_local_mx, on_device)``:
+        host inputs (numpy, sequences, shapely, GeoSeries) provide float64
+        coordinates and a float32 local-frame array; ``mx.array`` and
+        :class:`LocalPoints` inputs stay on device (``points_f64`` is None)
+        and mark the result container as MLX.
+        """
+        if isinstance(points, LocalPoints):
+            self._check_local(points)
+            return None, points.coords, True
+        if isinstance(points, mx.array):
+            return None, self._local_coords(points, stacklevel=stacklevel), True
+        self._check_crs(_crs_of(points))
         pts64 = as_point_array(points)
-        local = recenter(pts64, self.origin)
-        return pts64, mx.array(local)
+        return pts64, self._local_from_f64(pts64), False
+
+    def _check_crs(self, crs) -> None:
+        if crs is not None and self.crs is not None and crs != self.crs:
+            raise ValueError(f"CRS mismatch: points={crs}, polygons={self.crs}")
+
+    def _check_local(self, local: LocalPoints) -> None:
+        if not np.array_equal(local.origin, self.origin):
+            raise ValueError(
+                f"LocalPoints origin {local.origin.tolist()} differs from this "
+                f"PolygonSet's origin {self.origin.tolist()}; re-center with this "
+                "set (polyset.to_local(points)) or build both layers with "
+                "PolygonSet(geoms, origin=shared_origin)"
+            )
+        self._check_crs(local.crs)
+
+    def _origin_f64(self) -> mx.array:
+        if self._origin_f64_mx is None:
+            self._origin_f64_mx = mx.array(self.origin, dtype=mx.float64)
+        return self._origin_f64_mx
+
+    def _local_from_f64(self, pts64: np.ndarray) -> mx.array:
+        """float64 -> float32 local frame on the MLX CPU stream.
+
+        Bit-identical to ``recenter(pts64, origin)`` (one correctly rounded
+        float64 subtraction, one cast) and about three times faster than the
+        NumPy version plus upload; float64 is CPU-only in MLX, hence the
+        explicit stream.
+        """
+        p64 = mx.array(pts64, dtype=mx.float64)
+        diff = mx.subtract(p64, self._origin_f64(), stream=mx.cpu)
+        return diff.astype(mx.float32, stream=mx.cpu)
+
+    def _local_coords(self, points, *, stacklevel: int) -> mx.array:
+        """Local-frame float32 coordinates for host or device inputs."""
+        if not isinstance(points, mx.array):
+            return self._local_from_f64(as_point_array(points))
+        if points.ndim == 1 and points.shape[0] == 2:
+            points = mx.reshape(
+                points,
+                (1, 2),
+                stream=mx.cpu if points.dtype == mx.float64 else None,
+            )
+        if points.ndim != 2 or points.shape[1] != 2:
+            raise ValueError(
+                f"expected points of shape (N, 2), got {tuple(points.shape)}"
+            )
+        if points.dtype == mx.float64 or points.dtype in _MX_INT_DTYPES:
+            # Exact: float64 (and integer) values re-centered in float64 on the
+            # CPU stream, exactly like the host path.
+            p64 = (
+                points
+                if points.dtype == mx.float64
+                else points.astype(mx.float64, stream=mx.cpu)
+            )
+            diff = mx.subtract(p64, self._origin_f64(), stream=mx.cpu)
+            return diff.astype(mx.float32, stream=mx.cpu)
+        if points.dtype in _MX_SMALL_FLOAT_DTYPES:
+            warnings.warn(
+                PrecisionWarning(_FP32_INPUT_MESSAGE.format(dtype=points.dtype)),
+                stacklevel=stacklevel,
+            )
+            p32 = points if points.dtype == mx.float32 else points.astype(mx.float32)
+            if self._origin_hi_lo_mx is None:
+                hi, lo = split_origin_fp32(self.origin)
+                self._origin_hi_lo_mx = (mx.array(hi), mx.array(lo))
+            hi, lo = self._origin_hi_lo_mx
+            return (p32 - hi) - lo
+        raise TypeError(
+            f"unsupported point dtype {points.dtype}; use float64, float32, or "
+            "integer coordinates"
+        )
+
+    def _host_coords(self, local: mx.array) -> np.ndarray:
+        """float64 host coordinates reconstructed from a local-frame array."""
+        return np.asarray(local, dtype=np.float64) + self.origin
 
 
 def from_shapely(geoms, *, origin=None, validate=False) -> PolygonSet:

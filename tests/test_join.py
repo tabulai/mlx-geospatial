@@ -181,11 +181,14 @@ class TestGridConstructionContract:
             ],
             dtype=object,
         )
-        expected_offsets = np.array([0, 2, 4, 4, 5, 6, 7], dtype=np.int64)
-        expected_poly = np.array([0, 2, 2, 3, 2, 2, 4], dtype=np.int32)
+        # Cell ranges are padded by 2 * boundary_tolerance, so a bbox that
+        # begins or ends exactly on a cell line is listed on both sides:
+        # polygon 3 (x from 1.0) appears in cell 0 as well as cell 1.
+        expected_offsets = np.array([0, 3, 5, 5, 6, 7, 8], dtype=np.int64)
+        expected_poly = np.array([0, 2, 3, 2, 3, 2, 2, 4], dtype=np.int32)
 
-        first = GridIndex(polys, cell_size=1.0, max_entries=7)
-        second = GridIndex(polys, cell_size=1.0, max_entries=7)
+        first = GridIndex(polys, cell_size=1.0, max_entries=8)
+        second = GridIndex(polys, cell_size=1.0, max_entries=8)
         assert (first.nx, first.ny) == (3, 2)
         np.testing.assert_array_equal(first._cell_offsets, expected_offsets)
         np.testing.assert_array_equal(first._cell_poly, expected_poly)
@@ -195,8 +198,9 @@ class TestGridConstructionContract:
             lo, hi = expected_offsets[cell : cell + 2]
             assert np.all(np.diff(expected_poly[lo:hi]) > 0)
 
-        # A bbox ending exactly at x=1 or y=1 is conservatively present on
-        # both sides; a bbox beginning there starts only in the right cell.
+        # A bbox touching x=1 or y=1 from either side is present in both
+        # neighbouring cells, so a point near the line finds the same
+        # candidates whichever cell an fp32 assignment picks.
         counts, starts, _, cells = first._candidates(
             np.array([[1.0 - 1e-6, 0.5], [1.0, 0.5], [0.5, 1.0]])
         )
@@ -205,7 +209,7 @@ class TestGridConstructionContract:
             first._cell_poly[start : start + count]
             for start, count in zip(starts, counts)
         ]
-        np.testing.assert_array_equal(candidates[0], [0, 2])
+        np.testing.assert_array_equal(candidates[0], [0, 2, 3])
         np.testing.assert_array_equal(candidates[1], [2, 3])
         np.testing.assert_array_equal(candidates[2], [2])
 
@@ -230,18 +234,19 @@ class TestGridConstructionContract:
             return Polygon(np.column_stack([cx + np.cos(angle), np.sin(angle)]))
 
         # Two individually short rings share cell 0, so aggregate work differs
-        # from either ring maximum. Cell 2 contains one long ring and remains
-        # distinguishable from that higher-total short-ring cell.
+        # from either ring maximum. The long ring's bbox starts exactly on the
+        # x=19 cell line, so the padded range lists it in cells 1 and 2; both
+        # remain distinguishable from the higher-total short-ring cell.
         index = GridIndex(
             [circle(0.0, 600), circle(0.0, 600), circle(20.0, 1031)],
             cell_size=10.0,
         )
         assert (index.nx, index.ny) == (3, 1)
-        np.testing.assert_array_equal(index._cell_offsets, [0, 2, 2, 3])
-        np.testing.assert_array_equal(index._cell_poly, [0, 1, 2])
-        np.testing.assert_array_equal(index._cell_edge_work, [1200, 0, 1031])
-        np.testing.assert_array_equal(index._cell_max_ring_edges, [600, 0, 1031])
-        np.testing.assert_array_equal(index._cell_all_long_rings, [False, False, True])
+        np.testing.assert_array_equal(index._cell_offsets, [0, 2, 3, 4])
+        np.testing.assert_array_equal(index._cell_poly, [0, 1, 2, 2])
+        np.testing.assert_array_equal(index._cell_edge_work, [1200, 1031, 1031])
+        np.testing.assert_array_equal(index._cell_max_ring_edges, [600, 1031, 1031])
+        np.testing.assert_array_equal(index._cell_all_long_rings, [False, True, True])
         assert index._max_cell_edge_work == 1200
         assert index._max_cell_ring_edges == 1031
         assert index._candidate_edge_bounds(np.array([0], dtype=np.int32)) == (
@@ -249,6 +254,7 @@ class TestGridConstructionContract:
             1200,
         )
         assert index._first_match_ring_bound(np.array([0], dtype=np.int32)) == 0
+        assert index._first_match_ring_bound(np.array([1], dtype=np.int32)) == 1031
         assert index._first_match_ring_bound(np.array([2], dtype=np.int32)) == 1031
 
     def test_selector_edge_work_saturates_instead_of_wrapping(self):
@@ -922,12 +928,15 @@ class TestGridMaxCorner:
 
 
 @needs_metal
-def test_fused_join_uses_float64_planned_cell_at_rounding_boundary():
-    """The fused kernel must consume the CPU-planned cell, not recompute it.
+def test_padded_cell_ranges_make_rounding_boundary_route_independent():
+    """A point whose fp32 cell may differ from its float64 cell gets one answer.
 
-    The point lies just left of x=1 in float64, but rounds to exactly x=1 in
-    the kernel's local float32 coordinates. Recomputing its cell on Metal
-    would incorrectly expose the right-hand polygon as a candidate.
+    The point lies just left of x=1 in float64 (cell 0) but rounds to exactly
+    x=1 in the kernel's float32 frame, where the device-side assignment may
+    pick cell 1. Padded cell ranges list the right-hand box in cell 0 too, so
+    whichever cell is used the kernel sees the same candidates. The fp32 point
+    sits on that box's edge, inside the tolerance band, so the value may be
+    -1 or 1; host and device inputs must agree bit for bit.
     """
     polys = np.array(
         [shapely.box(0.0, 0.0, 0.5, 1.0), shapely.box(1.0, 0.0, 2.0, 1.0)],
@@ -939,12 +948,18 @@ def test_fused_join_uses_float64_planned_cell_at_rounding_boundary():
     pts = np.array([[x, 0.5]])
     assert x < 1.0 and np.float32(x) == np.float32(1.0)
     counts, starts, total, point_cell = index._candidates(pts)
-    assert total == counts[0] == 1 and point_cell[0] == 0
+    assert point_cell[0] == 0 and total == counts[0] == 2
     np.testing.assert_array_equal(
-        index._cell_poly[starts[0] : starts[0] + counts[0]], [0]
+        index._cell_poly[starts[0] : starts[0] + counts[0]], [0, 1]
     )
 
-    first = np.asarray(index.query(pts, backend="gpu"))
-    pt_idx, poly_idx = index.query(pts, backend="gpu", all_matches=True)
-    assert len(pt_idx) == len(poly_idx) == 0
-    np.testing.assert_array_equal(first, [-1])
+    host = np.asarray(index.query(pts, backend="gpu"))
+    device = index.query(polyset.to_local(pts))
+    assert host[0] in (-1, 1)
+    np.testing.assert_array_equal(device, host)
+    host_pairs = index.query(pts, backend="gpu", all_matches=True)
+    device_pairs = index.query(polyset.to_local(pts), all_matches=True)
+    host_set = set(zip(host_pairs[0].tolist(), host_pairs[1].tolist()))
+    assert host_set <= {(0, 1)}
+    np.testing.assert_array_equal(device_pairs[0], host_pairs[0])
+    np.testing.assert_array_equal(device_pairs[1], host_pairs[1])

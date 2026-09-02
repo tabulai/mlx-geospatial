@@ -30,6 +30,7 @@ or neither; there is no general uniqueness guarantee inside the band.
 from __future__ import annotations
 
 import mlx.core as mx
+import numpy as np
 
 from ._dispatch import metal_available
 from ._ingest import PolygonSet
@@ -1713,13 +1714,19 @@ def pip_dense(
     return inside
 
 
-def contains_matrix(points, polygons, *, chunk_bytes: int = 256 * 1024 * 1024) -> mx.array:
+def contains_matrix(points, polygons, *, chunk_bytes: int = 256 * 1024 * 1024):
     """Public dense containment matrix: ``result[i, j]`` iff point i is in polygon j.
 
     Intended for small-to-moderate polygon counts (the ``N x M`` matrix is
     materialized). For large polygon sets use :func:`mlx_spatial.point_in_polygon`,
     which goes through the grid index.
+
+    The output container follows the input: host points (numpy, sequences,
+    shapely, GeoSeries) return a NumPy bool matrix; ``mx.array`` or
+    :class:`~mlx_spatial.LocalPoints` inputs return an MLX bool array that
+    never leaves unified memory.
     """
     polyset = polygons if isinstance(polygons, PolygonSet) else PolygonSet(polygons)
-    _, points_local = polyset.recenter_points(points)
-    return pip_dense(points_local, polyset, chunk_bytes=chunk_bytes)
+    _, points_local, on_device = polyset._ingest_points(points, stacklevel=4)
+    out = pip_dense(points_local, polyset, chunk_bytes=chunk_bytes)
+    return out if on_device else np.asarray(out)

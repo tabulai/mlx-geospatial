@@ -27,10 +27,24 @@ to flip containment near edges. Structural mitigations:
    Documented, tested against explicitly — golden tests exclude the band.
    GEOS itself has definitional edge behavior, so this is defensible when
    stated.
-3. **Conservative planning**: grid planning runs in float64 on original
-   coordinates; kernel bboxes are widened by 4 ulps so fp32 rounding can only
-   add candidates, never drop a true hit. A parity test is the final arbiter.
-4. Haversine: degree→radian conversion in float64 on the CPU when possible;
+3. **Conservative planning**: polygon cell ranges are planned in float64 and
+   padded by 16 ulps of the local extent (twice the boundary tolerance): more
+   than the kernel's 4.5-ulp bbox widening plus the fp32 cell-assignment
+   error, which is under 8 ulps (rounded and outward-nudged grid corner,
+   subtraction, and the two roundings of the multiply by the reciprocal
+   cell size; 5.6 ulps found by directed search). Whichever cell the GPU
+   assigns a point near a cell
+   line, the list holds every polygon whose kernel bbox accepts it, so the
+   answer is determined by the kernel alone and cell assignment can only add
+   candidates. Adjacent tilings pay with tiles listed on both sides of shared
+   cell lines (9 candidates instead of 4 for an interior point). Device/host
+   bit-identity and shapely parity tests are the arbiter.
+4. **Device inputs keep the contract**: host float64 and ``mx.float64`` points
+   are re-centered in float64 (on the MLX CPU stream, bit-identical to NumPy);
+   float32 MLX inputs are re-centered on the device with a split ``hi + lo``
+   origin (within 1 ulp of the float64 result) and emit ``PrecisionWarning``,
+   because the raw fp32 lon/lat rounding they carry already exceeds the band.
+5. Haversine: degree→radian conversion in float64 on the CPU when possible;
    fp32 differencing bounds absolute error ~1-2 m (relative ~1e-4 at 10 km),
    except within ~2° of the exact antipode where arcsin amplification grows
    absolute error to 10²-10⁴ m (relative stays < 2e-4).
@@ -105,14 +119,21 @@ permutation array. Material high-occupancy rectangle expansions instead
 derive cell counts from four-corner 2-D differences and fill CSR segments
 directly with monotonic per-cell cursors while visiting polygons in ascending
 order. Every route preserves the deterministic "first match = min polygon
-index" contract. First-match query: float64 CPU cell assignment → one int32
-cell ID per point → point-centric Metal kernel traverses the cached grid
-CSR, performs bbox + parity tests, and returns on the first hit. This avoids
-all per-candidate query arrays and the host `minimum.at` reduction. Whole-point
-launches are split by the candidate-work budget; a cell that individually
-exceeds it uses the bounded explicit-pair fallback. For `all_matches=True`,
-zero-candidate points are removed and conceptual candidate ranks are split by
-the same hard budget. Ordinary batches use point-centric count, prefix scan,
+index" contract. Query inputs: host arrays are re-centered in float64 on the
+MLX CPU stream and return NumPy; `mx.array` and `LocalPoints` inputs stay in
+unified memory and return MLX arrays (the output container follows the
+input). First-match query: one compiled MLX graph assigns cells on the GPU
+from the fp32 local coordinates — every per-index scalar travels as a 0-d
+array so a single Metal kernel serves all indexes — and one synchronization
+returns the candidate total and maximum for dispatch and batching; the
+point-centric Metal kernel then traverses the cached grid CSR, performs bbox
++ parity tests, and returns on the first hit. This avoids all per-candidate
+query arrays and every O(N) host pass. Whole-point launches are split by the
+candidate-work budget from a device prefix sum; a cell that individually
+exceeds it uses the bounded explicit-pair fallback (host-planned from the
+device-assigned cells). For `all_matches=True`, candidate-bearing points are
+compacted on the device (prefix sum + scatter) and conceptual candidate ranks
+are split by the same hard budget. Ordinary batches use point-centric count, prefix scan,
 and ordered write passes; sparse or skewed batches use pair-parallel predicate
 flags, scan, and ordered writes. Both routes avoid host candidate-pair
 expansion and atomics while preserving point-then-polygon output order.
@@ -132,10 +153,14 @@ contracts.
 ## Dispatch
 
 Below ~1e5 candidate pairs, single-threaded GEOS beats kernel launch +
-transfer overhead: automatic shapely STRtree fallback with matching
-first-match semantics, honoring the caller's `predicate` exactly (the GPU
-kernel serves both predicates — they differ only on boundary points, inside
-the fp32 tolerance band). Override per call (`backend=`) or via
+transfer overhead for host-resident inputs: automatic shapely STRtree
+fallback with matching first-match semantics, honoring the caller's
+`predicate` exactly (the GPU kernel serves both predicates — they differ only
+on boundary points, inside the fp32 tolerance band). Small host queries are
+routed without a device pass from the bound `n_points * max_cell_count`.
+Device-resident inputs run on the GPU whenever Metal is available, since the
+fallback would need a host copy; `backend="cpu"` on them runs GEOS on the fp32
+local coordinates. Override per call (`backend=`) or via
 `MLX_SPATIAL_BACKEND`.
 
 ## Benchmark honesty rules
@@ -147,6 +172,10 @@ sjoin, DuckDB spatial, sklearn (haversine/BallTree), numpy float64.
 
 ## The differentiated story
 
-Array-native in unified memory: zone assignment / distance features flow
-straight into an MLX training loop with zero copies and zero serialization —
-something neither GeoPandas nor DuckDB can offer.
+Array-native in unified memory: `PolygonSet.to_local` re-centers a point
+table once; `GridIndex.query(LocalPoints)` returns zone ids as a lazy MLX
+array computed entirely on the GPU, `haversine*` return MLX distance features,
+and both feed an `mlx.nn` model directly (`examples/mlx_feature_pipeline.py`).
+Zero copies and zero serialization, something neither GeoPandas nor DuckDB can
+offer; GeoPandas users still get NumPy back because the output container
+follows the input container.

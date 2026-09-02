@@ -18,11 +18,42 @@ import warnings
 import numpy as np
 
 __all__ = [
+    "PrecisionWarning",
     "compute_origin",
     "recenter",
+    "split_origin_fp32",
     "float32_resolution",
     "boundary_tolerance",
 ]
+
+
+class PrecisionWarning(UserWarning):
+    """Query points arrived as float32 (or 16-bit) MLX arrays.
+
+    Raw lon/lat stored in float32 already carries about half an ulp of
+    rounding (roughly 0.4 m at longitude 74), far wider than the local
+    tolerance band the GPU predicates are exact to, so results near polygon
+    edges cannot match GEOS outside the documented band for such inputs.
+    Re-center from float64 once with ``PolygonSet.to_local(np_points)`` or
+    build the array with ``mx.array(x, dtype=mx.float64)`` (``mx.array`` of a
+    float64 NumPy array silently produces float32). Silence with
+    ``warnings.filterwarnings("ignore", category=mlx_spatial.PrecisionWarning)``
+    or make it an error with ``warnings.simplefilter("error", ...)``.
+    """
+
+
+def split_origin_fp32(origin) -> tuple[np.ndarray, np.ndarray]:
+    """Split a float64 origin into float32 ``hi + lo`` for on-device re-centering.
+
+    For a float32 point ``x``, ``(x - hi) - lo`` evaluated in float32 lands
+    within one ulp of ``float32(float64(x) - origin)``: the first subtraction
+    is exact whenever ``x`` is within a factor of two of ``hi`` (Sterbenz), and
+    ``lo`` carries the part of the origin that ``hi`` could not represent.
+    """
+    origin = np.asarray(origin, dtype=np.float64).reshape(2)
+    hi = origin.astype(np.float32)
+    lo = (origin - hi.astype(np.float64)).astype(np.float32)
+    return hi, lo
 
 
 def compute_origin(*coord_arrays: np.ndarray) -> np.ndarray:

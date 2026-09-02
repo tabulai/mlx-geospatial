@@ -519,16 +519,18 @@ def test_pip_dense_zero_points():
 def test_contains_matrix_zero_points():
     polyset = ms.PolygonSet([shapely.box(0, 0, 1, 1), shapely.box(2, 2, 3, 3)])
     out = ms.contains_matrix(np.empty((0, 2)), polyset)
+    assert isinstance(out, np.ndarray)  # host input -> NumPy container
     assert out.shape == (0, 2)
-    assert out.dtype == mx.bool_
+    assert out.dtype == np.bool_
 
 
 def test_contains_matrix_all_empty_polygons():
     polyset = ms.PolygonSet([shapely.Polygon(), shapely.Polygon()])
     out = ms.contains_matrix([[0.0, 0.0], [1.0, 1.0]], polyset, chunk_bytes=1)
+    assert isinstance(out, np.ndarray)
     assert out.shape == (2, 2)
-    assert out.dtype == mx.bool_
-    assert not np.array(out).any()
+    assert out.dtype == np.bool_
+    assert not out.any()
 
 
 def test_point_in_polygon_zero_points():
@@ -593,6 +595,8 @@ def test_all_covers_expected_surface():
     expected = {
         "__version__",
         "PolygonSet",
+        "LocalPoints",
+        "PrecisionWarning",
         "as_point_array",
         "from_shapely",
         "contains_matrix",

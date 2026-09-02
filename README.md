@@ -5,10 +5,12 @@ GPU-accelerated spatial operations for Apple silicon, built on
 point-in-polygon, and grid-indexed spatial joins.
 
 The pitch beyond speed: mlx-spatial is **array-native in unified memory**.
-Spatial feature engineering — zone assignment, distance-to-POI features,
-nearest-neighbor lookups — flows straight into an MLX training loop or
-embedding model with zero copies and zero serialization, something neither
-GeoPandas nor DuckDB can offer.
+Re-center a point table once with `PolygonSet.to_local`, and zone
+assignment, distance-to-POI features and nearest-neighbor lookups run
+entirely on the GPU and come back as MLX arrays: no NumPy round trip, no
+copies, no serialization, straight into an MLX training loop or embedding
+model (see `examples/mlx_feature_pipeline.py`). GeoPandas users keep NumPy:
+the predicates return the container you pass in.
 
 ## Install
 
@@ -22,33 +24,59 @@ Requires macOS on Apple silicon (Metal), Python ≥ 3.10, `mlx`, `numpy`,
 
 ## Quickstart
 
+The first block runs as written (synthetic data stands in for a real zone
+layer); the second continues from it and elides the model.
+
+**GeoPandas / NumPy users**: pass NumPy, shapely or GeoSeries, get NumPy back.
+
 ```python
-import numpy as np
+import numpy as np, shapely
 import mlx_spatial as ms
 
-# --- haversine distances (coords are (lon, lat) degrees; meters out) ------
-pickups  = np.column_stack([lons, lats])          # (N, 2)
-stations = np.column_stack([st_lons, st_lats])    # (M, 2)
+rng = np.random.default_rng(0)
+pickups = np.column_stack([rng.uniform(-74.03, -73.9, 200_000), rng.uniform(40.7, 40.82, 200_000)])
+stations = np.column_stack([rng.uniform(-74.03, -73.9, 500), rng.uniform(40.7, 40.82, 500)])
+gx, gy = np.linspace(-74.03, -73.9, 21), np.linspace(40.7, 40.82, 21)
+zones = [shapely.box(gx[i], gy[j], gx[i + 1], gy[j + 1]) for j in range(20) for i in range(20)]
+# real data: zones = gpd.read_file("taxi_zones.geojson").geometry
 
-d      = ms.haversine(pickups[:-1], pickups[1:])          # elementwise
-dmat   = ms.haversine_cross(pickups, stations)            # (N, M)
-dist, idx = ms.haversine_knn(pickups, stations, k=5)      # (N, 5) each
+# --- haversine distances (coords are (lon, lat) degrees; meters out) ------
+d = ms.haversine(pickups[:-1], pickups[1:])              # elementwise, mx.array
+dist, idx = ms.haversine_knn(pickups, stations, k=5)     # (N, 5) each, mx.array
 
 # --- point-in-polygon / spatial join --------------------------------------
-import geopandas as gpd
-zones = gpd.read_file("taxi_zones.geojson")
-
-zone_idx = ms.point_in_polygon(pickups, zones.geometry)   # (N,) int32, -1 = none
+zone_idx = ms.point_in_polygon(pickups, zones)          # (N,) numpy int32, -1 = none
+polyset = ms.PolygonSet(zones)                           # ingest + index once, reuse
+labels = ms.point_in_polygon(pickups, polyset)
 
 # GeoPandas-flavored join (pandas DataFrames with a geometry column work too)
-trips = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat))
-joined = ms.sjoin(trips, zones, how="inner")              # adds index_right + zone cols
-
-# reuse ingestion + index across many queries
-polyset = ms.PolygonSet(zones.geometry)
-for batch in point_batches:
-    labels = ms.point_in_polygon(batch, polyset)
+# joined = ms.sjoin(trips_gdf, zones_gdf, how="inner")   # adds index_right + zone cols
 ```
+
+**MLX users**: re-center once, slice per batch, everything stays on the GPU.
+
+```python
+import mlx.core as mx, mlx.nn as nn
+
+polyset = ms.PolygonSet(zones)
+index = ms.GridIndex(polyset)
+local = polyset.to_local(pickups)         # float64 -> fp32 local frame, once; LocalPoints
+pickups_mx = mx.array(np.radians(pickups).astype(np.float32))   # raw lon/lat for distances
+pois_mx = mx.array(np.radians(stations[:32]).astype(np.float32))
+n_zones = len(polyset)
+embed = nn.Embedding(n_zones + 1, 16)     # extra row for "no zone"
+
+for start in range(0, len(local), 65_536):
+    batch = local[start : start + 65_536]                  # slicing keeps the frame
+    zone = index.query(batch)                              # lazy mx.array int32, GPU only
+    zone = mx.where(zone < 0, n_zones, zone)               # -1 would read the last row
+    dist = ms.haversine_cross(pickups_mx[start : start + 65_536], pois_mx, degrees=False)
+    feats = mx.concatenate([embed(zone), dist / 1e4], axis=1)
+    mx.eval(feats)                                         # your mlx.nn step goes here
+```
+
+`LocalPoints` are re-centered coordinates, so the distance functions reject
+them by design; keep the raw lon/lat around for `haversine*`.
 
 ## API
 
@@ -61,7 +89,20 @@ for batch in point_batches:
 | `contains_matrix(pts, polys)` | dense `(N, M)` bool containment (small M) |
 | `sjoin(left, right)` | GeoPandas-flavored point-in-polygon join |
 | `PolygonSet(geoms)` | ingested, re-centered, GPU-resident polygons |
+| `PolygonSet.to_local(points)` | re-center points once into the set's fp32 frame → `LocalPoints` |
+| `LocalPoints` | device-resident query points; sliceable; joins on them return MLX arrays |
 | `GridIndex(polyset)` | reusable uniform-grid spatial index |
+| `PrecisionWarning` | warning emitted for float32/16-bit MLX query points, see below |
+| `from_shapely(geoms)` | alias for `PolygonSet(geoms)` |
+| `as_point_array(points)` | normalize any host point input to float64 `(N, 2)` |
+| `R_EARTH_M` | mean Earth radius (meters) used by the haversine functions |
+
+Output containers: the predicates (`point_in_polygon`, `GridIndex.query`,
+`contains_matrix`) return the container you pass in — NumPy for NumPy, lists,
+shapely and GeoSeries; MLX arrays for `mx.array` and `LocalPoints`, computed
+without leaving unified memory (float32 inputs and `LocalPoints` entirely on
+the GPU; float64 re-centering on the MLX CPU stream). The distance functions
+always return MLX arrays; `sjoin` returns pandas.
 
 `GridIndex` construction is adaptive: low-coverage bbox expansions use stable
 integer sorting, more expanded grids use lower-memory packed-key sorting, and
@@ -70,8 +111,10 @@ retains ascending polygon IDs within each cell.
 
 Conventions: coordinates are `(x, y)` = `(lon, lat)`, degrees; planar math
 for containment (project first if you need metric correctness near poles);
-spherical math for haversine. No CRS handling — that stays pyproj's job;
-`sjoin` only checks that left/right CRS match.
+spherical math for haversine. No reprojection — that stays pyproj's job. When
+both sides carry a CRS (GeoSeries/GeoDataFrame), `sjoin`, `point_in_polygon`,
+`contains_matrix` and `PolygonSet.to_local` raise on a mismatch; a CRS-less
+side is never checked.
 
 ## Precision, honestly
 
@@ -89,8 +132,22 @@ structurally rather than hopefully:
   scales with the *dataset* extent: one stray geometry far from the rest
   (a placeholder at (0, 0), a wrong-hemisphere typo) widens it for everyone,
   so clean outliers before ingesting.
-- Grid planning runs in float64 and kernel bboxes are widened so rounding can
-  only add candidate pairs, never lose a true hit.
+- Cell assignment runs on the GPU in fp32. Polygon cell ranges are planned in
+  float64 and padded by 16 ulps of the local extent — more than the kernel's
+  bbox widening plus the fp32 assignment error — so whichever cell a point
+  near a cell line lands in lists every polygon whose kernel bbox accepts it:
+  rounding can only add candidate pairs, never lose a true hit, and host and
+  device inputs give bit-identical answers. Adjacent tilings pay for this with
+  each tile listed in the neighbouring cells too (9 candidates instead of 4).
+- **Device inputs**: host float64 coordinates and `mx.array` float64 inputs
+  (build them with `mx.array(x, dtype=mx.float64)`; a plain `mx.array` of a
+  float64 NumPy array is silently float32) are re-centered in float64 and keep
+  this contract. A float32 (or 16-bit) MLX array already carries ~0.5 ulp of
+  raw lon/lat rounding (about 0.4 m at longitude 74), wider than the band at
+  city or state extents, so the join re-centers it on the device and emits `mlx_spatial.PrecisionWarning`
+  once per call site; silence it with `warnings.filterwarnings("ignore",
+  category=ms.PrecisionWarning)` or make it strict with
+  `warnings.simplefilter("error", ms.PrecisionWarning)`.
 - **Valid geometry assumed**: containment is the even-odd rule over all rings,
   which equals GEOS fill semantics for valid polygons. On invalid input
   (self-intersections, overlapping multipolygon parts) even-odd differs from
@@ -108,28 +165,35 @@ structurally rather than hopefully:
   antipode, arcsin amplification grows absolute error to 10²-10⁴ m (relative
   error stays < 2e-4).
 
-Small workloads (< ~100k candidate pairs) automatically fall back to shapely —
-single-threaded GEOS beats a kernel launch there. Force a path with
-`backend="gpu" | "cpu"` or `MLX_SPATIAL_BACKEND`.
+Small host-resident workloads (< ~100k candidate pairs) automatically fall
+back to shapely — single-threaded GEOS beats a kernel launch there.
+Device-resident inputs (`mx.array`, `LocalPoints`) run on the GPU whenever
+Metal is available, because the fallback would need a host copy. Force a path
+with `backend="gpu" | "cpu"` or `MLX_SPATIAL_BACKEND`; `backend="cpu"` on
+device inputs runs GEOS on the fp32 local coordinates (a parity/debug path).
 
 ## Benchmarks
 
 Apple M4 Max, macOS 26.2, mlx 0.31.2, Python 3.13. End-to-end wall time from
 host-resident numpy/shapely inputs — ingestion, host→device transfer, and
-device result evaluation/synchronization included (no NumPy copy-back); best
-of 3. Reproduce with `python bench/bench.py --all` (methodology in
+device result evaluation/synchronization included; host-input join rows
+return NumPy labels as a zero-copy view of the MLX result; best of 3. Reproduce with `python bench/bench.py --all` (methodology in
 `bench/README.md`).
 
-**Point-in-polygon join** (uniform random points × convex zones, NYC-like
-extent; mlx-spatial numbers use a warm index; the benchmark harness also
-reports cold runs with polygon ingestion and index construction included):
+**Point-in-polygon join** (uniform random points × synthetic 48-vertex zones,
+NYC-like extent; mlx-spatial numbers use a warm index. The first mlx-spatial
+column is NumPy in → NumPy out; the second is the array-native pattern:
+`LocalPoints` re-centered once, MLX array out, `mx.eval` inside the timing.
+Speedups are against the NumPy column. The harness also reports cold runs with
+polygon ingestion and index construction included: 6.8 ms at 1M × 260 zones,
+31 ms at 1M × 10k zones):
 
-| workload | mlx-spatial | shapely STRtree | GeoPandas sjoin | DuckDB spatial |
-| --- | --- | --- | --- | --- |
-| 100k pts × 260 zones | **2.2 ms** | 63 ms (29x) | 41 ms (19x) | 126 ms (57x) |
-| 1M pts × 260 zones | **13 ms** | 648 ms (50x) | 690 ms (53x) | 547 ms (42x) |
-| 10M pts × 260 zones | **136 ms** | 6.8 s (50x) | 11.1 s (82x) | 6.4 s (47x) |
-| 1M pts × 10k zones | **12 ms** | 1.06 s (88x) | 786 ms (65x) | 554 ms (46x) |
+| workload | mlx-spatial (NumPy) | mlx-spatial (LocalPoints) | shapely STRtree | GeoPandas sjoin | DuckDB spatial |
+| --- | --- | --- | --- | --- | --- |
+| 100k pts × 260 zones | **1.8 ms** | 1.6 ms | 60 ms (33x) | 28 ms (16x) | 118 ms (66x) |
+| 1M pts × 260 zones | **5.0 ms** | 3.9 ms | 611 ms (122x) | 576 ms (115x) | 550 ms (110x) |
+| 10M pts × 260 zones | **44 ms** | 33 ms | 6.4 s (145x) | 10.1 s (230x) | 6.6 s (150x) |
+| 1M pts × 10k zones | **5.1 ms** | 2.9 ms | 896 ms (177x) | 710 ms (140x) | 577 ms (114x) |
 
 **Haversine** (`mx.compile`-fused distances; kNN via adaptive scalar/SIMDgroup
 selection kernels):

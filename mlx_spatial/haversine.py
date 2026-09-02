@@ -50,7 +50,21 @@ def _check_radius(radius) -> float:
 
 
 def _prep(a, degrees: bool) -> mx.array:
-    """Normalize input to an mx float32 ``(..., 2)`` array in radians."""
+    """Normalize input to an mx float32 ``(..., 2)`` array in radians.
+
+    ``mx.float64`` arrays (CPU-only in MLX) take the float64 NumPy conversion,
+    so their degree-to-radian step matches the NumPy path bit for bit on every
+    supported MLX version; float32 MLX arrays convert on the device.
+    """
+    from ._ingest import LocalPoints
+
+    if isinstance(a, LocalPoints):
+        raise TypeError(
+            "LocalPoints hold re-centered polygon-frame coordinates, not lon/lat; "
+            "pass the original coordinates to the haversine functions"
+        )
+    if isinstance(a, mx.array) and a.dtype == mx.float64:
+        a = np.asarray(a)
     if isinstance(a, mx.array):
         arr = a.astype(mx.float32)
         if arr.ndim == 0 or arr.shape[-1] != 2:

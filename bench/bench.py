@@ -3,7 +3,9 @@
 Honesty rules:
 - All timings are end-to-end from host-resident numpy/shapely inputs,
   including ingestion, host->device input transfer, device result evaluation,
-  and synchronization. MLX results are not copied back to numpy.
+  and synchronization. Host-input join rows return NumPy labels as a
+  zero-copy view of the MLX result (no copy-back is timed); other MLX results
+  stay MLX arrays.
 - The explicitly labeled dense-PIP microbenchmark is the exception: it uses
   a pre-ingested PolygonSet and GPU-resident points to isolate the replacement
   kernel from its retained composed oracle.
@@ -216,9 +218,20 @@ def bench_join(n: int, m: int, rng) -> list[tuple[str, float | None]]:
     index = ms.GridIndex(polyset)
 
     def ours_warm():
+        # numpy in -> numpy out: host re-centering plus a zero-copy view of
+        # the MLX result; the label array is fully materialized on return.
         index.query(pts, backend="gpu")
 
     rows.append(("mlx-spatial point_in_polygon (warm index)", timeit(ours_warm)))
+
+    local = polyset.to_local(pts)  # re-center once; the array-native pattern
+
+    def ours_device():
+        mx.eval(index.query(local))
+
+    rows.append(
+        ("mlx-spatial point_in_polygon (warm index, device-resident points)", timeit(ours_device))
+    )
 
     def strtree():
         tree = shapely.STRtree(zones)
