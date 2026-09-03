@@ -344,6 +344,55 @@ def test_empty_polygon_promoted_path():
     assert not cm[:, 0].any()
 
 
+def test_invalid_external_hole_uses_all_ring_bounds_on_every_route():
+    """BBox rejection must cover every ring used by even-odd containment.
+
+    GEOS reports only the shell envelope for this invalid polygon. The
+    outside "hole" is nevertheless an ingested ring and therefore contributes
+    one parity crossing when validation is deliberately disabled.
+    """
+    external_hole = Polygon(
+        [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+        holes=[[(2.0, 2.0), (3.0, 2.0), (3.0, 3.0), (2.0, 3.0)]],
+    )
+    assert not external_hole.is_valid
+    assert external_hole.bounds == (0.0, 0.0, 1.0, 1.0)
+
+    polyset = ms.PolygonSet([external_hole])
+    np.testing.assert_array_equal(polyset.bboxes, [[0.0, 0.0, 3.0, 3.0]])
+    np.testing.assert_array_equal(polyset.origin, [1.5, 1.5])
+
+    points = np.array(
+        [
+            [0.5, 0.5],  # inside the shell
+            [2.5, 2.5],  # inside the external ring
+            [1.5, 1.5],  # between both rings
+            [4.0, 4.0],  # outside the all-ring bounds
+        ]
+    )
+    expected_dense = np.array([[True], [True], [False], [False]])
+
+    old_device = mx.default_device()
+    try:
+        # Explicitly exercise the composed CPU oracle and Metal's bbox
+        # pre-test. contains_matrix intentionally has no backend keyword.
+        for device in (mx.cpu, mx.gpu):
+            mx.set_default_device(device)
+            np.testing.assert_array_equal(
+                np.asarray(ms.contains_matrix(points, polyset)), expected_dense
+            )
+    finally:
+        mx.set_default_device(old_device)
+
+    index = ms.GridIndex(polyset)
+    expected_indexed = np.array([0, 0, -1, -1])
+    for backend in ("cpu", "gpu"):
+        np.testing.assert_array_equal(
+            np.asarray(ms.point_in_polygon(points, index=index, backend=backend)),
+            expected_indexed,
+        )
+
+
 def test_long_ring_metadata_distinguishes_many_short_rings_after_empty():
     """Dispatch metadata is per geometry and measures ring and total edges."""
     k = 1031
@@ -654,7 +703,7 @@ def test_polygonset_validation_errors():
 
 
 def test_origin_from_bounds_matches_vertex_origin():
-    """The default origin is derived from shapely bounds, not every vertex."""
+    """All-ring bounds give exactly the same global extrema as the vertices."""
     rng = np.random.default_rng(7)
     polys = list(make_convex_polygons(40, rng, extent=(-74.3, 40.5, -73.7, 40.9)))
     polys += [Polygon(), MultiPolygon([shapely.box(-74.0, 40.6, -73.9, 40.7), shapely.box(-73.8, 40.8, -73.75, 40.85)])]

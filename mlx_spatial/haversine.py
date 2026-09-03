@@ -138,6 +138,11 @@ _KNN_SIMDGROUP_LARGE_REF_QUERY_LIMITS = (
 )
 
 _KNN_SELECT_SOURCE = """
+    // Keep this expression tree bit-identical to _hav_graph.  Contracting
+    // the final multiply-add changes h by an ulp for some pairs; close to an
+    // antipode, that is enough to reverse neighbors after asin amplification.
+    #pragma clang fp contract(off)
+
     uint tid = thread_position_in_grid.x;
     int n_q = shape[0];
     if (tid >= (uint)n_q) return;
@@ -153,7 +158,13 @@ _KNN_SELECT_SOURCE = """
     for (int j = 0; j < m; ++j) {
         float sdlat = metal::precise::sin((r[2 * (size_t)j + 1] - qlat) * 0.5f);
         float sdlon = metal::precise::sin((r[2 * (size_t)j + 0] - qlon) * 0.5f);
-        float h = sdlat * sdlat + qc * rcos[j] * sdlon * sdlon;
+        float h_lat = sdlat * sdlat;
+        float h_lon = qc * rcos[j] * sdlon * sdlon;
+        float h = h_lat + h_lon;
+        // Match mx.clip while preserving NaN: comparisons with NaN are
+        // false, so non-finite coordinate rows still never enter the list.
+        if (h < 0.0f) h = 0.0f;
+        else if (h > 1.0f) h = 1.0f;
         // Strict < plus strict shift keeps earlier reference indices on
         // exact ties (matching a stable sort's tie-break).
         if (h < best_h[K - 1]) {
@@ -174,6 +185,10 @@ _KNN_SELECT_SOURCE = """
 
 
 _KNN_SIMDGROUP_SELECT_SOURCE = """
+    // See the scalar selector: contraction here can disagree with the public
+    // distance graph by an ulp and produce a wrong ordering near antipodes.
+    #pragma clang fp contract(off)
+
     uint tid = thread_position_in_grid.x;
     uint lane = thread_index_in_simdgroup;
     uint qid = tid / 32;
@@ -197,7 +212,11 @@ _KNN_SIMDGROUP_SELECT_SOURCE = """
             (r[2 * (size_t)j + 1] - qlat) * 0.5f);
         float sdlon = metal::precise::sin(
             (r[2 * (size_t)j + 0] - qlon) * 0.5f);
-        float h = sdlat * sdlat + qc * rcos[j] * sdlon * sdlon;
+        float h_lat = sdlat * sdlat;
+        float h_lon = qc * rcos[j] * sdlon * sdlon;
+        float h = h_lat + h_lon;
+        if (h < 0.0f) h = 0.0f;
+        else if (h > 1.0f) h = 1.0f;
         if (h < best_h[K - 1]) {
             int s = K - 1;
             while (s > 0 && best_h[s - 1] > h) {

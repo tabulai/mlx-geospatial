@@ -191,6 +191,37 @@ def _as_geometry_array(geoms) -> np.ndarray:
     return arr
 
 
+def _ragged_geometry_bounds(
+    coords: np.ndarray,
+    ring_offsets: np.ndarray,
+    geom_ring_offsets: np.ndarray,
+) -> np.ndarray:
+    """Per-geometry bounds over every coordinate in every ingested ring.
+
+    GEOS envelopes are shell-derived for polygons. That is equivalent to a
+    vertex reduction for valid geometry, but not for an invalid polygon whose
+    interior ring extends outside its shell. Containment deliberately accepts
+    such geometry when ``validate=False`` and applies even-odd parity over *all*
+    rings, so its cheap bbox rejection must cover those same rings too.
+
+    Empty geometries have duplicate vertex offsets and retain an all-NaN row.
+    Filtering them also makes the ``reduceat`` starts strictly increasing.
+    """
+    bounds = np.full((len(geom_ring_offsets) - 1, 4), np.nan, dtype=np.float64)
+    if not len(coords):
+        return bounds
+
+    geom_vertex_offsets = ring_offsets[geom_ring_offsets]
+    nonempty = geom_vertex_offsets[1:] > geom_vertex_offsets[:-1]
+    starts = geom_vertex_offsets[:-1][nonempty]
+    # Coordinates are grouped by geometry in the ragged layout. Skipped empty
+    # rows contribute no coordinates, so consecutive starts still delimit each
+    # non-empty geometry exactly even when empties occur between them.
+    bounds[nonempty, 0:2] = np.minimum.reduceat(coords, starts, axis=0)
+    bounds[nonempty, 2:4] = np.maximum.reduceat(coords, starts, axis=0)
+    return bounds
+
+
 def as_point_array(points) -> np.ndarray:
     """Normalize point input to a float64 ``(N, 2)`` array of ``(x, y)``.
 
@@ -272,7 +303,9 @@ class PolygonSet:
         Re-centered per-geometry bounds, slightly widened so fp32 rounding can
         only add candidates, never drop true hits.
     bboxes : np.ndarray (M, 4) float64
-        Original-coordinate bounds, used for CPU-side grid planning.
+        Original-coordinate bounds over every ingested ring, used for CPU-side
+        grid planning. For invalid geometry these can be wider than the GEOS
+        envelope, matching the all-ring even-odd containment contract.
     origin : np.ndarray (2,) float64
         The shared re-centering origin. Query points must be re-centered with
         this same origin; the array is read-only so it cannot drift from the
@@ -338,15 +371,15 @@ class PolygonSet:
         self.n_polygons = len(arr)
         self.n_rings = len(ring_offsets) - 1
         self.n_vertices = len(coords)
-        self.bboxes = shapely.bounds(arr).astype(np.float64)
+        self.bboxes = _ragged_geometry_bounds(
+            coords, ring_offsets, geom_ring_offsets
+        )
 
         if origin is None:
-            # shapely.bounds is exact, so for valid geometries the bbox
-            # extremes are the vertex extremes and this is the vertex-derived
-            # origin bit for bit, at 20-45x less cost than an axis-0 reduction
-            # over every vertex. (GEOS envelopes use the shell only, so an
-            # invalid polygon whose hole pokes outside its shell gets a
-            # different, still valid, origin.)
+            # These all-ring bounds have the same extrema as the ragged vertex
+            # array, including for invalid polygons whose interior rings poke
+            # outside their shells. The origin, grid and kernel bbox test must
+            # all describe the same ring set as even-odd containment.
             origin = compute_origin(self.bboxes[:, 0:2], self.bboxes[:, 2:4])
         # Own, frozen copy: aliasing a caller-owned (writable) array would let
         # a later mutation desynchronize query re-centering (host points are
