@@ -61,6 +61,42 @@ def test_public_api_uses_fused_and_matches_bruteforce(rng):
     )
 
 
+# Both references are within about 100 m of the query's antipode.  With
+# multiply-add contraction enabled in the selectors their h values collapse
+# to the same fp32 value, while the public _hav graph keeps them distinct.
+_ANTIPODAL_QUERY = np.array([[91.06015715, -46.14764379]])
+_ANTIPODAL_REFERENCES = np.array(
+    [
+        [-88.93957964, 46.14706647],
+        [-88.94039897, 46.14803763],
+    ]
+)
+
+
+def test_public_k1_near_antipode_matches_bruteforce():
+    full = np.array(ms.haversine_cross(_ANTIPODAL_QUERY, _ANTIPODAL_REFERENCES))
+    assert full[0, 1] < full[0, 0]  # Regression case is sensitive to ordering.
+
+    dist, idx = ms.haversine_knn(
+        _ANTIPODAL_QUERY, _ANTIPODAL_REFERENCES, k=1
+    )
+    np.testing.assert_array_equal(np.array(idx), [[1]])
+    np.testing.assert_array_equal(np.array(dist), full[:, 1:2])
+
+
+@pytest.mark.parametrize(
+    "selector", [_knn_fused, _knn_simdgroup], ids=["scalar", "simdgroup"]
+)
+def test_fused_selectors_near_antipode_match_bruteforce(selector):
+    q = _prep(_ANTIPODAL_QUERY, True)
+    r = _prep(_ANTIPODAL_REFERENCES, True)
+    dist, idx = selector(q, r, 1, ms.R_EARTH_M)
+    full = np.array(ms.haversine_cross(_ANTIPODAL_QUERY, _ANTIPODAL_REFERENCES))
+
+    np.testing.assert_array_equal(np.array(idx), [[1]])
+    np.testing.assert_array_equal(np.array(dist), full[:, 1:2])
+
+
 def test_k_above_kernel_cap_falls_back(rng, monkeypatch):
     """k > 32 must still return correct results via the composed path."""
     haversine_module = importlib.import_module("mlx_spatial.haversine")

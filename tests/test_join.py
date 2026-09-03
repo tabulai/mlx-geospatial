@@ -1095,12 +1095,16 @@ class TestOneContainmentContract:
 
     @staticmethod
     def _points(rng, polys):
-        x0, y0, x1, y1 = shapely.total_bounds(polys)
+        # Match PolygonSet's all-ring bounds. GEOS total_bounds excludes an
+        # invalid interior ring that extends beyond its shell, even though the
+        # documented even-odd predicate evaluates that ring.
+        coords = shapely.get_coordinates(polys)
+        x0, y0 = coords.min(axis=0)
+        x1, y1 = coords.max(axis=0)
         pad = 0.2 * max(x1 - x0, y1 - y0)
         pts = rng.uniform([x0 - pad, y0 - pad], [x1 + pad, y1 + pad], size=(3000, 2))
         # exact vertices and edge midpoints of every ring: deterministic
         # boundary points, plus NaN/inf rows
-        coords = shapely.get_coordinates(polys)
         mids = (coords[:-1] + coords[1:]) / 2.0
         special = np.array([[np.nan, 0.0], [0.5, np.inf], [-np.inf, -np.inf]])
         # the grid's outer edge, a fraction of an fp32 ulp outside the float64
@@ -1165,8 +1169,9 @@ class TestOneContainmentContract:
         small = ms.point_in_polygon(probes, polyset)
         # hand-derived even-odd: probe 0 sits inside both overlapping boxes
         # (two crossings -> outside), where GEOS would say polygon 0; probe 4
-        # is in the hole part that lies inside the shell (one crossing).
-        np.testing.assert_array_equal(small, [-1, 0, 0, -1, 1, -1, 2, -1, 2, -1])
+        # is in the hole part that lies inside the shell (one crossing); probe
+        # 5 is inside the outside ring alone and therefore also has odd parity.
+        np.testing.assert_array_equal(small, [-1, 0, 0, -1, 1, 1, 2, -1, 2, -1])
         big = ms.point_in_polygon(np.concatenate([probes, np.tile(probes[-1], (200_000, 1))]), polyset)
         np.testing.assert_array_equal(big[: len(probes)], small)
         np.testing.assert_array_equal(ms.point_in_polygon(probes, polyset, backend="cpu"), small)
