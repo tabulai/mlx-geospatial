@@ -237,8 +237,20 @@ parity/debug path). Override per call (`backend=`) or via
 
 End-to-end timings from host-resident inputs including ingestion; cold vs
 warm-index reported separately; sweep N and M; show the CPU/GPU crossover
-rather than a single headline multiple. Baselines: shapely STRtree, geopandas
-sjoin, DuckDB spatial, sklearn (haversine/BallTree), numpy float64.
+rather than a single headline multiple. Like against like: join baselines
+return all pairs, so speedups are quoted against our `all_matches=True` row,
+with first match shown beside it; the BallTree baseline is quoted with the
+tree built in the timed region and query-only on a prebuilt tree. Baselines
+get their best configuration (polygons as the prepared query side of the
+STRtree and the left frame of `sjoin`: 8-60x faster on detailed polygons
+than the unprepared orientation). Thread counts are stated (GEOS, GeoPandas
+and scikit-learn use one core, DuckDB its full default pool, the GPU rows the
+whole GPU). Synthetic zones are described as what they are (overlapping
+star-shaped polygons with measured coverage, not a convex tiling), and
+detailed geometry (2,048-vertex zones, a 150k-vertex polygon) is benchmarked
+because that is where baseline configuration and our per-candidate ring walk
+matter most. Baselines: shapely STRtree, geopandas sjoin, DuckDB spatial,
+sklearn (haversine/BallTree), numpy float64.
 
 ## The differentiated story
 

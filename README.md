@@ -210,26 +210,68 @@ and runs the same predicate there (a parity/debug path).
 
 ## Benchmarks
 
-Apple M4 Max, macOS 26.2, mlx 0.31.2, Python 3.13. End-to-end wall time from
-host-resident numpy/shapely inputs — ingestion, host→device transfer, and
-device result evaluation/synchronization included; host-input join rows
-return NumPy labels as a zero-copy view of the MLX result; best of 3. Reproduce with `python bench/bench.py --all` (methodology in
-`bench/README.md`).
+Apple M4 Max (16 cores: 12 performance + 4 efficiency), macOS 26.2, mlx
+0.31.2, Python 3.13. End-to-end wall time from host-resident numpy/shapely
+inputs — ingestion, host→device transfer, and device result
+evaluation/synchronization included; host-input join rows return NumPy labels
+as a zero-copy view of the MLX result; best of 3 (exceptions in
+`bench/README.md`). CPU baselines: shapely/GEOS, GeoPandas and scikit-learn
+run on one core, DuckDB on its default 16 threads; the GPU rows use the whole
+GPU, with clocks warmed before each warm-index timing (steady-state burst
+numbers, like the crossover tables). Reproduce with `python bench/bench.py
+--all` (methodology in `bench/README.md`).
 
-**Point-in-polygon join** (uniform random points × synthetic 48-vertex zones,
-NYC-like extent; mlx-spatial numbers use a warm index. The first mlx-spatial
-column is NumPy in → NumPy out; the second is the array-native pattern:
-`LocalPoints` re-centered once, MLX array out, `mx.eval` inside the timing.
-Speedups are against the NumPy column. The harness also reports cold runs with
-polygon ingestion and index construction included: 3.8 ms at 1M × 260 zones,
-19 ms at 1M × 10k zones):
+**Point-in-polygon join.** The baselines evaluate every (point, polygon)
+pair (shapely and GeoPandas return them, DuckDB is timed as `count(*)` over
+the join), so their speedups (in parentheses) are against our
+`all_matches=True` column, which answers the same question. The first-match
+columns are the cheaper contract most joins want: NumPy in → NumPy out, and
+the array-native pattern (`LocalPoints` re-centered once, MLX array out,
+`mx.eval` inside the timing). GEOS gets its best configuration: the polygons
+are the prepared side (`STRtree(points).query(polygons)`, polygons on the
+left of `sjoin`), which is 8-60x faster on detailed polygons than querying a
+polygon tree with points and returns the same pairs. The synthetic zones are
+random star-shaped polygons that overlap and leave gaps (not a tiling, not
+convex): about two thirds of the points fall in a zone, in 1.6 zones on
+average, so the all-pairs outputs hold ~1.1 pairs per point. The coastline
+row is one 150,000-vertex polygon covering 22% of the extent. Cold runs with
+polygon ingestion and index construction included: 1.8 ms at 100k × 260,
+4.0 ms at 1M × 260, 22 ms at 1M × 10k, 45 ms on the 2,048-vertex zones,
+0.55 s on the coastline.
 
-| workload | mlx-spatial (NumPy) | mlx-spatial (LocalPoints) | shapely STRtree | GeoPandas sjoin | DuckDB spatial |
-| --- | --- | --- | --- | --- | --- |
-| 100k pts × 260 zones | **1.0 ms** | 0.95 ms | 61 ms (59x) | 28 ms (28x) | 118 ms (116x) |
-| 1M pts × 260 zones | **2.5 ms** | 1.5 ms | 608 ms (247x) | 581 ms (236x) | 550 ms (224x) |
-| 10M pts × 260 zones | **24 ms** | 13 ms | 6.4 s (262x) | 10.3 s (426x) | 6.6 s (273x) |
-| 1M pts × 10k zones | **3.1 ms** | 1.6 ms | 892 ms (290x) | 692 ms (225x) | 576 ms (188x) |
+| workload | first match (NumPy) | first match (LocalPoints) | **all pairs (NumPy)** | shapely STRtree, prepared, 1 core | GeoPandas sjoin, prepared, 1 core | DuckDB spatial, 16 threads |
+| --- | --- | --- | --- | --- | --- | --- |
+| 100k pts × 260 zones, 48 vertices | 0.48 ms | 0.33 ms | **1.9 ms** | 49 ms (26x) | 56 ms (30x) | 127 ms (67x) |
+| 1M pts × 260 zones, 48 vertices | 2.5 ms | 1.5 ms | **7.7 ms** | 771 ms (100x) | 805 ms (105x) | 557 ms (72x) |
+| 10M pts × 260 zones, 48 vertices | 26 ms | 14 ms | **69 ms** | 8.5 s (124x) | 9.0 s (131x) | 6.4 s (93x) |
+| 1M pts × 10k zones, 48 vertices | 2.6 ms | 1.5 ms | **8.1 ms** | 884 ms (109x) | 930 ms (115x) | 566 ms (70x) |
+| 1M pts × 260 zones, 2,048 vertices | 39 ms | 38 ms | **48 ms** | 1.07 s (22x) | 1.11 s (23x) | 2.9 s (60x) |
+| 1M pts × one 150k-vertex polygon | 548 ms | 547 ms | **233 ms** | 1.79 s (7.7x) | 1.79 s (7.7x) | 25 s (107x) |
+
+Three things the table shows that a headline would hide. Against single-core
+GEOS in its best configuration the advantage is 26-131x on 48-vertex zones
+and *shrinks* with geometric detail: 22x on 2,048-vertex zones, 7.7x on the
+150,000-vertex polygon. Prepared GEOS polygons carry an indexed point-in-area
+locator that costs roughly log(edges) per test, while our kernels walk every
+edge of each candidate ring; GPU parallelism absorbs that up to a few thousand
+edges per ring and no further (indexing long rings is on the backlog). The
+unprepared orientation, `STRtree(polygons).query(points)`, is what this
+harness used before and what produced detailed-geometry speedups in the
+hundreds; those numbers measured GEOS's worst configuration, not ours.
+DuckDB, which has no prepared geometries but uses 16 threads, stays 60-107x
+behind throughout. On the 48-vertex zones per-point overhead dominates our
+time (cell assignment and the count/scan/compaction passes, plus ~1.1 ms of
+fixed launch cost for the all-pairs route, the floor the crossover table
+shows: over half of the 100k row, about 14% at 1M), not edge tests, and the
+baselines are within about 2.5x of each other (1.4-1.6x from 1M points up). And on the single
+huge polygon first match is slower than all pairs: the first-match kernel
+gives every point a thread, and the 61% of points outside the polygon's bbox
+(the grid covers only that bbox, so they have no candidates) exit at once and
+leave their SIMD lanes idle while their neighbours in the same 32-lane group
+walk 150,000 edges, whereas the all-pairs route compacts candidate pairs
+first; reordering the same points so the candidate-bearing 39% are contiguous
+makes first match as fast as all pairs. Compacting first-match candidates is
+a known follow-up.
 
 **Crossover** (`python bench/bench.py --op crossover`; 260 zones, warm index,
 host-resident NumPy points, best of 7). The CPU column is the host fallback the
@@ -293,28 +335,39 @@ Device-resident inputs skip the comparison and run on the GPU whenever Metal is
 available.
 
 **Haversine** (`mx.compile`-fused distances; kNN via adaptive scalar/SIMDgroup
-selection kernels):
+selection kernels). Our kNN is exact brute force with nothing to prebuild, so
+the BallTree baseline is shown both with the tree built inside the timing (a
+one-off query) and query-only on a prebuilt tree (repeated queries against a
+fixed reference set, where the tree amortizes):
 
-| workload | mlx-spatial | numpy float64 | scikit-learn |
+| workload | mlx-spatial | numpy float64, 1 core | scikit-learn, 1 core |
 | --- | --- | --- | --- |
-| cross 20k × 20k | **9.6 ms** | 2.67 s (278x) | 3.91 s (406x) |
-| knn 1k queries × 1M refs, k=10 | **26.6 ms** | — | BallTree 328 ms (12.3x) |
-| knn 1M queries × 10k refs, k=10 | **154 ms** | — | BallTree 4.54 s (30x) |
-| knn 200k queries × 200k refs, k=10 | **562 ms** | — | BallTree 1.22 s (2.2x) |
-| knn 1M queries × 200k refs, k=10 | **2.63 s** | — | BallTree 6.02 s (2.3x) |
+| cross 20k × 20k | **10.2 ms** | 2.69 s (263x) | 3.98 s (389x) |
+
+| kNN workload (k=10) | mlx-spatial (brute force) | BallTree build + query | BallTree query only (prebuilt) |
+| --- | --- | --- | --- |
+| 1k queries × 1M refs | 26 ms | 305 ms (11.7x) | **9.1 ms (0.35x)** |
+| 1M queries × 10k refs | **147 ms** | 4.53 s (31x) | 4.52 s (31x) |
+| 200k queries × 200k refs | **548 ms** | 1.19 s (2.2x) | 1.14 s (2.1x) |
+| 1M queries × 200k refs | **2.62 s** | 5.77 s (2.2x) | 5.70 s (2.2x) |
 
 Honesty notes: `haversine_knn` is exact brute force. For `k <= 32` it runs a
 shape-adaptive fused Metal selector: 32 lanes cooperate on each query when
 query parallelism is scarce, while large query batches retain the faster
 one-thread-per-query kernel. Neither materializes an `(N, M)` matrix or sorts
-the full reference set. In the 1k × 1M row, the GPU-resident selector core is
-24.8 ms versus 355.4 ms for the retained scalar kernel (14.3x); the table's
-26.6 ms includes host ingestion and transfer. With `k > 32` (or without an
-active Metal device) kNN falls back to a chunked distance-matrix +
-`argpartition` path that is sort-bound; at large reference sets a BallTree can
-win there. Below a few hundred host points (fewer for detailed polygons) the
-join auto-dispatches to the host fallback, because the fixed GPU launch
-overhead dominates there; the crossover table shows both sides.
+the full reference set. Brute force costs queries × references, a BallTree
+queries × log(references), so the reference-set size decides the winner, not
+the query count: against 200k references brute force is cheaper per query
+(about 3 µs vs 6 µs here) and the GPU wins 2x, against 10k references 30x;
+against 1M references a prebuilt tree is cheaper per query (about 10 µs vs
+20-25 µs) at any query count, and only the tree-building cost puts us ahead
+(1k × 1M above; at 100k queries even build + query beats brute force). With
+`k > 32` (or without an active Metal device) kNN falls
+back to a chunked distance-matrix + `argpartition` path that is sort-bound; at
+large reference sets a BallTree can win there too. Below a few hundred host
+points (fewer for detailed polygons) the join auto-dispatches to the host
+fallback, because the fixed GPU launch overhead dominates there; the
+crossover table shows both sides.
 
 ## Limitations (v0.1)
 
@@ -326,6 +379,15 @@ overhead dominates there; the crossover table shows both sides.
   without NumPy candidate-pair expansion. A long-ring candidate or at least
   8,192 candidate edges in one used grid cell selects the pair-parallel route;
   its returned arrays still require memory proportional to the number of hits.
+- Containment walks every edge of a candidate ring, so on rings with tens of
+  thousands of vertices single-core GEOS with prepared polygons (an indexed
+  point-in-area locator) comes within about 8x of the GPU. Indexing long
+  rings is on the backlog.
+- First match gives every point a GPU thread, so on a layer dominated by one
+  huge polygon (the 150k-vertex coastline row) points outside its bbox idle
+  their SIMD lanes while neighbours walk the ring, and `all_matches=True`,
+  which compacts candidate pairs first, is faster. Compacting first-match
+  candidates the same way is on the backlog.
 - `sjoin` is a first-match (lowest polygon index) point-in-polygon join with
   the GeoPandas default predicate `intersects`; `predicate="within"` only
   differs on boundary points and needs `exact_boundary=True` to be honored.
