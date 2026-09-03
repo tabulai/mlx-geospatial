@@ -1,4 +1,4 @@
-"""Deep tests for mlx_spatial.join: GridIndex construction, candidate
+"""Deep tests for mlx_geospatial.join: GridIndex construction, candidate
 completeness, batching, backend dispatch, and edge-case geometry.
 
 Complements test_smoke.py (which covers the public wrappers end-to-end) by
@@ -13,12 +13,12 @@ import pytest
 import shapely
 from shapely.geometry import MultiPolygon, Polygon
 
-import mlx_spatial as ms
-import mlx_spatial._dispatch as dispatch
-from mlx_spatial._dispatch import metal_available
-from mlx_spatial._pip import pip_all_matches, pip_first_match
-from mlx_spatial._precision import recenter
-from mlx_spatial.join import GridIndex, _grid_csr_strategy
+import mlx_geospatial as ms
+import mlx_geospatial._dispatch as dispatch
+from mlx_geospatial._dispatch import metal_available
+from mlx_geospatial._pip import pip_all_matches, pip_first_match
+from mlx_geospatial._precision import recenter
+from mlx_geospatial.join import GridIndex, _grid_csr_strategy
 
 from conftest import (
     make_convex_polygons,
@@ -361,6 +361,47 @@ class TestGridConstructionContract:
 
 
 class TestGridIndexParameters:
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({"cell_size": 0.0}, "cell_size must be positive and finite"),
+            ({"cell_size": np.nan}, "cell_size must be positive and finite"),
+            ({"max_cells": 0}, "max_cells must be positive"),
+            ({"max_entries": 0}, "max_entries must be positive"),
+        ],
+    )
+    def test_all_empty_parameter_validation_matches_nonempty(self, kwargs, message):
+        for polygons in ([Polygon()], [shapely.box(0.0, 0.0, 1.0, 1.0)]):
+            with pytest.raises(ValueError, match=message):
+                GridIndex(polygons, **kwargs)
+
+    def test_all_empty_parameter_validation_keeps_normal_order(self):
+        with pytest.raises(ValueError, match="cell_size must be positive and finite"):
+            GridIndex([Polygon()], cell_size=0.0, max_cells=0, max_entries=0)
+
+    @pytest.mark.parametrize("name", ["max_cells", "max_entries"])
+    @pytest.mark.parametrize(
+        ("value", "error", "detail"),
+        [
+            (False, TypeError, "must be a positive integer, got bool"),
+            (1.5, TypeError, "must be a positive integer, got float"),
+            (np.nan, TypeError, "must be a positive integer, got float"),
+            (0, ValueError, "must be positive, got 0"),
+        ],
+    )
+    def test_grid_budgets_are_strict_positive_integers(
+        self, name, value, error, detail
+    ):
+        for polygons in ([Polygon()], [shapely.box(0.0, 0.0, 1.0, 1.0)]):
+            with pytest.raises(error, match=rf"{name} {detail}"):
+                GridIndex(polygons, **{name: value})
+
+    def test_grid_budgets_accept_numpy_integers_for_all_empty(self):
+        index = GridIndex(
+            [Polygon()], max_cells=np.int64(1), max_entries=np.int32(1)
+        )
+        assert index.n_cells == 1
+
     def test_tiny_cell_size_coarsens_to_budgets(self, rng):
         polys = make_convex_polygons(50, rng)
         index = GridIndex(polys, cell_size=1e-4, max_entries=1000)
@@ -447,7 +488,7 @@ class TestBatching:
             calls.append(int(pair_point.shape[0]))
             return mx.ones(pair_point.shape, dtype=mx.uint8)
 
-        monkeypatch.setattr("mlx_spatial.join.pip_pairs", all_hit)
+        monkeypatch.setattr("mlx_geospatial.join.pip_pairs", all_hit)
         got = np.asarray(
             index.query(points, backend="gpu", max_pairs_per_batch=4)
         )
@@ -466,7 +507,7 @@ class TestBatching:
                 **kwargs,
             )
 
-        monkeypatch.setattr("mlx_spatial.join.pip_all_matches", compact_spy)
+        monkeypatch.setattr("mlx_geospatial.join.pip_all_matches", compact_spy)
         point_idx, poly_idx = index.query(
             points,
             backend="gpu",
@@ -517,8 +558,8 @@ class TestBatching:
         def pairs_must_not_run(*args, **kwargs):
             raise AssertionError("ordinary first-match query expanded candidate pairs")
 
-        monkeypatch.setattr("mlx_spatial.join.pip_first_match", fused_spy)
-        monkeypatch.setattr("mlx_spatial.join.pip_pairs", pairs_must_not_run)
+        monkeypatch.setattr("mlx_geospatial.join.pip_first_match", fused_spy)
+        monkeypatch.setattr("mlx_geospatial.join.pip_pairs", pairs_must_not_run)
         got = np.asarray(
             index.query(pts, backend="gpu", max_pairs_per_batch=1000)
         )
@@ -548,8 +589,8 @@ class TestBatching:
         def pairs_must_not_run(*args, **kwargs):
             raise AssertionError("all_matches expanded explicit candidate pairs")
 
-        monkeypatch.setattr("mlx_spatial.join.pip_all_matches", compact_spy)
-        monkeypatch.setattr("mlx_spatial.join.pip_pairs", pairs_must_not_run)
+        monkeypatch.setattr("mlx_geospatial.join.pip_all_matches", compact_spy)
+        monkeypatch.setattr("mlx_geospatial.join.pip_pairs", pairs_must_not_run)
         point_idx, poly_idx = index.query(
             points,
             backend="gpu",
@@ -611,7 +652,7 @@ class TestBatching:
         def pairs_must_not_run(*args, **kwargs):
             raise AssertionError("fused first-match expanded candidate pairs")
 
-        monkeypatch.setattr("mlx_spatial.join.pip_pairs", pairs_must_not_run)
+        monkeypatch.setattr("mlx_geospatial.join.pip_pairs", pairs_must_not_run)
         fused = np.asarray(
             index.query(pts, backend="gpu", max_pairs_per_batch=3)
         )
@@ -654,7 +695,7 @@ class TestBackends:
             return orig(self, pts64, all_matches=all_matches, predicate=predicate)
 
         monkeypatch.setattr(GridIndex, "_query_cpu", spy)
-        monkeypatch.delenv("MLX_SPATIAL_BACKEND", raising=False)
+        monkeypatch.delenv("MLX_GEOSPATIAL_BACKEND", raising=False)
 
         # tiny workload, real default threshold: auto must pick the CPU path
         assert len(pts) < dispatch.gpu_min_points(index._edges_per_point)
@@ -687,16 +728,16 @@ class TestBackends:
 
         monkeypatch.setattr(GridIndex, "_query_cpu", spy)
         monkeypatch.setattr(dispatch, "GPU_LAUNCH_US", 0.0)
-        monkeypatch.setenv("MLX_SPATIAL_BACKEND", "cpu")
+        monkeypatch.setenv("MLX_GEOSPATIAL_BACKEND", "cpu")
         index.query(pts)
         assert len(calls) == 1  # env var forced CPU despite zero threshold
 
         # explicit backend= argument beats the env var
-        monkeypatch.setenv("MLX_SPATIAL_BACKEND", "gpu")
+        monkeypatch.setenv("MLX_GEOSPATIAL_BACKEND", "gpu")
         index.query(pts, backend="cpu")
         assert len(calls) == 2
 
-        monkeypatch.setenv("MLX_SPATIAL_BACKEND", "quantum")
+        monkeypatch.setenv("MLX_GEOSPATIAL_BACKEND", "quantum")
         with pytest.raises(ValueError):
             index.query(pts)
 
@@ -836,6 +877,89 @@ class TestEdgeGeometry:
             )
             pt_idx, poly_idx = index.query(pts, all_matches=True, backend=backend)
             assert len(pt_idx) == 0 and len(poly_idx) == 0
+
+    @pytest.mark.parametrize("backend", ["cpu", "gpu"])
+    @pytest.mark.parametrize("input_kind", ["numpy", "mlx", "local"])
+    @pytest.mark.parametrize("all_matches", [False, True])
+    def test_all_empty_queries_skip_geometry_work(
+        self, monkeypatch, backend, input_kind, all_matches
+    ):
+        if backend == "gpu" and not metal_available():
+            pytest.skip("Metal GPU required")
+        index = GridIndex([Polygon(), Polygon()])
+        pts = np.array([[0.0, 0.0], [0.5, 0.5], [np.nan, np.nan]])
+        if input_kind == "mlx":
+            points = mx.array(pts, dtype=mx.float64)
+        elif input_kind == "local":
+            points = index.polygons.to_local(pts)
+        else:
+            points = pts
+
+        def unexpected(*args, **kwargs):
+            pytest.fail("an empty index must not inspect candidates or launch kernels")
+
+        monkeypatch.setattr(index, "_device_grid", unexpected)
+        monkeypatch.setattr(index, "_query_cpu", unexpected)
+        result = index.query(
+            points,
+            backend=backend,
+            all_matches=all_matches,
+            exact_boundary=input_kind == "numpy",
+        )
+        arrays = result if all_matches else (result,)
+        container = np.ndarray if input_kind == "numpy" else mx.array
+        for array in arrays:
+            assert isinstance(array, container)
+            values = np.asarray(array)
+            if all_matches:
+                assert values.shape == (0,)
+                assert values.dtype == np.int64
+            else:
+                np.testing.assert_array_equal(values, [-1, -1, -1])
+                assert values.dtype == np.int32
+        assert index._cell_poly_mx is None
+        assert index._grid_params_mx is None
+
+    @pytest.mark.parametrize(
+        "points, kwargs, message",
+        [
+            (np.zeros((1, 3)), {"predicate": "bad", "backend": "bad"}, "predicate"),
+            (np.zeros((1, 3)), {"max_pairs_per_batch": 0, "backend": "bad"},
+             "max_pairs_per_batch"),
+            (np.zeros((1, 3)), {"backend": "bad"}, "shape"),
+            (np.zeros((1, 2)), {"backend": False}, "backend"),
+        ],
+    )
+    def test_all_empty_query_validation_matches_nonempty(self, points, kwargs, message):
+        errors = []
+        for polygon in (Polygon(), shapely.box(0, 0, 1, 1)):
+            with pytest.raises(ValueError, match=message) as error:
+                GridIndex([polygon]).query(points, **kwargs)
+            errors.append(str(error.value))
+        assert errors[0] == errors[1]
+
+    def test_all_empty_query_validates_device_contract_and_backend(self, monkeypatch):
+        index = GridIndex([Polygon()])
+        pts = np.zeros((1, 2))
+        local = index.polygons.to_local(pts)
+        with pytest.raises(ValueError, match="exact_boundary"):
+            index.query(local, exact_boundary=True)
+        other_local = ms.LocalPoints(mx.zeros((1, 2)), np.array([1.0, 1.0]))
+        with pytest.raises(ValueError, match="origin"):
+            index.query(other_local)
+        monkeypatch.setattr(dispatch, "metal_available", lambda: False)
+        with pytest.raises(RuntimeError, match="Metal is not available"):
+            index.query(pts, backend="gpu")
+        monkeypatch.setenv("MLX_GEOSPATIAL_BACKEND", "invalid")
+        with pytest.raises(ValueError, match="backend"):
+            index.query(pts)
+
+    def test_all_empty_query_still_validates_crs(self):
+        gpd = pytest.importorskip("geopandas")
+        index = GridIndex(gpd.GeoSeries([Polygon()], crs="EPSG:4326"))
+        points = gpd.GeoSeries([shapely.Point(0, 0)], crs="EPSG:3857")
+        with pytest.raises(ValueError, match="CRS mismatch"):
+            index.query(points)
 
 
 # ---------------------------------------------------------------------------
@@ -1011,7 +1135,7 @@ class TestRouteDefaults:
         assert GridIndex(polys, cell_size=median).cell_size == median
 
     def test_max_pairs_per_batch_none_selects_route_defaults(self, rng, monkeypatch):
-        import mlx_spatial.join as join
+        import mlx_geospatial.join as join
 
         assert join._FIRST_MATCH_MAX_PAIRS_PER_BATCH > join._ALL_MATCHES_MAX_PAIRS_PER_BATCH
         polys = make_grid_polygons(10, 10)
@@ -1027,8 +1151,8 @@ class TestRouteDefaults:
             all_calls.append(1)
             return pip_all_matches(*args, **kwargs)
 
-        monkeypatch.setattr("mlx_spatial.join.pip_first_match", first_spy)
-        monkeypatch.setattr("mlx_spatial.join.pip_all_matches", all_spy)
+        monkeypatch.setattr("mlx_geospatial.join.pip_first_match", first_spy)
+        monkeypatch.setattr("mlx_geospatial.join.pip_all_matches", all_spy)
         expected = np.asarray(index.query(pts, backend="gpu"))
         assert len(first_calls) == 1  # 6000 points fit one launch under the real default
         # Shrink the route defaults: None must pick each route's own constant.
@@ -1042,9 +1166,43 @@ class TestRouteDefaults:
         with pytest.raises(ValueError):
             index.query(pts, backend="gpu", max_pairs_per_batch=0)
 
+    @pytest.mark.parametrize(
+        ("value", "kind"),
+        [(True, "bool"), (1.5, "float"), ("2", "str")],
+    )
+    def test_max_pairs_per_batch_is_a_strict_integer_on_every_shape(
+        self, value, kind
+    ):
+        index = GridIndex([shapely.box(0.0, 0.0, 1.0, 1.0)])
+        for points in (np.empty((0, 2)), np.array([[0.5, 0.5]])):
+            with pytest.raises(
+                TypeError,
+                match=rf"max_pairs_per_batch must be a positive integer, got {kind}",
+            ):
+                index.query(
+                    points, backend="cpu", max_pairs_per_batch=value
+                )
+
+    def test_max_pairs_per_batch_accepts_numpy_integer_and_keeps_upper_bound(self):
+        index = GridIndex([shapely.box(0.0, 0.0, 1.0, 1.0)])
+        np.testing.assert_array_equal(
+            index.query(
+                [[0.5, 0.5]],
+                backend="cpu",
+                max_pairs_per_batch=np.int64(2),
+            ),
+            [0],
+        )
+        with pytest.raises(ValueError, match=r"must be in \[1, 2\*\*31\)"):
+            index.query(
+                [[0.5, 0.5]],
+                backend="cpu",
+                max_pairs_per_batch=2**31,
+            )
+
     def test_default_cell_refinement_backs_off_on_skewed_layers(self, rng):
         """A few huge polygons among many small ones must not inflate the CSR."""
-        from mlx_spatial import join
+        from mlx_geospatial import join
 
         small = make_convex_polygons(3000, rng, radius_frac=0.005)
         huge = [shapely.box(-1.2, -1.2, 1.2, 1.2), shapely.box(-1.1, -1.0, 0.9, 1.1)]
@@ -1206,7 +1364,7 @@ class TestOneContainmentContract:
         coordinates would put the point exactly on the edge and change the
         even-odd answer. The fallback must consume the fp32 local array.
         """
-        from mlx_spatial._ingest import LocalPoints
+        from mlx_geospatial._ingest import LocalPoints
 
         polyset = ms.PolygonSet(
             [shapely.box(1e7, -1e7, 1e7 + 1, -1e7 + 1)], origin=(1e7, -1e7)
@@ -1230,7 +1388,7 @@ class TestOneContainmentContract:
 
     def test_fallback_chunking_is_arithmetic_neutral(self, rng, monkeypatch):
         """Tiny pair and row budgets force many slices; results cannot move."""
-        from mlx_spatial import join
+        from mlx_geospatial import join
 
         polys = make_convex_polygons(150, rng)
         index = GridIndex(polys)
@@ -1270,7 +1428,7 @@ class TestOneContainmentContract:
 
     def test_cpu_chunk_caps_are_hard_for_one_point_and_one_polygon(self, monkeypatch):
         """Skew inside one CSR segment cannot make either host batch exceed its cap."""
-        from mlx_spatial import join
+        from mlx_geospatial import join
 
         # Seven overlapping polygons give one point seven candidates.  With a
         # cap of two the point itself must span four pair batches.  First-match
@@ -1324,7 +1482,7 @@ class TestOneContainmentContract:
         polygons) pin the tolerance and the segment clipping; NaN/inf rows
         are never near anything.
         """
-        from mlx_spatial import join
+        from mlx_geospatial import join
 
         polys = make_convex_polygons(60, rng)
         index = GridIndex(polys)

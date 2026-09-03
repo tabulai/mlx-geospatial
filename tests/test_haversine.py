@@ -1,4 +1,4 @@
-"""Deep tests for mlx_spatial.haversine: golden accuracy vs float64/sklearn,
+"""Deep tests for mlx_geospatial.haversine: golden accuracy vs float64/sklearn,
 edge cases (poles, dateline, antipodes), input normalization, chunking, and knn.
 
 Tolerances are scale-appropriate per the documented fp32 policy: absolute
@@ -14,7 +14,8 @@ import mlx.core as mx
 import pytest
 import shapely
 
-import mlx_spatial as ms
+import mlx_geospatial as ms
+from mlx_geospatial._dispatch import metal_available
 
 R = ms.R_EARTH_M
 PI_R = np.pi * R  # half-circumference: max possible great-circle distance
@@ -304,6 +305,54 @@ class TestInputHandling:
         each = np.array([float(ms.haversine(one, b[i])) for i in range(15)])
         np.testing.assert_array_equal(d, each)
 
+    @pytest.mark.parametrize("use_mlx", [False, True])
+    @pytest.mark.parametrize(
+        "a_shape,b_shape,expected",
+        [
+            ((0, 2), (2,), (0,)),
+            ((2,), (0, 2), (0,)),
+            ((0, 2), (0, 2), (0,)),
+            ((0, 1, 2), (1, 7, 2), (0, 7)),
+            ((3, 0, 1, 2), (1, 0, 5, 2), (3, 0, 5)),
+            ((2, 0, 3, 2), (1, 1, 3, 2), (2, 0, 3)),
+        ],
+    )
+    def test_empty_broadcasts_skip_distance_graph(
+        self, use_mlx, a_shape, b_shape, expected, monkeypatch
+    ):
+        import importlib
+
+        hv = importlib.import_module("mlx_geospatial.haversine")
+
+        def forbidden(*args, **kwargs):
+            pytest.fail("an empty result must not enter the distance graph")
+
+        monkeypatch.setattr(hv, "_hav", forbidden)
+        a, b = np.zeros(a_shape, dtype=np.float32), np.zeros(b_shape, dtype=np.float32)
+        if use_mlx:
+            a, b = mx.array(a), mx.array(b)
+        for degrees in (False, True):
+            out = ms.haversine(a, b, degrees=degrees)
+            assert isinstance(out, mx.array) and out.dtype == mx.float32
+            assert np.asarray(out).shape == expected
+
+    @pytest.mark.parametrize("use_mlx", [False, True])
+    def test_empty_elementwise_preserves_validation(self, use_mlx):
+        def array(shape):
+            out = np.zeros(shape, dtype=np.float32)
+            return mx.array(out) if use_mlx else out
+
+        empty, one = array((0, 2)), array((1, 2))
+        with pytest.raises(ValueError, match="radius"):
+            ms.haversine(empty, one, radius=0)
+        with pytest.raises(ValueError, match="expected"):
+            ms.haversine(empty, array((0, 3)))
+        with pytest.raises(ValueError, match="expected"):
+            ms.haversine(array((0, 3)), empty)
+        for a_shape, b_shape in [((0, 2), (3, 2)), ((2, 0, 2), (3, 1, 2))]:
+            with pytest.raises(ValueError):
+                ms.haversine(array(a_shape), array(b_shape))
+
     def test_wrong_last_dim_errors(self):
         good = np.zeros((3, 2))
         with pytest.raises(ValueError):
@@ -372,10 +421,50 @@ class TestCross:
         assert c3.shape == (1, 1)
         assert c3[0, 0] == 0.0
 
-    def test_empty_inputs(self, rng):
-        b = city_points(rng, 5)
-        assert np.array(ms.haversine_cross(np.zeros((0, 2)), b)).shape == (0, 5)
-        assert np.array(ms.haversine_cross(b, np.zeros((0, 2)))).shape == (5, 0)
+    @pytest.mark.parametrize("use_mlx", [False, True])
+    @pytest.mark.parametrize("n,m", [(0, 5), (5, 0), (0, 0)])
+    @pytest.mark.parametrize("chunk_bytes", [None, 1, np.int64(31)])
+    def test_empty_inputs(self, use_mlx, n, m, chunk_bytes, monkeypatch):
+        import importlib
+
+        hv = importlib.import_module("mlx_geospatial.haversine")
+
+        def forbidden(*args, **kwargs):
+            pytest.fail("an empty result must not enter the distance graph")
+
+        monkeypatch.setattr(hv, "_hav", forbidden)
+        a, b = np.zeros((n, 2), dtype=np.float32), np.zeros((m, 2), dtype=np.float32)
+        if use_mlx:
+            a, b = mx.array(a), mx.array(b)
+        for degrees in (False, True):
+            out = ms.haversine_cross(a, b, degrees=degrees, chunk_bytes=chunk_bytes)
+            assert isinstance(out, mx.array) and out.dtype == mx.float32
+            assert np.asarray(out).shape == (n, m)
+
+    @pytest.mark.parametrize("use_mlx", [False, True])
+    def test_empty_cross_preserves_validation(self, use_mlx):
+        def array(shape):
+            out = np.zeros(shape, dtype=np.float32)
+            return mx.array(out) if use_mlx else out
+
+        empty, good = array((0, 2)), array((5, 2))
+        with pytest.raises(ValueError, match="radius"):
+            ms.haversine_cross(empty, good, radius=0)
+        for value in (True, 1.5):
+            with pytest.raises(TypeError, match="chunk_bytes"):
+                ms.haversine_cross(empty, good, chunk_bytes=value)
+        for value in (0, -1):
+            with pytest.raises(ValueError, match="chunk_bytes"):
+                ms.haversine_cross(empty, good, chunk_bytes=value)
+        for a_shape, b_shape in [
+            ((0, 1, 2), (5, 2)),
+            ((0, 2), (0, 1, 2)),
+            ((0, 3), (5, 2)),
+            ((0, 2), (0, 3)),
+            ((0, 2), (2,)),
+        ]:
+            with pytest.raises(ValueError):
+                ms.haversine_cross(array(a_shape), array(b_shape))
 
     def test_dimension_errors(self, rng):
         b = city_points(rng, 5)
@@ -546,13 +635,79 @@ class TestKnn:
         assert np.array(idx).shape == (0, 3)
 
 
+class TestChunkBytesValidation:
+    """The shared byte-budget contract cannot depend on the selected route."""
+
+    _type_errors = (True, np.bool_(False), 1.5, "1", object())
+    _value_errors = (0, -1, np.int64(-8))
+
+    @staticmethod
+    def _devices():
+        return (mx.cpu, mx.gpu) if metal_available() else (mx.cpu,)
+
+    def test_cross_is_strict_but_none_keeps_single_launch(self):
+        q = np.array([[0.0, 0.0], [1.0, 1.0]])
+        r = np.array([[2.0, 2.0]])
+        for value in self._type_errors:
+            with pytest.raises(TypeError, match="chunk_bytes.*positive integer"):
+                ms.haversine_cross(q, r, chunk_bytes=value)
+        for value in self._value_errors:
+            with pytest.raises(ValueError, match="chunk_bytes.*positive"):
+                ms.haversine_cross(q, r, chunk_bytes=value)
+        np.testing.assert_array_equal(
+            np.asarray(ms.haversine_cross(q, r, chunk_bytes=np.int64(1))),
+            np.asarray(ms.haversine_cross(q, r, chunk_bytes=None)),
+        )
+
+    def test_knn_validation_matches_metal_and_composed_routes(self):
+        q = np.array([[0.0, 0.0], [1.0, 1.0]])
+        r = np.array([[0.5, 0.5], [2.0, 2.0]])
+        old_device = mx.default_device()
+        try:
+            for device in self._devices():
+                mx.set_default_device(device)
+                for value in (*self._type_errors, None):
+                    with pytest.raises(TypeError, match="chunk_bytes.*positive integer"):
+                        ms.haversine_knn(q, r, 1, chunk_bytes=value)
+                for value in self._value_errors:
+                    with pytest.raises(ValueError, match="chunk_bytes.*positive"):
+                        ms.haversine_knn(q, r, 1, chunk_bytes=value)
+                distance, index = ms.haversine_knn(
+                    q, r, 1, chunk_bytes=np.int64(1)
+                )
+                np.testing.assert_array_equal(np.asarray(index), [[0], [0]])
+                assert np.isfinite(np.asarray(distance)).all()
+        finally:
+            mx.set_default_device(old_device)
+
+    def test_contains_matrix_validation_matches_metal_and_composed_routes(self):
+        points = np.array([[0.5, 0.5], [2.0, 2.0]])
+        polygons = [shapely.box(0.0, 0.0, 1.0, 1.0)]
+        old_device = mx.default_device()
+        try:
+            for device in self._devices():
+                mx.set_default_device(device)
+                for value in (*self._type_errors, None):
+                    with pytest.raises(TypeError, match="chunk_bytes.*positive integer"):
+                        ms.contains_matrix(points, polygons, chunk_bytes=value)
+                for value in self._value_errors:
+                    with pytest.raises(ValueError, match="chunk_bytes.*positive"):
+                        ms.contains_matrix(points, polygons, chunk_bytes=value)
+                got = ms.contains_matrix(
+                    points, polygons, chunk_bytes=np.int64(1)
+                )
+                np.testing.assert_array_equal(np.asarray(got), [[True], [False]])
+        finally:
+            mx.set_default_device(old_device)
+
+
 class TestCrossSingleLaunch:
     """haversine_cross runs as one fused launch unless chunk_bytes is given."""
 
     def test_default_is_one_launch_and_matches_chunked(self, rng, monkeypatch):
         import importlib
 
-        hv = importlib.import_module("mlx_spatial.haversine")  # the function shadows the name
+        hv = importlib.import_module("mlx_geospatial.haversine")  # the function shadows the name
         a = rng.uniform(-180, 180, size=(300, 2)) * [1.0, 0.5]
         b = rng.uniform(-180, 180, size=(700, 2)) * [1.0, 0.5]
         calls = []

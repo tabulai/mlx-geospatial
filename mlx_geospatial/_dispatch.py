@@ -24,7 +24,7 @@ for point counts just above the threshold. ``python bench/bench.py --op
 crossover`` re-fits the constants for
 another machine and prints both regimes. Override per call
 (``backend=``) or globally via the environment variable
-``MLX_SPATIAL_BACKEND`` (``auto`` | ``gpu`` | ``cpu``).
+``MLX_GEOSPATIAL_BACKEND`` (``auto`` | ``gpu`` | ``cpu``).
 """
 
 from __future__ import annotations
@@ -102,7 +102,14 @@ def resolve_backend(
     is available (the fallback would need a host copy). ``all_matches``
     selects the all-match route's larger fixed GPU cost.
     """
-    backend = requested or os.environ.get("MLX_SPATIAL_BACKEND", "auto")
+    # Only ``None`` means that no per-call override was supplied.  Using
+    # truthiness here would silently turn explicit invalid values such as
+    # ``""``, ``False``, or ``0`` into an environment/default selection.
+    backend = (
+        os.environ.get("MLX_GEOSPATIAL_BACKEND", "auto")
+        if requested is None
+        else requested
+    )
     if not isinstance(backend, str):
         raise ValueError(f"backend must be one of {_VALID}, got {backend!r}")
     backend = backend.lower()

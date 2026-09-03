@@ -42,16 +42,16 @@ import mlx.core as mx
 import pytest
 import shapely
 
-import mlx_spatial as ms
-import mlx_spatial._pip as pip
-from mlx_spatial._dispatch import metal_available
-from mlx_spatial._ingest import LocalPoints
+import mlx_geospatial as ms
+import mlx_geospatial._pip as pip
+from mlx_geospatial._dispatch import metal_available
+from mlx_geospatial._ingest import LocalPoints
 
 # The x-intersection's division; tolerant to reformatting.
 ARITH = re.compile(r"/\s*\(\s*y2\s*-\s*y1\s*\)")
 CONTRACT = re.compile(r"^\s*#pragma\s+clang\s+fp\s+contract\((\w+)\)\s*$", re.M)
 # Scatters already-computed match flags into the output; no fp arithmetic.
-EXEMPT = {"mlx_spatial_pip_all_matches_pair_write"}
+EXEMPT = {"mlx_geospatial_pip_all_matches_pair_write"}
 
 requires_metal = pytest.mark.skipif(not metal_available(), reason="Metal not available")
 

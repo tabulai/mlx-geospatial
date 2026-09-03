@@ -13,7 +13,7 @@ import pytest
 import shapely
 from shapely.geometry import Polygon
 
-import mlx_spatial as ms
+import mlx_geospatial as ms
 
 from conftest import make_convex_polygons
 

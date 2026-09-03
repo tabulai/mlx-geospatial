@@ -1,4 +1,4 @@
-"""Deep tests for :func:`mlx_spatial.sjoin` against ``geopandas.sjoin`` as golden.
+"""Deep tests for :func:`mlx_geospatial.sjoin` against ``geopandas.sjoin`` as golden.
 
 Covers index-label handling (RangeIndex, shuffled integer, string), column
 handling (collisions, geometry exclusion, dtype preservation), row-for-row
@@ -25,8 +25,8 @@ from shapely.geometry import MultiPolygon, Polygon
 
 import geopandas as gpd
 
-import mlx_spatial as ms
-from mlx_spatial._dispatch import metal_available
+import mlx_geospatial as ms
+from mlx_geospatial._dispatch import metal_available
 
 from conftest import make_convex_polygons, near_boundary_mask
 
@@ -502,7 +502,7 @@ def test_gpu_backend_golden(rng, monkeypatch):
     right = gpd.GeoDataFrame({"zid": np.arange(len(polys))}, geometry=list(polys))
 
     default = ms.sjoin(left, right, how="inner")  # auto -> CPU at this size
-    monkeypatch.setenv("MLX_SPATIAL_BACKEND", "gpu")
+    monkeypatch.setenv("MLX_GEOSPATIAL_BACKEND", "gpu")
     ours = ms.sjoin(left, right, how="inner")
     theirs = gpd.sjoin(left, right, how="inner")
     ok = ok_labels(left, pts, polys)

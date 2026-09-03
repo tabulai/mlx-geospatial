@@ -18,11 +18,11 @@ import mlx.core as mx
 import pytest
 import shapely
 
-import mlx_spatial as ms
-import mlx_spatial._pip as pip_impl
-from mlx_spatial import GridIndex, LocalPoints, PolygonSet, PrecisionWarning
-from mlx_spatial._dispatch import metal_available
-from mlx_spatial._precision import float32_resolution, recenter
+import mlx_geospatial as ms
+import mlx_geospatial._pip as pip_impl
+from mlx_geospatial import GridIndex, LocalPoints, PolygonSet, PrecisionWarning
+from mlx_geospatial._dispatch import metal_available
+from mlx_geospatial._precision import float32_resolution, recenter
 from conftest import (
     make_convex_polygons,
     make_grid_polygons,
@@ -339,12 +339,12 @@ def test_device_input_never_round_trips_through_the_host(workload, monkeypatch):
                 return forbidden
             return getattr(np, name)
 
-    monkeypatch.setattr("mlx_spatial._ingest.as_point_array", forbidden)
-    monkeypatch.setattr("mlx_spatial.join.as_point_array", forbidden)
+    monkeypatch.setattr("mlx_geospatial._ingest.as_point_array", forbidden)
+    monkeypatch.setattr("mlx_geospatial.join.as_point_array", forbidden)
     monkeypatch.setattr(GridIndex, "_candidates", forbidden)
     monkeypatch.setattr(GridIndex, "_query_cpu", forbidden)
     monkeypatch.setattr(PolygonSet, "_host_coords", forbidden)
-    monkeypatch.setattr("mlx_spatial.join.np", NoHostNumpy())
+    monkeypatch.setattr("mlx_geospatial.join.np", NoHostNumpy())
     out = index.query(local)
     assert isinstance(out, mx.array)
     np.testing.assert_array_equal(out, expected)
@@ -421,17 +421,17 @@ def test_device_input_backend_matrix(workload, monkeypatch):
         calls.append(1)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr("mlx_spatial.join.pip_first_match", spy)
-    monkeypatch.delenv("MLX_SPATIAL_BACKEND", raising=False)
+    monkeypatch.setattr("mlx_geospatial.join.pip_first_match", spy)
+    monkeypatch.delenv("MLX_GEOSPATIAL_BACKEND", raising=False)
     auto = index.query(small)
     assert calls, "device input with backend=auto must run on the GPU"
     calls.clear()
     cpu = index.query(small, backend="cpu")
     assert not calls and isinstance(cpu, mx.array)
     np.testing.assert_array_equal(cpu, auto)
-    monkeypatch.setenv("MLX_SPATIAL_BACKEND", "cpu")
+    monkeypatch.setenv("MLX_GEOSPATIAL_BACKEND", "cpu")
     index.query(small)
-    assert not calls, "MLX_SPATIAL_BACKEND=cpu must be honored for device inputs"
+    assert not calls, "MLX_GEOSPATIAL_BACKEND=cpu must be honored for device inputs"
 
 
 @needs_metal

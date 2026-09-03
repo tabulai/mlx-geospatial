@@ -13,7 +13,7 @@ than the fp32 assignment error plus the kernel's bbox widening, so every
 polygon whose kernel bbox accepts a point is in that point's cell list: cell
 assignment can only add candidates, never lose a hit, and the answer is
 determined by the kernel alone. Device-resident inputs (``mx.array``,
-:class:`~mlx_spatial.LocalPoints`) therefore never touch the host, and the
+:class:`~mlx_geospatial.LocalPoints`) therefore never touch the host, and the
 output container follows the input container.
 
 One containment contract: the fp32 even-odd rule in re-centered coordinates,
@@ -26,7 +26,7 @@ intermediate of the crossing test that small can differ, which needs local
 coordinates themselves near 1e-38 and never occurs for real-world units) and
 auto dispatch can never change an answer. GEOS enters only through the
 opt-in ``exact_boundary=True`` re-check of near-boundary points. Small
-host-resident workloads take the fallback: ``mlx_spatial._dispatch`` compares
+host-resident workloads take the fallback: ``mlx_geospatial._dispatch`` compares
 its cost (per point plus per candidate edge, estimated from the index's
 per-cell edge work) with the fixed GPU launch cost. Device-resident inputs run
 on the GPU whenever Metal is available.
@@ -39,7 +39,13 @@ import mlx.core as mx
 import shapely
 
 from ._dispatch import resolve_backend
-from ._ingest import LocalPoints, PolygonSet, _crs_of, as_point_array
+from ._ingest import (
+    LocalPoints,
+    PolygonSet,
+    _as_geometry_array,
+    _crs_of,
+    as_point_array,
+)
 from ._precision import recenter
 from ._pip import (
     _ALL_MATCHES_EDGE_WORK_THRESHOLD,
@@ -48,6 +54,7 @@ from ._pip import (
     pip_first_match,
     pip_pairs,
 )
+from ._validation import check_positive_int
 
 __all__ = ["GridIndex", "point_in_polygon", "sjoin"]
 
@@ -337,6 +344,19 @@ class GridIndex:
 
         bboxes = polyset.bboxes  # (M, 4) float64, original coordinates
         finite = np.isfinite(bboxes).all(axis=1)
+
+        # Validate caller-supplied parameters before the all-empty shortcut so
+        # their contract does not depend on whether the geometry happens to
+        # contribute a finite bbox.  Keep the ordinary construction order:
+        # cell_size is normalized first, then the two resource budgets are
+        # considered by the planner.
+        if cell_size is not None:
+            cell_size = float(cell_size)
+            if cell_size <= 0.0 or not np.isfinite(cell_size):
+                raise ValueError("cell_size must be positive and finite")
+        max_cells = check_positive_int(max_cells, "max_cells")
+        max_entries = check_positive_int(max_entries, "max_entries")
+
         if not finite.any():
             # Every geometry is empty: a degenerate grid whose bounds exclude
             # all points, so every query yields zero candidates on either
@@ -394,9 +414,6 @@ class GridIndex:
                 base = 1.0
             ladder = [base / 4.0, base / 2.0, base]
         else:
-            cell_size = float(cell_size)
-            if cell_size <= 0.0 or not np.isfinite(cell_size):
-                raise ValueError("cell_size must be positive and finite")
             ladder = [cell_size]
 
         plan = None
@@ -743,7 +760,7 @@ class GridIndex:
 
         The output container follows the input: numpy arrays, sequences,
         shapely points and GeoSeries return NumPy arrays; ``mx.array`` and
-        :class:`~mlx_spatial.LocalPoints` inputs return MLX arrays and the
+        :class:`~mlx_geospatial.LocalPoints` inputs return MLX arrays and the
         whole query, cell assignment included, runs on the GPU without a host
         round trip. Device-resident first-match results are lazy when one
         kernel launch suffices (the call itself does not synchronize); call
@@ -756,7 +773,7 @@ class GridIndex:
         polygons already run on the GPU for first match, and all-match queries
         switch about four times later; device inputs run on the GPU whenever
         Metal is available, since the fallback would need a host copy.
-        ``backend=`` and ``MLX_SPATIAL_BACKEND`` override both; ``backend="cpu"``
+        ``backend=`` and ``MLX_GEOSPATIAL_BACKEND`` override both; ``backend="cpu"``
         on device inputs copies the fp32 local coordinates to the host and
         runs the same predicate there.
 
@@ -809,8 +826,10 @@ class GridIndex:
                 if all_matches
                 else _FIRST_MATCH_MAX_PAIRS_PER_BATCH
             )
-        max_pairs_per_batch = int(max_pairs_per_batch)
-        if not 1 <= max_pairs_per_batch < 2**31:
+        max_pairs_per_batch = check_positive_int(
+            max_pairs_per_batch, "max_pairs_per_batch"
+        )
+        if max_pairs_per_batch >= 2**31:
             raise ValueError(
                 f"max_pairs_per_batch must be in [1, 2**31), got {max_pairs_per_batch}"
             )
@@ -836,6 +855,13 @@ class GridIndex:
             edges_per_point=self._edges_per_point,
             all_matches=all_matches,
         )
+        if self._max_cell_count == 0:
+            # An all-empty layer cannot match or need boundary refinement.
+            # Do not launch a custom kernel with its empty CSR/geometry
+            # buffers: Metal requires bindings even for inputs never read.
+            # Point and backend validation above still applies on this path.
+            return _empty_result(all_matches, on_device, n)
+
         def finish(out):
             if exact_boundary:
                 out = self._refine_boundary(
@@ -1385,13 +1411,13 @@ def point_in_polygon(
 
     ``points`` may be a numpy array or sequence of ``(lon, lat)`` pairs,
     shapely Points, a GeoSeries/GeoDataFrame, an ``mx.array``, or
-    :class:`~mlx_spatial.LocalPoints` from :meth:`PolygonSet.to_local`. The
+    :class:`~mlx_geospatial.LocalPoints` from :meth:`PolygonSet.to_local`. The
     output container follows the input: host inputs return NumPy (an int32
     label array, or two int64 pair arrays with ``all_matches=True``); MLX
     inputs return MLX arrays computed entirely on the GPU.
 
     ``polygons`` may be shapely geometries, a GeoSeries/GeoDataFrame, or a
-    prebuilt :class:`~mlx_spatial.PolygonSet` (reused across queries). The
+    prebuilt :class:`~mlx_geospatial.PolygonSet` (reused across queries). The
     grid index is built lazily and cached on the polygon set. Alternatively
     pass a prebuilt ``index=`` (and then either omit ``polygons`` or pass the
     exact PolygonSet the index wraps). Containment is the fp32 even-odd rule
@@ -1449,6 +1475,12 @@ def point_in_polygon(
                 raise ValueError(
                     f"CRS mismatch: points={point_crs}, polygons={polygon_crs}"
                 )
+            # A zero length alone does not make an object a polygon
+            # collection: strings, mappings and malformed empty ndarray
+            # shapes also report len() == 0.  Apply the same container-shape
+            # normalization as PolygonSet while retaining the original object
+            # above for CRS discovery.
+            _as_geometry_array(polygons)
             n_points = _point_count(points)
             resolve_backend(backend, 0)
             return _empty_result(
@@ -1518,6 +1550,7 @@ def sjoin(
         # simply a join with no matches. Argument validation must not depend
         # on data shape, so backend= still goes through resolve_backend.
         resolve_backend(backend, 0)
+        _as_geometry_array(right)
         assigned = np.full(len(as_point_array(left_geom)), -1, dtype=np.int32)
     else:
         assigned = np.asarray(
@@ -1534,10 +1567,20 @@ def sjoin(
     if isinstance(left, pd.DataFrame):
         base = left
     else:
-        index = getattr(left, "index", pd.RangeIndex(len(assigned)))
+        candidate_index = getattr(left, "index", None)
+        index = (
+            candidate_index
+            if callable(getattr(candidate_index, "to_numpy", None))
+            else pd.RangeIndex(len(assigned))
+        )
         base = pd.DataFrame({"geometry": np.asarray(left_geom, dtype=object)}, index=index)
 
-    right_index = right.index if hasattr(right, "index") else pd.RangeIndex(len(right_geom))
+    candidate_index = getattr(right, "index", None)
+    right_index = (
+        candidate_index
+        if callable(getattr(candidate_index, "to_numpy", None))
+        else pd.RangeIndex(len(right_geom))
+    )
     right_labels = right_index.to_numpy()
 
     if how == "inner":

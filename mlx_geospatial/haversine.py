@@ -14,7 +14,8 @@ error stays below ~2e-4). Degree-to-radian conversion happens in float64
 whenever the input is a CPU array. ``haversine_cross`` runs as one fused
 launch by default (the result is the only allocation); an explicit
 ``chunk_bytes`` bounds the rows per launch and then peaks at ~2x the result
-size while chunks are concatenated.
+size while chunks are concatenated. An explicit budget must be a positive
+integer; ``None`` selects the single-launch default.
 """
 
 from __future__ import annotations
@@ -24,6 +25,8 @@ import operator
 
 import numpy as np
 import mlx.core as mx
+
+from ._validation import check_chunk_bytes
 
 __all__ = ["R_EARTH_M", "haversine", "haversine_cross", "haversine_knn"]
 
@@ -265,7 +268,7 @@ def _get_knn_select_kernel():
     global _knn_select_kernel
     if _knn_select_kernel is None:
         _knn_select_kernel = mx.fast.metal_kernel(
-            name="mlx_spatial_knn_select",
+            name="mlx_geospatial_knn_select",
             input_names=["q", "qcos", "r", "rcos", "shape"],
             output_names=["out_i"],
             source=_KNN_SELECT_SOURCE,
@@ -277,7 +280,7 @@ def _get_knn_simdgroup_select_kernel():
     global _knn_simdgroup_select_kernel
     if _knn_simdgroup_select_kernel is None:
         _knn_simdgroup_select_kernel = mx.fast.metal_kernel(
-            name="mlx_spatial_knn_simdgroup_select",
+            name="mlx_geospatial_knn_simdgroup_select",
             input_names=["q", "qcos", "r", "rcos", "shape"],
             output_names=["out_i"],
             source=_KNN_SIMDGROUP_SELECT_SOURCE,
@@ -377,6 +380,12 @@ def haversine(a, b, *, radius: float = R_EARTH_M, degrees: bool = True) -> mx.ar
     radius = _check_radius(radius)
     a = _prep(a, degrees)
     b = _prep(b, degrees)
+    if a.size == 0 or b.size == 0:
+        # MLX's compiled graph can dispatch a zero-sized Metal grid for empty
+        # broadcasts. Validate the coordinate axes before returning an empty
+        # result, without slicing or evaluating either input's lazy graph.
+        shape = np.broadcast_shapes(a.shape[:-1], b.shape[:-1])
+        return mx.zeros(shape, dtype=mx.float32)
     return _hav(a[..., 0], a[..., 1], b[..., 0], b[..., 1], radius)
 
 
@@ -397,16 +406,22 @@ def haversine_cross(
     end, so peak memory then reaches about twice the result size.
     """
     radius = _check_radius(radius)
+    if chunk_bytes is not None:
+        chunk_bytes = check_chunk_bytes(chunk_bytes)
     a = _prep(a, degrees)
     b = _prep(b, degrees)
     if a.ndim != 2 or b.ndim != 2:
         raise ValueError("haversine_cross expects 2-D inputs of shape (N, 2) and (M, 2)")
     n, m = a.shape[0], b.shape[0]
+    if n == 0 or m == 0:
+        # Avoid a zero-work dispatch in the compiled distance graph. All
+        # public argument and shape validation above still applies.
+        return mx.zeros((n, m), dtype=mx.float32)
     lon2 = b[:, 0][None, :]
     lat2 = b[:, 1][None, :]
     if chunk_bytes is None:
         return _hav(a[:, 0:1], a[:, 1:2], lon2, lat2, radius)
-    rows_per_chunk = max(1, operator.index(chunk_bytes) // max(m * 4 * 4, 1))
+    rows_per_chunk = max(1, chunk_bytes // max(m * 4 * 4, 1))
     if rows_per_chunk >= n:
         return _hav(a[:, 0:1], a[:, 1:2], lon2, lat2, radius)
     chunks = [
@@ -444,7 +459,8 @@ def haversine_knn(
     the reference set. Otherwise a chunked distance-matrix +
     ``argpartition`` fallback runs; that fallback is sort-bound, so for large
     reference sets with ``k > 32`` a CPU tree (sklearn
-    ``BallTree(metric="haversine")``) may win.
+    ``BallTree(metric="haversine")``) may win. ``chunk_bytes`` must be a
+    positive integer even when the selected fused route does not consume it.
     """
     from ._dispatch import metal_available
 
@@ -459,6 +475,10 @@ def haversine_knn(
         k = operator.index(k)
     except TypeError:
         raise TypeError(f"k must be an integer, got {type(k).__name__}") from None
+    # Validate before selecting a Metal or composed route. The fused kernels
+    # do not need this budget, but accepting invalid values only on that route
+    # would make the public API depend on hardware, k, and active MLX device.
+    chunk_bytes = check_chunk_bytes(chunk_bytes)
     q = _prep(query, degrees)
     r = _prep(reference, degrees)
     if q.ndim != 2 or r.ndim != 2:

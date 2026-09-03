@@ -1,4 +1,4 @@
-"""Shared fixtures and geometry generators for the mlx-spatial test suite."""
+"""Shared fixtures and geometry generators for the mlx-geospatial test suite."""
 
 from __future__ import annotations
 
@@ -85,8 +85,8 @@ def reference_assign(points_xy: np.ndarray, geoms) -> np.ndarray:
 
 @pytest.fixture(autouse=True)
 def _clean_backend_env(monkeypatch):
-    """Isolate every test from an ambient MLX_SPATIAL_BACKEND setting."""
-    monkeypatch.delenv("MLX_SPATIAL_BACKEND", raising=False)
+    """Isolate every test from an ambient MLX_GEOSPATIAL_BACKEND setting."""
+    monkeypatch.delenv("MLX_GEOSPATIAL_BACKEND", raising=False)
 
 
 @pytest.fixture

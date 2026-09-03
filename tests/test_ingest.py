@@ -1,4 +1,4 @@
-"""Deep tests for mlx_spatial._ingest (PolygonSet, as_point_array) and _precision.
+"""Deep tests for mlx_geospatial._ingest (PolygonSet, as_point_array) and _precision.
 
 Covers: every accepted input form, ragged-offset collapse for mixed
 Polygon/MultiPolygon sets (validated against shapely.get_rings /
@@ -14,9 +14,9 @@ import pytest
 import shapely
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 
-import mlx_spatial as ms
-from mlx_spatial._ingest import EdgeData
-from mlx_spatial._precision import (
+import mlx_geospatial as ms
+from mlx_geospatial._ingest import EdgeData
+from mlx_geospatial._precision import (
     boundary_tolerance,
     compute_origin,
     float32_resolution,

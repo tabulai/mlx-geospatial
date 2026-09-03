@@ -19,10 +19,10 @@ import pytest
 import shapely
 from shapely.geometry import MultiPolygon, Polygon
 
-import mlx_spatial as ms
-import mlx_spatial._pip as pip_impl
-from mlx_spatial._dispatch import metal_available
-from mlx_spatial._pip import _pip_dense_composed, pip_pairs
+import mlx_geospatial as ms
+import mlx_geospatial._pip as pip_impl
+from mlx_geospatial._dispatch import metal_available
+from mlx_geospatial._pip import _pip_dense_composed, pip_pairs
 from conftest import make_grid_polygons, near_boundary_mask, reference_assign
 
 pytestmark = pytest.mark.skipif(

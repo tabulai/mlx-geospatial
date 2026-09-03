@@ -1,4 +1,4 @@
-"""mlx-spatial: GPU-accelerated spatial operations for Apple silicon via MLX.
+"""mlx-geospatial: GPU-accelerated spatial operations for Apple silicon via MLX.
 
 Coordinate convention: ``(x, y)`` == ``(lon, lat)``, degrees, everywhere.
 

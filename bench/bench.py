@@ -1,4 +1,4 @@
-"""Benchmark harness for mlx-spatial.
+"""Benchmark harness for mlx-geospatial.
 
 Honesty rules:
 - All timings are end-to-end from host-resident numpy/shapely inputs,
@@ -61,9 +61,9 @@ import numpy as np
 import shapely
 
 import mlx.core as mx
-import mlx_spatial as ms
-from mlx_spatial._dispatch import metal_available
-from mlx_spatial._pip import _pip_dense_composed, pip_dense
+import mlx_geospatial as ms
+from mlx_geospatial._dispatch import metal_available
+from mlx_geospatial._pip import _pip_dense_composed, pip_dense
 
 EXTENT = (-74.3, 40.5, -73.7, 40.9)  # roughly NYC
 
@@ -183,7 +183,7 @@ def bench_dense_pip(n: int, m: int, vertices: int, rng) -> list[tuple[str, float
     np.testing.assert_array_equal(direct_out, composed_out)
 
     return [
-        ("mlx-spatial dense PIP (direct 2-D Metal)", timeit(direct)),
+        ("mlx-geospatial dense PIP (direct 2-D Metal)", timeit(direct)),
         ("composed MLX dense PIP oracle", timeit(composed)),
     ]
 
@@ -199,7 +199,7 @@ def bench_haversine(n: int, m: int, rng) -> list[tuple[str, float | None]]:
         mx.eval(d)
         sync()
 
-    rows.append(("mlx-spatial haversine_cross", timeit(ours)))
+    rows.append(("mlx-geospatial haversine_cross", timeit(ours)))
 
     if n * m <= 400_000_000:
         def np64():
@@ -248,7 +248,7 @@ def bench_knn(n: int, m: int, k: int, rng) -> list[tuple[str, float | None]]:
         mx.eval(d, i)
         sync()
 
-    rows.append((f"mlx-spatial haversine_knn (k={k}, brute force)", timeit(ours)))
+    rows.append((f"mlx-geospatial haversine_knn (k={k}, brute force)", timeit(ours)))
 
     try:
         from sklearn.neighbors import BallTree
@@ -343,13 +343,13 @@ def bench_crossover(m: int, rng) -> None:
     default auto dispatch, for first-match and all-match queries, on ``m``
     zones with 48 and 2048 vertices and on an axis-aligned square tiling of
     about ``m`` tiles, then fits the constants of the dispatch cost model used
-    by ``mlx_spatial._dispatch`` (the host fallback's cost per point and per
+    by ``mlx_geospatial._dispatch`` (the host fallback's cost per point and per
     candidate edge versus the fixed GPU cost of each route) so they can be
     re-derived on another machine. The tiling, with only ~9 candidate edges
     per point, pins the per-point term; from the two zone layers alone it
     would be the difference of two nearly equal numbers.
     """
-    from mlx_spatial import _dispatch
+    from mlx_geospatial import _dispatch
 
     pts_all = make_points(200_000, rng)
     ns = [100, 200, 500, 1_000, 2_000, 5_000, 10_000, 50_000]
@@ -493,7 +493,7 @@ def bench_join(
         polyset = ms.PolygonSet(zones)
         ms.point_in_polygon(pts, polyset, backend="gpu")
 
-    rows.append(("mlx-spatial point_in_polygon, first match (cold: ingest + index)", timeit(ours_cold)))
+    rows.append(("mlx-geospatial point_in_polygon, first match (cold: ingest + index)", timeit(ours_cold)))
 
     polyset = ms.PolygonSet(zones)
     index = ms.GridIndex(polyset)
@@ -504,14 +504,14 @@ def bench_join(
         index.query(pts, backend="gpu")
 
     _gpu_warm(ours_warm)
-    rows.append(("mlx-spatial point_in_polygon, first match (warm index)", timeit(ours_warm)))
+    rows.append(("mlx-geospatial point_in_polygon, first match (warm index)", timeit(ours_warm)))
 
     def ours_all():
         # numpy in -> two numpy int64 pair arrays out, materialized on return
         index.query(pts, backend="gpu", all_matches=True)
 
     _gpu_warm(ours_all)
-    rows.append(("mlx-spatial point_in_polygon, all pairs (warm index)", timeit(ours_all)))
+    rows.append(("mlx-geospatial point_in_polygon, all pairs (warm index)", timeit(ours_all)))
 
     local = polyset.to_local(pts)  # re-center once; the array-native pattern
 
@@ -520,7 +520,7 @@ def bench_join(
 
     _gpu_warm(ours_device)
     rows.append(
-        ("mlx-spatial point_in_polygon, first match (warm index, device-resident points)", timeit(ours_device))
+        ("mlx-geospatial point_in_polygon, first match (warm index, device-resident points)", timeit(ours_device))
     )
 
     # Coverage, for reading the numbers: how many pairs the all-pairs rows
@@ -625,12 +625,12 @@ def report(title: str, rows: list[tuple[str, float | None]]):
     print(f"\n### {title}")
     # Speedups are computed against the row that answers the same question
     # as the baselines: the all-pairs warm-index join, or otherwise the first
-    # mlx-spatial row.
+    # mlx-geospatial row.
     ours_name, ours = next(
         (
             (name, secs)
             for name, secs in rows
-            if name.startswith("mlx-spatial") and "all pairs (warm index)" in name
+            if name.startswith("mlx-geospatial") and "all pairs (warm index)" in name
         ),
         rows[0],
     )
@@ -644,7 +644,7 @@ def report(title: str, rows: list[tuple[str, float | None]]):
             secs is not None
             and ours is not None
             and secs > 0
-            and not name.startswith("mlx-spatial")
+            and not name.startswith("mlx-geospatial")
         ):
             if "all pairs (warm index)" in ours_name:
                 what = "all pairs (warm index)"

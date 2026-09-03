@@ -1,6 +1,6 @@
 """Spatial features straight into an MLX model, without leaving unified memory.
 
-The array-native pattern mlx-spatial is built around:
+The array-native pattern mlx-geospatial is built around:
 
 1. Ingest the polygon layer once (``PolygonSet`` + ``GridIndex``).
 2. Re-center the float64 point table once (``PolygonSet.to_local``) so the
@@ -25,7 +25,7 @@ import mlx.optimizers as optim
 import numpy as np
 import shapely
 
-import mlx_spatial as ms
+import mlx_geospatial as ms
 
 rng = np.random.default_rng(0)
 

@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mlx-spatial"
+name = "mlx-geospatial"
 version = "0.1.0.dev0"
 description = "GPU-accelerated spatial operations for Apple silicon, built on MLX: haversine distances, point-in-polygon, and grid-indexed spatial joins"
 readme = "README.md"
@@ -20,7 +20,8 @@ classifiers = [
     "Topic :: Scientific/Engineering :: GIS",
 ]
 dependencies = [
-    "mlx>=0.30",
+    # Variable-size custom-kernel batches need the cache fix in MLX #3662.
+    "mlx>=0.32.0",
     "numpy>=1.24",
     "shapely>=2.0",
 ]
@@ -31,10 +32,10 @@ test = ["pytest>=7", "pandas>=2.0", "scikit-learn>=1.3", "geopandas>=0.14", "ruf
 bench = ["pandas>=2.0", "geopandas>=0.14", "duckdb>=1.0", "pyarrow>=14", "scikit-learn>=1.3"]
 
 [project.urls]
-Homepage = "https://github.com/tunguz/mlx-spatial"
+Homepage = "https://github.com/tabulai/mlx-geospatial"
 
 [tool.setuptools.packages.find]
-include = ["mlx_spatial*"]
+include = ["mlx_geospatial*"]
 
 [tool.ruff]
 line-length = 100
