@@ -41,6 +41,7 @@ _MX_INT_DTYPES = (
     mx.uint32,
     mx.uint64,
 )
+_MX_UINT_DTYPES = (mx.uint8, mx.uint16, mx.uint32, mx.uint64)
 _MX_SMALL_FLOAT_DTYPES = (mx.float32, mx.float16, mx.bfloat16)
 
 _FP32_INPUT_MESSAGE = (
@@ -155,8 +156,22 @@ class LocalPoints:
         if int(idx.shape[0]):
             # mx.take does not bounds-check: out-of-range rows would silently
             # read other memory (or crash on the CPU device).
-            if bool(((idx < -n) | (idx >= n)).any().item()):
+            # Widen before comparing so a large ``n`` is not coerced into a
+            # narrow index dtype.  uint64 needs its upper-bound check before
+            # widening: values above int64 max wrap to negative on conversion.
+            is_unsigned = idx.dtype in _MX_UINT_DTYPES
+            if idx.dtype == mx.uint64:
+                out_of_range = idx >= mx.array(n, dtype=mx.uint64)
+            else:
+                idx = idx.astype(mx.int64)
+                out_of_range = idx >= n
+                if not is_unsigned:
+                    out_of_range = out_of_range | (idx < -n)
+            if bool(out_of_range.any().item()):
                 raise IndexError(f"LocalPoints index out of range for {n} points")
+        # mx.take accepts several integer dtypes, but using one signed dtype
+        # gives negative indexing consistent semantics on every MLX device.
+        idx = idx.astype(mx.int64)
         return LocalPoints(mx.take(self.coords, idx, axis=0), self.origin, self.crs)
 
     def __iter__(self):
@@ -305,7 +320,8 @@ class PolygonSet:
     bboxes : np.ndarray (M, 4) float64
         Original-coordinate bounds over every ingested ring, used for CPU-side
         grid planning. For invalid geometry these can be wider than the GEOS
-        envelope, matching the all-ring even-odd containment contract.
+        envelope, matching the all-ring even-odd containment contract. The
+        array is read-only so it cannot drift from lazily built grid indexes.
     origin : np.ndarray (2,) float64
         The shared re-centering origin. Query points must be re-centered with
         this same origin; the array is read-only so it cannot drift from the
@@ -371,9 +387,14 @@ class PolygonSet:
         self.n_polygons = len(arr)
         self.n_rings = len(ring_offsets) - 1
         self.n_vertices = len(coords)
-        self.bboxes = _ragged_geometry_bounds(
+        bboxes = _ragged_geometry_bounds(
             coords, ring_offsets, geom_ring_offsets
         )
+        # GridIndex instances are built lazily from these bounds. A caller
+        # mutation before that first query would otherwise make the CPU grid
+        # disagree with the already-uploaded coordinates and kernel bboxes.
+        bboxes.flags.writeable = False
+        self.bboxes = bboxes
 
         if origin is None:
             # These all-ring bounds have the same extrema as the ragged vertex

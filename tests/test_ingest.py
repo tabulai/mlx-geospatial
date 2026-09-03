@@ -583,6 +583,30 @@ def test_polygonset_dtypes_and_shapes(rng):
     assert np.array_equal(np.array(pts_local), recenter(pts, ps.origin))
 
 
+def test_polygonset_bboxes_are_read_only_before_lazy_grid_build():
+    ps = ms.PolygonSet(
+        [shapely.box(0.0, 0.0, 1.0, 1.0), shapely.box(2.0, 0.0, 3.0, 1.0)]
+    )
+    expected = ps.bboxes.copy()
+    assert not ps.bboxes.flags.writeable
+    assert ps._grid_index is None
+
+    # A public-bounds mutation used to poison the grid built by the first
+    # point_in_polygon call while leaving its GPU-resident bbox test intact.
+    with pytest.raises(ValueError, match="read-only"):
+        ps.bboxes[0, :] = [100.0, 100.0, 101.0, 101.0]
+    np.testing.assert_array_equal(ps.bboxes, expected)
+
+    got = ms.point_in_polygon(
+        np.array([[0.5, 0.5], [2.5, 0.5], [10.0, 10.0]]),
+        ps,
+        backend="cpu",
+    )
+    np.testing.assert_array_equal(got, [0, 1, -1])
+    assert ps._grid_index is not None
+    np.testing.assert_array_equal(ps.bboxes, expected)
+
+
 # ---------------------------------------------------------------------------
 # as_point_array
 # ---------------------------------------------------------------------------

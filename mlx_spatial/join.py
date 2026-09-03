@@ -39,7 +39,7 @@ import mlx.core as mx
 import shapely
 
 from ._dispatch import resolve_backend
-from ._ingest import LocalPoints, PolygonSet, as_point_array
+from ._ingest import LocalPoints, PolygonSet, _crs_of, as_point_array
 from ._precision import recenter
 from ._pip import (
     _ALL_MATCHES_EDGE_WORK_THRESHOLD,
@@ -93,6 +93,15 @@ _CPU_ROWS_PER_CHUNK = 2_000_000
 _NEAR_BOUNDARY_POINTS_PER_SLICE = 1_000_000
 _NEAR_BOUNDARY_PAIRS_PER_SLICE = 8_000_000
 _NEAR_BOUNDARY_PROBE_POINTS = 4096
+
+
+def _cpu_crossed_rows(pxr: np.ndarray, pyr: np.ndarray, edges: np.ndarray) -> np.ndarray:
+    """The kernel's fp32 crossing predicate for one bounded edge-row batch."""
+    x1, y1, x2, y2 = edges[:, 0], edges[:, 1], edges[:, 2], edges[:, 3]
+    straddles = (y1 > pyr) != (y2 > pyr)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        xint = x1 + (pyr - y1) / (y2 - y1) * (x2 - x1)
+    return straddles & (pxr < xint)
 
 
 def _plan_cells(cell_size, fb, x0, y0, width, height, pad, max_cells, max_entries):
@@ -1122,51 +1131,67 @@ class GridIndex:
         if total == 0:
             return _empty_result(all_matches, False, n)
 
-        cum = np.cumsum(counts)
-        result = None if all_matches else np.full(n, -1, dtype=np.int32)
+        # Iterate over the conceptual flat candidate-pair array, rather than
+        # whole points.  One heavily occupied cell can give a single point
+        # more candidates than the budget; pair-rank slices keep the limit
+        # hard in that case too.
+        cum = np.concatenate([[0], np.cumsum(counts, dtype=np.int64)])
+        result = None if all_matches else np.full(n, _INT32_MAX, dtype=np.int32)
         pairs_pt: list[np.ndarray] = []
         pairs_pg: list[np.ndarray] = []
-        point0 = 0
-        while point0 < n:
-            base = int(cum[point0 - 1]) if point0 else 0
-            point1 = int(np.searchsorted(cum, base + _CPU_PAIRS_PER_CHUNK, side="right"))
-            point1 = max(point1, point0 + 1)
-            hit_pt, hit_pg = self._cpu_hits(pts32, counts, starts, point0, point1)
+        pair0 = 0
+        while pair0 < total:
+            pair1 = min(pair0 + _CPU_PAIRS_PER_CHUNK, total)
+            hit_pt, hit_pg = self._cpu_hits(pts32, counts, cum, starts, pair0, pair1)
             if hit_pt.size:
                 if all_matches:
                     pairs_pt.append(hit_pt.astype(np.int64))
                     pairs_pg.append(hit_pg.astype(np.int64))
                 else:
-                    # Pairs are point-major and ascending in polygon, so the
-                    # first pair of each point is its lowest containing polygon.
+                    # A point can span chunks now.  Accumulating the minimum
+                    # preserves first-match semantics across every split.
                     first = np.unique(hit_pt, return_index=True)[1]
-                    result[hit_pt[first]] = hit_pg[first]
-            point0 = point1
+                    point_hit = hit_pt[first]
+                    result[point_hit] = np.minimum(result[point_hit], hit_pg[first])
+            pair0 = pair1
 
         if not all_matches:
+            result[result == _INT32_MAX] = -1
             return result
         if not pairs_pt:
             return _empty_result(True, False, n)
         return np.concatenate(pairs_pt), np.concatenate(pairs_pg)
 
-    def _cpu_hits(self, pts32, counts, starts, point0: int, point1: int):
-        """Containment pairs ``(point, polygon)`` (int32) for one point slice.
+    def _cpu_hits(self, pts32, counts, cum, starts, pair0: int, pair1: int):
+        """Containment pairs ``(point, polygon)`` for one flat-pair slice.
 
         Explicit candidate pairs from the CSR lists (sorted, so pairs are
         point-major and ascending in polygon), the kernel's bbox reject, then
-        the crossing test over ``(pair, edge)`` rows in bounded chunks.
+        the crossing test over ``(pair, edge)`` rows in bounded chunks. Both
+        this slice and every crossing-row slice are hard-capped even when a
+        single point or polygon exceeds the corresponding budget.
         """
         polyset = self.polygons
-        c = counts[point0:point1]
-        total = int(c.sum())
         empty = np.empty(0, dtype=np.int32)
-        if total == 0:
+        total = pair1 - pair0
+        if total <= 0:
             return empty, empty
-        pair_point = np.repeat(np.arange(point0, point1, dtype=np.int32), c)
-        run_start = np.repeat(np.cumsum(c) - c, c)
-        pair_poly = self._cell_poly[
-            np.repeat(starts[point0:point1], c) + (np.arange(total) - run_start)
-        ]
+
+        # Only two searches per chunk: derive the per-point segment lengths,
+        # then expand them with repeat.  This avoids a searchsorted per pair
+        # on the fallback's hot path.
+        point0 = int(np.searchsorted(cum, pair0, side="right")) - 1
+        point1 = int(np.searchsorted(cum, pair1 - 1, side="right")) - 1
+        span_counts = counts[point0 : point1 + 1]
+        nonzero = np.flatnonzero(span_counts)
+        point_ids = point0 + nonzero
+        chunk_counts = span_counts[nonzero].astype(np.int64, copy=True)
+        chunk_counts[0] -= pair0 - cum[point_ids[0]]
+        chunk_counts[-1] -= cum[point_ids[-1] + 1] - pair1
+        pair_point = np.repeat(point_ids, chunk_counts)
+        pair_rank = np.arange(pair0, pair1, dtype=np.int64)
+        rank_in_point = pair_rank - cum[pair_point]
+        pair_poly = self._cell_poly[starts[pair_point] + rank_in_point]
         px = pts32[pair_point, 0]
         py = pts32[pair_point, 1]
         bb = polyset._bboxes_local_np()[pair_poly]
@@ -1178,34 +1203,41 @@ class GridIndex:
         edge_offsets = polyset._geom_edge_offsets
         n_edges = edge_offsets[pair_poly + 1] - edge_offsets[pair_poly]
         n_edges = np.where(rejected, 0, n_edges)
-        parity = np.zeros(total, dtype=np.int64)
-        cum_edges = np.cumsum(n_edges)
-        pair0 = 0
-        while pair0 < total:
-            base = int(cum_edges[pair0 - 1]) if pair0 else 0
-            pair1 = int(np.searchsorted(cum_edges, base + _CPU_ROWS_PER_CHUNK, side="right"))
-            pair1 = max(pair1, pair0 + 1)
-            sel = slice(pair0, pair1)
-            reps = n_edges[sel]
-            n_rows = int(reps.sum())
-            if n_rows:
-                row_pair = np.repeat(np.arange(pair0, pair1), reps)
-                first_edge = np.repeat(edge_offsets[pair_poly[sel]], reps)
-                within = np.arange(n_rows) - np.repeat(np.cumsum(reps) - reps, reps)
-                e = edges[first_edge + within]
-                x1, y1, x2, y2 = e[:, 0], e[:, 1], e[:, 2], e[:, 3]
-                pxr = px[row_pair]
-                pyr = py[row_pair]
-                straddles = (y1 > pyr) != (y2 > pyr)
-                with np.errstate(divide="ignore", invalid="ignore"):
-                    xint = x1 + (pyr - y1) / (y2 - y1) * (x2 - x1)
-                crossed = straddles & (pxr < xint)
-                parity[pair0:pair1] = np.bincount(
-                    row_pair - pair0, weights=crossed, minlength=pair1 - pair0
-                ).astype(np.int64)
-            pair0 = pair1
-        hit = (parity & 1).astype(bool) & ~rejected
-        return pair_point[hit], pair_poly[hit].astype(np.int32)
+        parity = np.zeros(total, dtype=bool)
+        cum_edges = np.concatenate([[0], np.cumsum(n_edges, dtype=np.int64)])
+        total_rows = int(cum_edges[-1])
+        row0 = 0
+        while row0 < total_rows:
+            row1 = min(row0 + _CPU_ROWS_PER_CHUNK, total_rows)
+
+            # As above, two boundary searches plus repeat expand the CSR
+            # segment without a search per crossing row.  Adjusting the first
+            # and last counts lets a single polygon continue in the next
+            # chunk while no materialized row array exceeds the hard cap.
+            edge_pair0 = int(np.searchsorted(cum_edges, row0, side="right")) - 1
+            edge_pair1 = int(np.searchsorted(cum_edges, row1 - 1, side="right")) - 1
+            span_reps = n_edges[edge_pair0 : edge_pair1 + 1]
+            nonzero = np.flatnonzero(span_reps)
+            edge_pair_ids = edge_pair0 + nonzero
+            chunk_reps = span_reps[nonzero].astype(np.int64, copy=True)
+            chunk_reps[0] -= row0 - cum_edges[edge_pair_ids[0]]
+            chunk_reps[-1] -= cum_edges[edge_pair_ids[-1] + 1] - row1
+
+            row_pair = np.repeat(edge_pair_ids, chunk_reps)
+            row_rank = np.arange(row0, row1, dtype=np.int64)
+            within = row_rank - cum_edges[row_pair]
+            e = edges[edge_offsets[pair_poly[row_pair]] + within]
+            crossed = _cpu_crossed_rows(px[row_pair], py[row_pair], e)
+
+            # row_pair is sorted, so reduce each nonempty run to one parity
+            # bit. XOR accumulation handles a pair split across row chunks.
+            group_start = np.concatenate(
+                [[0], np.flatnonzero(row_pair[1:] != row_pair[:-1]) + 1]
+            )
+            parity[row_pair[group_start]] ^= np.logical_xor.reduceat(crossed, group_start)
+            row0 = row1
+        hit = parity & ~rejected
+        return pair_point[hit].astype(np.int32), pair_poly[hit].astype(np.int32)
 
     def _refine_boundary(self, pts64: np.ndarray, out, *, all_matches: bool, predicate: str):
         """Re-check points within the tolerance band of a boundary with GEOS.
@@ -1403,6 +1435,19 @@ def point_in_polygon(
                 raise ValueError(
                     "exact_boundary=True needs host coordinates (GEOS re-checks the "
                     "near-boundary points); pass the original NumPy/GeoSeries points"
+                )
+            point_crs = _crs_of(points)
+            # Match PolygonSet's non-empty path: CRS belongs to the original
+            # GeoSeries/GeoDataFrame-like container, while polygon_values is
+            # only the normalized object used for the zero-length check.
+            polygon_crs = _crs_of(polygons)
+            if (
+                point_crs is not None
+                and polygon_crs is not None
+                and point_crs != polygon_crs
+            ):
+                raise ValueError(
+                    f"CRS mismatch: points={point_crs}, polygons={polygon_crs}"
                 )
             n_points = _point_count(points)
             resolve_backend(backend, 0)
