@@ -25,6 +25,18 @@ ray crossings at vertices. Within ``PolygonSet.boundary_tolerance`` of an
 edge — including every exact boundary point — the fp32 result is undefined.
 Consequently a point on a shared edge may match either adjacent polygon, both,
 or neither; there is no general uniqueness guarantee inside the band.
+
+Operation order is part of the contract: every kernel string that evaluates
+the x-intersection carries ``#pragma clang fp contract(off)`` (Metal's default
+fast-math would fuse the multiply-add into an FMA and move the intersection
+by a rounding), so all 14 predicate kernels agree bit for bit with the NumPy
+host fallback; the composed mx.compile oracle is verified against the same
+reference in tests. The one hazard the pragma cannot switch off is the GPU's
+flush of fp32 subnormals, reachable only when a coordinate or an edge delta is
+itself subnormal (~1e-38; local coordinates far below anything re-centered
+real-world data produces). ``tests/test_fp_contract.py`` guards the pragma
+statically and behaviourally; ``tests/test_kernel_routes.py`` launches every
+kernel through its public route.
 """
 
 from __future__ import annotations
@@ -211,7 +223,9 @@ _PAIR_THREADGROUP_KERNEL_SOURCE = """
     // Four SIMDgroups cooperate on one very long polygon. Each first lane
     // publishes its SIMDgroup parity, then SIMDgroup zero performs the final
     // XOR. A whole threadgroup maps to one pair, so every barrier is uniform.
-    #pragma clang fp contract(off)
+    // No fp-contract pragma here: the arithmetic lives in the header, whose
+    // file-scope pragma governs this body too, while a pragma inside a kernel
+    // body would not reach the header's template (tests/test_fp_contract.py).
     uint pair = threadgroup_position_in_grid.x;
     uint local = thread_index_in_threadgroup;
     uint lane = thread_index_in_simdgroup;

@@ -79,6 +79,18 @@ heavy launches on the scalar path.
   work is polygon-major for coordinate locality but writes the same row-major
   output. The composed MLX implementation remains the non-Metal fallback and
   an independent arithmetic oracle in tests.
+- Fifteen kernels in all (scalar, SIMD32 and TG128 variants of the pair,
+  dense and first-match predicates; point-centric all-match count and write;
+  pair-parallel all-match count in three variants plus its write kernel).
+  `tests/test_kernel_routes.py` launches every one through its public route,
+  with the expected strategy derived from the selectors and the answer checked
+  against the NumPy fallback. The contraction pragma is guarded statically
+  (each of the six kernel strings that evaluates the x-intersection carries
+  its own `#pragma clang fp contract(off)` before it; a body pragma cannot
+  protect header arithmetic) and behaviourally (`tests/test_fp_contract.py`
+  drives FMA-sensitive probe points, where fused and unfused arithmetic
+  disagree by a rounding, through all fourteen predicate kernels and requires
+  bit-identity with the NumPy fallback).
 - The indexed first- and all-match call sites use the same cooperative
   predicate implementations under the additional grid-aware rules below.
 
