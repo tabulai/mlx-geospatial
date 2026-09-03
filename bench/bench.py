@@ -6,11 +6,36 @@ Honesty rules:
   and synchronization. Host-input join rows return NumPy labels as a
   zero-copy view of the MLX result (no copy-back is timed); other MLX results
   stay MLX arrays.
-- The explicitly labeled dense-PIP microbenchmark is the exception: it uses
-  a pre-ingested PolygonSet and GPU-resident points to isolate the replacement
-  kernel from its retained composed oracle.
+- Like against like: the join baselines evaluate every (point, polygon)
+  pair (shapely STRtree and GeoPandas sjoin return them; DuckDB is timed as
+  ``count(*)`` over the join and never materializes them), so their speedups
+  are computed against our ``all_matches=True`` row, not the cheaper
+  first-match row, which is reported alongside. GEOS is given its best
+  configuration: the polygons are the query side of the STRtree (and the left
+  frame of ``sjoin``), because shapely prepares the geometries it is queried
+  with, and prepared polygons carry an indexed point-in-area locator that is
+  8-60x faster on detailed polygons than the unprepared orientation. The kNN
+  baseline (sklearn BallTree) is reported both with the tree built inside the
+  timed region and query-only on a prebuilt tree; our brute-force kNN has no
+  index to prebuild.
+- Thread counts are stated: shapely/GEOS, GeoPandas and sklearn run on one
+  core; DuckDB uses its default thread pool (all cores); the GPU rows use the
+  whole GPU. The machine line lists the core count.
+- The synthetic "zones" are random star-shaped polygons that overlap and leave
+  gaps (they do not tile the extent and are not convex); the join report
+  prints the measured coverage. Detailed geometry (2,048-vertex zones, a
+  150k-vertex coastline-like polygon) is benchmarked as well, because that is
+  where baseline configuration matters most (prepared vs unprepared polygons
+  differ 8-60x) and where our per-candidate ring walk meets GEOS's indexed
+  locator.
+- The explicitly labeled dense-PIP microbenchmark is the exception to the
+  end-to-end rule: it uses a pre-ingested PolygonSet and GPU-resident points to
+  isolate the replacement kernel from its retained composed oracle.
 - ``cold`` numbers include building the PolygonSet + grid index; ``warm``
-  numbers reuse a prebuilt index (the realistic repeated-query pattern).
+  numbers reuse a prebuilt index (the realistic repeated-query pattern) and
+  are steady-state burst numbers: GPU clocks are warmed before each timing, as
+  in the crossover sweep, because the fixed launch cost is 3-4x higher right
+  after the GPU has idled.
 - Baselines that are unavailable are reported as ``n/a``, never silently
   dropped.
 
@@ -18,14 +43,16 @@ Usage:
     python bench/bench.py --op haversine --n 20000 --m 20000
     python bench/bench.py --op knn --n 200000 --m 200000 --k 10
     python bench/bench.py --op dense-pip --n 100000 --m 32 --vertices 48
-    python bench/bench.py --op join --n 1000000 --m 260
+    python bench/bench.py --op join --n 1000000 --m 260 [--vertices 2048]
+    python bench/bench.py --op join --n 1000000 --coastline 150000   # one detailed polygon
     python bench/bench.py --op crossover --m 260   # CPU/GPU dispatch sweep + constant fit
-    python bench/bench.py --all            # quick representative sweep
+    python bench/bench.py --all            # the README sweep
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import platform
 import subprocess
 import time
@@ -76,7 +103,26 @@ def machine() -> str:
         ).strip()
     except Exception:
         chip = platform.processor()
-    return f"{chip}, macOS {platform.mac_ver()[0]}, mlx {mx.__version__}"
+    cores = f"{os.cpu_count()} cores"
+    try:
+        perf = subprocess.check_output(["sysctl", "-n", "hw.perflevel0.physicalcpu"], text=True).strip()
+        eff = subprocess.check_output(["sysctl", "-n", "hw.perflevel1.physicalcpu"], text=True).strip()
+        cores = f"{os.cpu_count()} cores ({perf} performance + {eff} efficiency)"
+    except Exception:
+        pass
+    return (
+        f"{chip}, {cores}, macOS {platform.mac_ver()[0]}, mlx {mx.__version__}, "
+        f"Python {platform.python_version()}"
+    )
+
+
+def duckdb_threads() -> int | None:
+    try:
+        import duckdb
+
+        return int(duckdb.connect().execute("select current_setting('threads')").fetchone()[0])
+    except Exception:
+        return None
 
 
 def make_points(n: int, rng: np.random.Generator) -> np.ndarray:
@@ -85,7 +131,15 @@ def make_points(n: int, rng: np.random.Generator) -> np.ndarray:
 
 
 def make_zones(m: int, rng: np.random.Generator, vertices: int = 48) -> np.ndarray:
-    """Convex 'zones' tiling the extent statistically (like taxi zones)."""
+    """``m`` random star-shaped 'zones' with ``vertices`` vertices each.
+
+    Centers are uniform over the extent and every vertex gets its own radius
+    (0.4-0.8 of the mean cell side), so the zones are neither convex nor a
+    tiling: they overlap and leave gaps. About two thirds of the extent is
+    covered and a covered point lies in 1.6 zones on average (the join report
+    prints the measured coverage). Vertex counts model taxi-zone style
+    polygons (48) or detailed administrative boundaries (2,048).
+    """
     x0, y0, x1, y1 = EXTENT
     scale = np.sqrt((x1 - x0) * (y1 - y0) / m)
     centers = np.column_stack([rng.uniform(x0, x1, m), rng.uniform(y0, y1, m)])
@@ -179,6 +233,13 @@ def bench_haversine(n: int, m: int, rng) -> list[tuple[str, float | None]]:
 
 
 def bench_knn(n: int, m: int, k: int, rng) -> list[tuple[str, float | None]]:
+    """Exact brute-force kNN versus sklearn's BallTree (one core).
+
+    The BallTree is reported twice: with the tree built inside the timed
+    region (a one-off query, comparable to our end-to-end number, which has no
+    index to build) and query-only on a prebuilt tree (repeated queries
+    against a fixed reference set, where the tree amortizes).
+    """
     q, r = make_points(n, rng), make_points(m, rng)
     rows = []
 
@@ -187,18 +248,28 @@ def bench_knn(n: int, m: int, k: int, rng) -> list[tuple[str, float | None]]:
         mx.eval(d, i)
         sync()
 
-    rows.append((f"mlx-spatial haversine_knn (k={k})", timeit(ours)))
+    rows.append((f"mlx-spatial haversine_knn (k={k}, brute force)", timeit(ours)))
 
     try:
         from sklearn.neighbors import BallTree
 
-        def sk():
-            tree = BallTree(np.radians(r[:, ::-1]), metric="haversine")
-            tree.query(np.radians(q[:, ::-1]), k=k)
+        r_rad = np.radians(r[:, ::-1])
+        q_rad = np.radians(q[:, ::-1])
 
-        rows.append(("sklearn BallTree(haversine)", timeit(sk)))
+        def sk_build_and_query():
+            tree = BallTree(r_rad, metric="haversine")
+            tree.query(q_rad, k=k)
+
+        rows.append(("sklearn BallTree(haversine), build + query, 1 core", timeit(sk_build_and_query)))
+        tree = BallTree(r_rad, metric="haversine")
+
+        def sk_query():
+            tree.query(q_rad, k=k)
+
+        rows.append(("sklearn BallTree(haversine), query only (prebuilt), 1 core", timeit(sk_query)))
     except ImportError:
-        rows.append(("sklearn BallTree(haversine)", None))
+        rows.append(("sklearn BallTree(haversine), build + query, 1 core", None))
+        rows.append(("sklearn BallTree(haversine), query only (prebuilt), 1 core", None))
     return rows
 
 
@@ -375,16 +446,54 @@ def bench_crossover(m: int, rng) -> None:
     )
 
 
-def bench_join(n: int, m: int, rng) -> list[tuple[str, float | None]]:
+def make_coastline(vertices: int, rng: np.random.Generator) -> np.ndarray:
+    """One detailed, coastline-like polygon with ``vertices`` vertices.
+
+    A star-shaped ring around the extent's center whose radius carries
+    low- and high-frequency undulation plus noise, so it is valid (simple),
+    covers about 22% of the extent (its bounding box about 39%) and has no
+    short cuts for a crossing-number test: every containment decision walks
+    the whole ring on the scalar paths, which is the case detailed
+    administrative or natural boundaries present.
+    """
+    x0, y0, x1, y1 = EXTENT
+    cx, cy = 0.5 * (x0 + x1), 0.5 * (y0 + y1)
+    base = 0.32 * min(x1 - x0, y1 - y0)
+    ang = np.linspace(0.0, 2.0 * np.pi, vertices, endpoint=False)
+    r = base * (
+        1.0 + 0.12 * np.sin(7 * ang) + 0.06 * np.sin(41 * ang + 1.0)
+        + 0.03 * np.sin(211 * ang) + 0.01 * rng.normal(size=vertices)
+    )
+    poly = shapely.Polygon(np.column_stack([cx + r * np.cos(ang), cy + r * np.sin(ang)]))
+    assert poly.is_valid
+    return np.array([poly], dtype=object)
+
+
+def bench_join(
+    n: int, m: int, rng, *, vertices: int = 48, coastline: int | None = None
+) -> list[tuple[str, float | None]]:
+    """Point-in-polygon join against all-pairs CPU baselines.
+
+    ``coastline`` replaces the zone layer by one polygon with that many
+    vertices. Baselines evaluate every (point, polygon) pair (DuckDB as a
+    count), so the row they are compared with is our ``all_matches=True``
+    query; first match (the cheaper contract most joins want) is reported as
+    well. Warm rows are timed after warming the GPU clocks.
+    """
     pts = make_points(n, rng)
-    zones = make_zones(m, rng)
+    if coastline:
+        zones = make_coastline(coastline, rng)
+    else:
+        zones = make_zones(m, rng)
+        if vertices != 48:
+            zones = densify_zones(zones, vertices)
     rows = []
 
     def ours_cold():
         polyset = ms.PolygonSet(zones)
         ms.point_in_polygon(pts, polyset, backend="gpu")
 
-    rows.append(("mlx-spatial point_in_polygon (cold)", timeit(ours_cold)))
+    rows.append(("mlx-spatial point_in_polygon, first match (cold: ingest + index)", timeit(ours_cold)))
 
     polyset = ms.PolygonSet(zones)
     index = ms.GridIndex(polyset)
@@ -394,42 +503,90 @@ def bench_join(n: int, m: int, rng) -> list[tuple[str, float | None]]:
         # the MLX result; the label array is fully materialized on return.
         index.query(pts, backend="gpu")
 
-    rows.append(("mlx-spatial point_in_polygon (warm index)", timeit(ours_warm)))
+    _gpu_warm(ours_warm)
+    rows.append(("mlx-spatial point_in_polygon, first match (warm index)", timeit(ours_warm)))
+
+    def ours_all():
+        # numpy in -> two numpy int64 pair arrays out, materialized on return
+        index.query(pts, backend="gpu", all_matches=True)
+
+    _gpu_warm(ours_all)
+    rows.append(("mlx-spatial point_in_polygon, all pairs (warm index)", timeit(ours_all)))
 
     local = polyset.to_local(pts)  # re-center once; the array-native pattern
 
     def ours_device():
         mx.eval(index.query(local))
 
+    _gpu_warm(ours_device)
     rows.append(
-        ("mlx-spatial point_in_polygon (warm index, device-resident points)", timeit(ours_device))
+        ("mlx-spatial point_in_polygon, first match (warm index, device-resident points)", timeit(ours_device))
+    )
+
+    # Coverage, for reading the numbers: how many pairs the all-pairs rows
+    # produce per point, and how many points match at all.
+    pt, _ = index.query(pts, backend="gpu", all_matches=True)
+    n_pairs = int(pt.shape[0])
+    covered = int(np.unique(np.asarray(pt)).size)
+    rows.append(
+        (
+            f"  [coverage: {covered / n:.0%} of points lie in a polygon, "
+            f"{n_pairs / max(covered, 1):.2f} polygons per such point, {n_pairs:,} pairs]",
+            None,
+        )
     )
 
     def strtree():
-        tree = shapely.STRtree(zones)
-        tree.query(shapely.points(pts), predicate="intersects")
+        # Points in the tree, polygons as the query: shapely prepares the
+        # query geometries, so this gives GEOS its indexed point-in-area
+        # locator (8-60x faster on detailed polygons than querying a polygon
+        # tree with points). Point geometries are built inside the timing,
+        # as our rows ingest raw NumPy inside theirs.
+        tree = shapely.STRtree(shapely.points(pts))
+        tree.query(zones, predicate="intersects")
 
-    rows.append(("shapely STRtree bulk query", timeit(strtree)))
+    rows.append(("shapely STRtree bulk query (prepared polygons), all pairs, 1 core", timeit(strtree)))
 
     try:
         import geopandas as gpd
 
-        left = gpd.GeoDataFrame(geometry=list(shapely.points(pts)))
-        right = gpd.GeoDataFrame(geometry=list(zones))
+        polygons_df = gpd.GeoDataFrame(geometry=list(zones))  # prebuilt, like DuckDB's zone table
 
         def gpd_join():
-            gpd.sjoin(left, right, how="inner", predicate="within")
+            # polygons on the left: sjoin queries the right frame's tree with
+            # the left geometries, so the polygons are the prepared side
+            points_df = gpd.GeoDataFrame(geometry=gpd.GeoSeries(shapely.points(pts)))
+            gpd.sjoin(polygons_df, points_df, how="inner", predicate="intersects")
 
-        rows.append(("geopandas sjoin", timeit(gpd_join, warmup=0, repeats=1 if n >= 5_000_000 else 3)))
+        rows.append(
+            (
+                "geopandas sjoin (polygons left, prepared), all pairs, 1 core",
+                timeit(gpd_join, warmup=0, repeats=1 if n >= 5_000_000 else 3),
+            )
+        )
     except ImportError:
-        rows.append(("geopandas sjoin", None))
+        rows.append(("geopandas sjoin (polygons left, prepared), all pairs, 1 core", None))
 
-    rows.append(("duckdb spatial join", _bench_duckdb_join(pts, zones)))
+    threads = duckdb_threads()
+    label = (
+        f"duckdb spatial join, count(*) over all pairs, {threads} threads"
+        if threads
+        else "duckdb spatial join, count(*) over all pairs"
+    )
+    secs, note = _bench_duckdb_join(pts, zones)
+    rows.append((label + note, secs))
     return rows
 
 
-def _bench_duckdb_join(pts: np.ndarray, zones: np.ndarray) -> float | None:
+def _bench_duckdb_join(
+    pts: np.ndarray, zones: np.ndarray, deadline_s: float = 300.0
+) -> tuple[float | None, str]:
+    """DuckDB spatial join timing, or ``(None, note)`` when unavailable or
+    interrupted after ``deadline_s`` (detailed polygons can take DuckDB far
+    longer than any other baseline; a bounded wait keeps the sweep finite)."""
     try:
+        import threading
+
         import duckdb
         import pandas as pd
 
@@ -444,32 +601,44 @@ def _bench_duckdb_join(pts: np.ndarray, zones: np.ndarray) -> float | None:
         )
 
         def q():
-            con.execute(
-                "SELECT count(*) FROM pts_raw JOIN zones "
-                "ON ST_Contains(zones.geom, ST_Point(pts_raw.x, pts_raw.y))"
-            ).fetchall()
+            timer = threading.Timer(deadline_s, con.interrupt)
+            timer.start()
+            try:
+                con.execute(
+                    "SELECT count(*) FROM pts_raw JOIN zones "
+                    "ON ST_Intersects(zones.geom, ST_Point(pts_raw.x, pts_raw.y))"
+                ).fetchall()
+            finally:
+                timer.cancel()
 
-        return timeit(q, warmup=1, repeats=2)
+        try:
+            return timeit(q, warmup=1, repeats=2), ""
+        except duckdb.InterruptException:
+            return None, f" (interrupted after {deadline_s:.0f} s)"
     except Exception:
-        return None
+        return None, ""
 
 
 # ---------------------------------------------------------------- driver
 
 def report(title: str, rows: list[tuple[str, float | None]]):
     print(f"\n### {title}")
-    # Join reports cold first but external baselines are comparable to its
-    # reused-index row. Other operations keep their primary result first.
-    ours = next(
+    # Speedups are computed against the row that answers the same question
+    # as the baselines: the all-pairs warm-index join, or otherwise the first
+    # mlx-spatial row.
+    ours_name, ours = next(
         (
-            secs
+            (name, secs)
             for name, secs in rows
-            if name.startswith("mlx-spatial") and "warm index" in name
+            if name.startswith("mlx-spatial") and "all pairs (warm index)" in name
         ),
-        rows[0][1],
+        rows[0],
     )
     width = max(len(name) for name, _ in rows)
     for name, secs in rows:
+        if secs is None and name.startswith("  ["):
+            print(f"  {name}")
+            continue
         speedup = ""
         if (
             secs is not None
@@ -477,7 +646,13 @@ def report(title: str, rows: list[tuple[str, float | None]]):
             and secs > 0
             and not name.startswith("mlx-spatial")
         ):
-            speedup = f"  ({secs / ours:.1f}x vs ours)"
+            if "all pairs (warm index)" in ours_name:
+                what = "all pairs (warm index)"
+            elif "brute force" in ours_name:
+                what = "brute force"
+            else:
+                what = "ours"
+            speedup = f"  ({secs / ours:.1f}x vs {what})"
         print(f"  {name:<{width}}  {fmt(secs):>10}{speedup}")
 
 
@@ -487,8 +662,12 @@ def main():
     parser.add_argument("--n", type=int, default=1_000_000)
     parser.add_argument("--m", type=int, default=260)
     parser.add_argument("--k", type=int, default=10)
-    parser.add_argument("--vertices", type=int, default=48)
-    parser.add_argument("--all", action="store_true", help="run a representative sweep")
+    parser.add_argument("--vertices", type=int, default=48, help="vertices per zone (join, dense-pip)")
+    parser.add_argument(
+        "--coastline", type=int, default=None,
+        help="join against one coastline-like polygon with this many vertices instead of zones",
+    )
+    parser.add_argument("--all", action="store_true", help="run the README sweep")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
@@ -510,12 +689,24 @@ def main():
             bench_knn(200_000, 200_000, 10, rng),
         )
         report(
+            "haversine_knn 1M queries, 200k refs, k=10",
+            bench_knn(1_000_000, 200_000, 10, rng),
+        )
+        report(
             "dense PIP 100,000 points x 32 polygons x 48 vertices",
             bench_dense_pip(100_000, 32, 48, rng),
         )
         for n in (100_000, 1_000_000, 10_000_000):
-            report(f"join {n:,} points x 260 zones", bench_join(n, 260, rng))
-        report("join 1,000,000 points x 10,000 zones", bench_join(1_000_000, 10_000, rng))
+            report(f"join {n:,} points x 260 zones (48 vertices)", bench_join(n, 260, rng))
+        report("join 1,000,000 points x 10,000 zones (48 vertices)", bench_join(1_000_000, 10_000, rng))
+        report(
+            "join 1,000,000 points x 260 zones (2,048 vertices)",
+            bench_join(1_000_000, 260, rng, vertices=2048),
+        )
+        report(
+            "join 1,000,000 points x one 150,000-vertex coastline polygon",
+            bench_join(1_000_000, 1, rng, coastline=150_000),
+        )
         bench_crossover(260, rng)
         return
 
@@ -533,7 +724,13 @@ def main():
             bench_dense_pip(args.n, args.m, args.vertices, rng),
         )
     elif args.op == "join":
-        report(f"join {args.n:,} points x {args.m:,} zones", bench_join(args.n, args.m, rng))
+        if args.coastline and (args.vertices != 48 or args.m != 260):
+            parser.error("--coastline replaces the zone layer; --m and --vertices do not apply")
+        if args.coastline:
+            title = f"join {args.n:,} points x one {args.coastline:,}-vertex coastline polygon"
+        else:
+            title = f"join {args.n:,} points x {args.m:,} zones ({args.vertices:,} vertices)"
+        report(title, bench_join(args.n, args.m, rng, vertices=args.vertices, coastline=args.coastline))
     elif args.op == "crossover":
         bench_crossover(args.m, rng)
     else:
