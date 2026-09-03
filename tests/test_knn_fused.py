@@ -61,9 +61,12 @@ def test_public_api_uses_fused_and_matches_bruteforce(rng):
     )
 
 
-# Both references are within about 100 m of the query's antipode.  With
-# multiply-add contraction enabled in the selectors their h values collapse
-# to the same fp32 value, while the public _hav graph keeps them distinct.
+# Both references are within about 100 m of the query's antipode.  On the M4
+# Max, multiply-add contraction in the selectors collapses their h values to
+# the same fp32 value while the public _hav graph keeps them distinct.  Which
+# reference the public graph ranks first can vary with the GPU's transcendental
+# approximation, so the contract is agreement with that graph, not a fixed
+# hardware-specific index.
 _ANTIPODAL_QUERY = np.array([[91.06015715, -46.14764379]])
 _ANTIPODAL_REFERENCES = np.array(
     [
@@ -75,13 +78,14 @@ _ANTIPODAL_REFERENCES = np.array(
 
 def test_public_k1_near_antipode_matches_bruteforce():
     full = np.array(ms.haversine_cross(_ANTIPODAL_QUERY, _ANTIPODAL_REFERENCES))
-    assert full[0, 1] < full[0, 0]  # Regression case is sensitive to ordering.
+    expected_idx = np.argsort(full, axis=1, kind="stable")[:, :1]
+    expected_dist = np.take_along_axis(full, expected_idx, axis=1)
 
     dist, idx = ms.haversine_knn(
         _ANTIPODAL_QUERY, _ANTIPODAL_REFERENCES, k=1
     )
-    np.testing.assert_array_equal(np.array(idx), [[1]])
-    np.testing.assert_array_equal(np.array(dist), full[:, 1:2])
+    np.testing.assert_array_equal(np.array(idx), expected_idx)
+    np.testing.assert_array_equal(np.array(dist), expected_dist)
 
 
 @pytest.mark.parametrize(
@@ -92,9 +96,11 @@ def test_fused_selectors_near_antipode_match_bruteforce(selector):
     r = _prep(_ANTIPODAL_REFERENCES, True)
     dist, idx = selector(q, r, 1, ms.R_EARTH_M)
     full = np.array(ms.haversine_cross(_ANTIPODAL_QUERY, _ANTIPODAL_REFERENCES))
+    expected_idx = np.argsort(full, axis=1, kind="stable")[:, :1]
+    expected_dist = np.take_along_axis(full, expected_idx, axis=1)
 
-    np.testing.assert_array_equal(np.array(idx), [[1]])
-    np.testing.assert_array_equal(np.array(dist), full[:, 1:2])
+    np.testing.assert_array_equal(np.array(idx), expected_idx)
+    np.testing.assert_array_equal(np.array(dist), expected_dist)
 
 
 def test_k_above_kernel_cap_falls_back(rng, monkeypatch):
