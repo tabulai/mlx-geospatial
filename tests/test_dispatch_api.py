@@ -2,11 +2,11 @@
 
 Covers:
 - ``resolve_backend``: auto threshold, explicit pass-through, env var
-  precedence (requested= wins over ``MLX_SPATIAL_BACKEND``), invalid values.
+  precedence (requested= wins over ``MLX_GEOSPATIAL_BACKEND``), invalid values.
 - End-to-end backend routing: env-forced CPU on a workload that would
   otherwise auto-dispatch to the GPU, auto-CPU below the threshold, explicit
   GPU on tiny workloads. Routing is observed by monkeypatching the kernel
-  entry points in ``mlx_spatial.join`` at test time (no library code is
+  entry points in ``mlx_geospatial.join`` at test time (no library code is
   modified on disk).
 - ``contains_matrix`` chunking equivalence (tiny chunk_bytes == default,
   bitwise).
@@ -27,15 +27,15 @@ import mlx.core as mx
 import pytest
 import shapely
 
-import mlx_spatial as ms
-import mlx_spatial._dispatch as _dispatch
-from mlx_spatial._dispatch import (
+import mlx_geospatial as ms
+import mlx_geospatial._dispatch as _dispatch
+from mlx_geospatial._dispatch import (
     GPU_LAUNCH_US,
     gpu_min_points,
     metal_available,
     resolve_backend,
 )
-from mlx_spatial._pip import (
+from mlx_geospatial._pip import (
     _all_matches_strategy,
     _pip_dense_composed,
     _pip_long_polygon_strategy,
@@ -171,31 +171,42 @@ def test_invalid_requested_raises_valueerror_with_value():
     assert "metal" in str(ei.value)
 
 
+@pytest.mark.parametrize("requested", ["", False, 0, [], {}])
+def test_falsey_requested_is_validated_not_treated_as_absent(
+    requested, monkeypatch
+):
+    """Only None may defer backend selection to the environment."""
+    monkeypatch.setenv("MLX_GEOSPATIAL_BACKEND", "cpu")
+    with pytest.raises(ValueError, match="backend") as exc_info:
+        resolve_backend(requested, 10)
+    assert repr(requested) in str(exc_info.value)
+
+
 def test_env_var_respected(monkeypatch):
-    monkeypatch.setenv("MLX_SPATIAL_BACKEND", "cpu")
+    monkeypatch.setenv("MLX_GEOSPATIAL_BACKEND", "cpu")
     assert resolve_backend(None, 10**9) == "cpu"
     if metal_available():
-        monkeypatch.setenv("MLX_SPATIAL_BACKEND", "gpu")
+        monkeypatch.setenv("MLX_GEOSPATIAL_BACKEND", "gpu")
         assert resolve_backend(None, 1) == "gpu"
 
 
 def test_env_var_case_insensitive(monkeypatch):
-    monkeypatch.setenv("MLX_SPATIAL_BACKEND", "CPU")
+    monkeypatch.setenv("MLX_GEOSPATIAL_BACKEND", "CPU")
     assert resolve_backend(None, 10**9) == "cpu"
 
 
 def test_requested_overrides_env(monkeypatch):
-    monkeypatch.setenv("MLX_SPATIAL_BACKEND", "cpu")
+    monkeypatch.setenv("MLX_GEOSPATIAL_BACKEND", "cpu")
     if metal_available():
         assert resolve_backend("gpu", 1) == "gpu"
         # explicit 'auto' also takes precedence over the env var
         assert resolve_backend("auto", 10**9) == "gpu"
-    monkeypatch.setenv("MLX_SPATIAL_BACKEND", "gpu")
+    monkeypatch.setenv("MLX_GEOSPATIAL_BACKEND", "gpu")
     assert resolve_backend("cpu", 10**9) == "cpu"
 
 
 def test_invalid_env_raises_valueerror_with_value(monkeypatch):
-    monkeypatch.setenv("MLX_SPATIAL_BACKEND", "quantum")
+    monkeypatch.setenv("MLX_GEOSPATIAL_BACKEND", "quantum")
     with pytest.raises(ValueError) as ei:
         resolve_backend(None, 10)
     assert "quantum" in str(ei.value)
@@ -244,18 +255,18 @@ def test_dispatch_cost_model_sane():
 
 @requires_metal
 def test_env_cpu_forces_cpu_path_end_to_end(grid_workload, monkeypatch):
-    """MLX_SPATIAL_BACKEND=cpu must route a large workload off the GPU."""
+    """MLX_GEOSPATIAL_BACKEND=cpu must route a large workload off the GPU."""
     polys, polyset, index, pts, ref = grid_workload
     # This workload would auto-dispatch to the GPU...
     assert len(pts) >= gpu_min_points(index._edges_per_point)
 
-    monkeypatch.setenv("MLX_SPATIAL_BACKEND", "cpu")
+    monkeypatch.setenv("MLX_GEOSPATIAL_BACKEND", "cpu")
 
     def _boom(*args, **kwargs):  # pragma: no cover - only on failure
-        raise AssertionError("GPU kernel invoked despite MLX_SPATIAL_BACKEND=cpu")
+        raise AssertionError("GPU kernel invoked despite MLX_GEOSPATIAL_BACKEND=cpu")
 
-    monkeypatch.setattr("mlx_spatial.join.pip_first_match", _boom)
-    monkeypatch.setattr("mlx_spatial.join.pip_pairs", _boom)
+    monkeypatch.setattr("mlx_geospatial.join.pip_first_match", _boom)
+    monkeypatch.setattr("mlx_geospatial.join.pip_pairs", _boom)
     got = ms.point_in_polygon(pts, polyset, index=index)
     assert got.shape == (len(pts),)
     np.testing.assert_array_equal(got, ref)
@@ -278,7 +289,7 @@ def test_auto_uses_gpu_above_threshold_end_to_end(grid_workload, monkeypatch):
             **kwargs,
         )
 
-    monkeypatch.setattr("mlx_spatial.join.pip_first_match", _spy)
+    monkeypatch.setattr("mlx_geospatial.join.pip_first_match", _spy)
     got = ms.point_in_polygon(pts, polyset, index=index)
     assert calls, "auto dispatch above the threshold never launched the kernel"
     np.testing.assert_array_equal(got, ref)
@@ -296,8 +307,8 @@ def test_auto_small_workload_takes_cpu_path(rng, monkeypatch):
     def _boom(*args, **kwargs):  # pragma: no cover - only on failure
         raise AssertionError("GPU kernel invoked below the auto threshold")
 
-    monkeypatch.setattr("mlx_spatial.join.pip_first_match", _boom)
-    monkeypatch.setattr("mlx_spatial.join.pip_pairs", _boom)
+    monkeypatch.setattr("mlx_geospatial.join.pip_first_match", _boom)
+    monkeypatch.setattr("mlx_geospatial.join.pip_pairs", _boom)
     got = ms.point_in_polygon(pts, polyset, index=index)
     np.testing.assert_array_equal(got, reference_assign(pts, polys))
 
@@ -328,7 +339,7 @@ def test_all_matches_auto_switches_later_than_first_match(rng, monkeypatch):
 
     monkeypatch.setattr(ms.GridIndex, "_query_cpu", cpu_spy)
     monkeypatch.setattr(ms.GridIndex, "_query_gpu_all_matches", gpu_spy)
-    monkeypatch.delenv("MLX_SPATIAL_BACKEND", raising=False)
+    monkeypatch.delenv("MLX_GEOSPATIAL_BACKEND", raising=False)
 
     index.query(pts[:t_first], all_matches=True)  # first-match threshold: still the fallback
     assert (len(cpu_calls), len(gpu_calls)) == (1, 0)
@@ -358,7 +369,7 @@ def test_explicit_gpu_small_workload_uses_kernel(rng, monkeypatch):
             **kwargs,
         )
 
-    monkeypatch.setattr("mlx_spatial.join.pip_first_match", _spy)
+    monkeypatch.setattr("mlx_geospatial.join.pip_first_match", _spy)
     got = ms.point_in_polygon(pts, polyset, index=index, backend="gpu")
     assert calls, "backend='gpu' did not launch the kernel"
     np.testing.assert_array_equal(got, reference_assign(pts, polys))
@@ -383,9 +394,9 @@ def test_explicit_gpu_all_matches_uses_gpu_compactor(rng, monkeypatch):
     def other_kernel_must_not_run(*args, **kwargs):
         raise AssertionError("all_matches launched a non-compacting kernel")
 
-    monkeypatch.setattr("mlx_spatial.join.pip_all_matches", _spy)
-    monkeypatch.setattr("mlx_spatial.join.pip_first_match", other_kernel_must_not_run)
-    monkeypatch.setattr("mlx_spatial.join.pip_pairs", other_kernel_must_not_run)
+    monkeypatch.setattr("mlx_geospatial.join.pip_all_matches", _spy)
+    monkeypatch.setattr("mlx_geospatial.join.pip_first_match", other_kernel_must_not_run)
+    monkeypatch.setattr("mlx_geospatial.join.pip_pairs", other_kernel_must_not_run)
     index.query(pts, all_matches=True, backend="gpu")
     assert calls, "all_matches never launched the GPU compactor"
 
@@ -415,7 +426,7 @@ def test_join_long_polygon_routing_is_limited_to_candidate_cells(monkeypatch):
         "_get_all_matches_pair_threadgroup_count_kernel",
         "_get_all_matches_pair_simdgroup_count_kernel",
     ):
-        monkeypatch.setattr(f"mlx_spatial._pip.{name}", cooperative_must_not_run)
+        monkeypatch.setattr(f"mlx_geospatial._pip.{name}", cooperative_must_not_run)
 
     np.testing.assert_array_equal(index.query(pts, backend="gpu"), [0, 0])
     point_idx, poly_idx = index.query(pts, all_matches=True, backend="gpu")
@@ -424,7 +435,7 @@ def test_join_long_polygon_routing_is_limited_to_candidate_cells(monkeypatch):
 
 
 def test_invalid_env_propagates_from_point_in_polygon(monkeypatch):
-    monkeypatch.setenv("MLX_SPATIAL_BACKEND", "banana")
+    monkeypatch.setenv("MLX_GEOSPATIAL_BACKEND", "banana")
     with pytest.raises(ValueError) as ei:
         ms.point_in_polygon([[0.5, 0.5]], [shapely.box(0, 0, 1, 1)])
     assert "banana" in str(ei.value)
@@ -456,7 +467,7 @@ def test_contains_matrix_tiny_chunks_bitwise_equal(rng, monkeypatch):
 
     # Force the retained non-Metal implementation. On the direct Metal path
     # chunk_bytes is intentionally inert because no N x E intermediate exists.
-    monkeypatch.setattr("mlx_spatial._pip.metal_available", lambda: False)
+    monkeypatch.setattr("mlx_geospatial._pip.metal_available", lambda: False)
     fallback = np.array(ms.contains_matrix(pts, polyset))
     np.testing.assert_array_equal(fallback, default)
 
@@ -484,7 +495,7 @@ def test_contains_matrix_uses_composed_fallback_on_cpu_device(monkeypatch):
     def metal_must_not_run():
         raise AssertionError("CPU-device dense PIP attempted to compile Metal")
 
-    monkeypatch.setattr("mlx_spatial._pip._get_dense_kernel", metal_must_not_run)
+    monkeypatch.setattr("mlx_geospatial._pip._get_dense_kernel", metal_must_not_run)
     old_device = mx.default_device()
     try:
         mx.set_default_device(mx.cpu)
@@ -688,7 +699,7 @@ def test_version_matches_pyproject():
 def test_fresh_subprocess_import():
     """The package must import cleanly outside this process."""
     res = subprocess.run(
-        [sys.executable, "-c", "import mlx_spatial; print(mlx_spatial.__version__)"],
+        [sys.executable, "-c", "import mlx_geospatial; print(mlx_geospatial.__version__)"],
         capture_output=True,
         text=True,
         timeout=120,

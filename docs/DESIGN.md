@@ -1,4 +1,4 @@
-# mlx-spatial v0.1 — design notes
+# mlx-geospatial v0.1 — design notes
 
 One coherent vertical: **distance → predicate → indexed join**, sharing
 ingestion, precision handling, and test infrastructure.
@@ -231,7 +231,7 @@ dispatch. Device-resident inputs run on the GPU whenever Metal is available,
 since the fallback would need a host copy; `backend="cpu"` on them copies the
 fp32 local coordinates to the host and runs the same NumPy predicate (a
 parity/debug path). Override per call (`backend=`) or via
-`MLX_SPATIAL_BACKEND`.
+`MLX_GEOSPATIAL_BACKEND`.
 
 ## Benchmark honesty rules
 

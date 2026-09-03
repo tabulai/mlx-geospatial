@@ -13,9 +13,9 @@ import numpy as np
 import mlx.core as mx
 import pytest
 
-import mlx_spatial as ms
-from mlx_spatial._dispatch import metal_available
-from mlx_spatial.haversine import (
+import mlx_geospatial as ms
+from mlx_geospatial._dispatch import metal_available
+from mlx_geospatial.haversine import (
     _KNN_KERNEL_MAX_K,
     _knn_composed,
     _knn_fused,
@@ -105,7 +105,7 @@ def test_fused_selectors_near_antipode_match_bruteforce(selector):
 
 def test_k_above_kernel_cap_falls_back(rng, monkeypatch):
     """k > 32 must still return correct results via the composed path."""
-    haversine_module = importlib.import_module("mlx_spatial.haversine")
+    haversine_module = importlib.import_module("mlx_geospatial.haversine")
 
     def metal_must_not_run(*args, **kwargs):
         raise AssertionError("k above the cap attempted to run a Metal selector")
@@ -264,7 +264,7 @@ def test_public_api_respects_cpu_default_device(monkeypatch, rng):
     def metal_must_not_run(*args, **kwargs):
         raise AssertionError("CPU-default kNN attempted to run a Metal kernel")
 
-    haversine_module = importlib.import_module("mlx_spatial.haversine")
+    haversine_module = importlib.import_module("mlx_geospatial.haversine")
     monkeypatch.setattr(haversine_module, "_knn_simdgroup", metal_must_not_run)
     monkeypatch.setattr(haversine_module, "_knn_fused", metal_must_not_run)
 

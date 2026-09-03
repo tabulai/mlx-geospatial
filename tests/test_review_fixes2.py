@@ -16,9 +16,9 @@ import pytest
 import shapely
 from shapely.geometry import Point, Polygon
 
-import mlx_spatial as ms
-from mlx_spatial._dispatch import metal_available
-from mlx_spatial.haversine import _knn_composed, _knn_fused, _prep
+import mlx_geospatial as ms
+from mlx_geospatial._dispatch import metal_available
+from mlx_geospatial.haversine import _knn_composed, _knn_fused, _prep
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +290,60 @@ def test_zero_length_polygon_sequence_point_in_polygon():
         ms.point_in_polygon(points, [], backend="banana")
     with pytest.raises(ValueError, match="predicate"):
         ms.point_in_polygon(points, [], predicate="touches")
+
+
+@pytest.mark.parametrize(
+    "polygons",
+    [
+        "",
+        b"",
+        {},
+        np.empty((0, 2), dtype=object),
+        np.empty((0, 0, 0), dtype=object),
+    ],
+    ids=["string", "bytes", "mapping", "rank-2", "rank-3"],
+)
+def test_zero_length_polygon_shortcut_rejects_malformed_containers(polygons):
+    with pytest.raises(ValueError, match="1-D sequence of geometries"):
+        ms.point_in_polygon([[0.0, 0.0]], polygons)
+
+
+@pytest.mark.parametrize(
+    "right",
+    [
+        "",
+        b"",
+        {},
+        np.empty((0, 2), dtype=object),
+        np.empty((0, 0, 0), dtype=object),
+    ],
+    ids=["string", "bytes", "mapping", "rank-2", "rank-3"],
+)
+def test_sjoin_zero_length_shortcut_rejects_malformed_containers(right):
+    left = pd.DataFrame({"geometry": [Point(0.0, 0.0)]})
+    with pytest.raises(ValueError, match="1-D sequence of geometries"):
+        ms.sjoin(left, right)
+
+
+def test_zero_length_shortcuts_keep_supported_geometry_containers():
+    gpd = pytest.importorskip("geopandas")
+    points = gpd.GeoSeries([Point(0.0, 0.0)], crs="EPSG:4326")
+    for polygons in ([], gpd.GeoSeries([], crs="EPSG:4326")):
+        np.testing.assert_array_equal(ms.point_in_polygon(points, polygons), [-1])
+        joined = ms.sjoin(points, polygons, how="left")
+        assert len(joined) == 1
+        assert joined["index_right"].isna().all()
+
+
+def test_sjoin_plain_list_uses_range_index_and_indexed_series_keeps_labels():
+    left = pd.DataFrame({"geometry": [Point(0.5, 0.5)]})
+    polygon = shapely.box(0.0, 0.0, 1.0, 1.0)
+
+    positional = ms.sjoin(left, [polygon])
+    assert positional.loc[0, "index_right"] == 0
+
+    labeled = ms.sjoin(left, pd.Series([polygon], index=["zone-a"]))
+    assert labeled.loc[0, "index_right"] == "zone-a"
 
 
 def test_as_point_array_scalar_none_raises():

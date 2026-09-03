@@ -1,6 +1,6 @@
 """Bridge between shapely/GeoPandas geometries and flat MLX arrays.
 
-mlx-spatial never builds a geometry engine. Polygons are ingested through
+mlx-geospatial never builds a geometry engine. Polygons are ingested through
 ``shapely.to_ragged_array`` into flat coordinate + offset arrays (the
 GeoArrow layout), re-centered to a local float64 origin, and uploaded to
 unified memory as float32. Holes and multipolygons are handled naturally by
@@ -52,7 +52,7 @@ _FP32_INPUT_MESSAGE = (
     "float64 host array once "
     "with polyset.to_local(np_points), or build the array with "
     "mx.array(x, dtype=mx.float64). Silence with "
-    'warnings.filterwarnings("ignore", category=mlx_spatial.PrecisionWarning).'
+    'warnings.filterwarnings("ignore", category=mlx_geospatial.PrecisionWarning).'
 )
 
 

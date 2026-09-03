@@ -1,4 +1,4 @@
-"""Deep tests for mlx_spatial.haversine: golden accuracy vs float64/sklearn,
+"""Deep tests for mlx_geospatial.haversine: golden accuracy vs float64/sklearn,
 edge cases (poles, dateline, antipodes), input normalization, chunking, and knn.
 
 Tolerances are scale-appropriate per the documented fp32 policy: absolute
@@ -14,7 +14,8 @@ import mlx.core as mx
 import pytest
 import shapely
 
-import mlx_spatial as ms
+import mlx_geospatial as ms
+from mlx_geospatial._dispatch import metal_available
 
 R = ms.R_EARTH_M
 PI_R = np.pi * R  # half-circumference: max possible great-circle distance
@@ -546,13 +547,79 @@ class TestKnn:
         assert np.array(idx).shape == (0, 3)
 
 
+class TestChunkBytesValidation:
+    """The shared byte-budget contract cannot depend on the selected route."""
+
+    _type_errors = (True, np.bool_(False), 1.5, "1", object())
+    _value_errors = (0, -1, np.int64(-8))
+
+    @staticmethod
+    def _devices():
+        return (mx.cpu, mx.gpu) if metal_available() else (mx.cpu,)
+
+    def test_cross_is_strict_but_none_keeps_single_launch(self):
+        q = np.array([[0.0, 0.0], [1.0, 1.0]])
+        r = np.array([[2.0, 2.0]])
+        for value in self._type_errors:
+            with pytest.raises(TypeError, match="chunk_bytes.*positive integer"):
+                ms.haversine_cross(q, r, chunk_bytes=value)
+        for value in self._value_errors:
+            with pytest.raises(ValueError, match="chunk_bytes.*positive"):
+                ms.haversine_cross(q, r, chunk_bytes=value)
+        np.testing.assert_array_equal(
+            np.asarray(ms.haversine_cross(q, r, chunk_bytes=np.int64(1))),
+            np.asarray(ms.haversine_cross(q, r, chunk_bytes=None)),
+        )
+
+    def test_knn_validation_matches_metal_and_composed_routes(self):
+        q = np.array([[0.0, 0.0], [1.0, 1.0]])
+        r = np.array([[0.5, 0.5], [2.0, 2.0]])
+        old_device = mx.default_device()
+        try:
+            for device in self._devices():
+                mx.set_default_device(device)
+                for value in (*self._type_errors, None):
+                    with pytest.raises(TypeError, match="chunk_bytes.*positive integer"):
+                        ms.haversine_knn(q, r, 1, chunk_bytes=value)
+                for value in self._value_errors:
+                    with pytest.raises(ValueError, match="chunk_bytes.*positive"):
+                        ms.haversine_knn(q, r, 1, chunk_bytes=value)
+                distance, index = ms.haversine_knn(
+                    q, r, 1, chunk_bytes=np.int64(1)
+                )
+                np.testing.assert_array_equal(np.asarray(index), [[0], [0]])
+                assert np.isfinite(np.asarray(distance)).all()
+        finally:
+            mx.set_default_device(old_device)
+
+    def test_contains_matrix_validation_matches_metal_and_composed_routes(self):
+        points = np.array([[0.5, 0.5], [2.0, 2.0]])
+        polygons = [shapely.box(0.0, 0.0, 1.0, 1.0)]
+        old_device = mx.default_device()
+        try:
+            for device in self._devices():
+                mx.set_default_device(device)
+                for value in (*self._type_errors, None):
+                    with pytest.raises(TypeError, match="chunk_bytes.*positive integer"):
+                        ms.contains_matrix(points, polygons, chunk_bytes=value)
+                for value in self._value_errors:
+                    with pytest.raises(ValueError, match="chunk_bytes.*positive"):
+                        ms.contains_matrix(points, polygons, chunk_bytes=value)
+                got = ms.contains_matrix(
+                    points, polygons, chunk_bytes=np.int64(1)
+                )
+                np.testing.assert_array_equal(np.asarray(got), [[True], [False]])
+        finally:
+            mx.set_default_device(old_device)
+
+
 class TestCrossSingleLaunch:
     """haversine_cross runs as one fused launch unless chunk_bytes is given."""
 
     def test_default_is_one_launch_and_matches_chunked(self, rng, monkeypatch):
         import importlib
 
-        hv = importlib.import_module("mlx_spatial.haversine")  # the function shadows the name
+        hv = importlib.import_module("mlx_geospatial.haversine")  # the function shadows the name
         a = rng.uniform(-180, 180, size=(300, 2)) * [1.0, 0.5]
         b = rng.uniform(-180, 180, size=(700, 2)) * [1.0, 0.5]
         calls = []

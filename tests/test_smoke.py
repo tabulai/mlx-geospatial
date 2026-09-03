@@ -8,8 +8,8 @@ import pytest
 import shapely
 from shapely.geometry import MultiPolygon, Polygon
 
-import mlx_spatial as ms
-from mlx_spatial._pip import pip_pairs
+import mlx_geospatial as ms
+from mlx_geospatial._pip import pip_pairs
 
 from conftest import (
     make_convex_polygons,

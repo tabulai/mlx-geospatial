@@ -29,11 +29,11 @@ import pytest
 import shapely
 from shapely.geometry import MultiPolygon, Polygon
 
-import mlx_spatial as ms
-import mlx_spatial._pip as pip
-from mlx_spatial._dispatch import metal_available
-from mlx_spatial._ingest import LocalPoints
-from mlx_spatial._pip import _pip_long_polygon_strategy
+import mlx_geospatial as ms
+import mlx_geospatial._pip as pip
+from mlx_geospatial._dispatch import metal_available
+from mlx_geospatial._ingest import LocalPoints
+from mlx_geospatial._pip import _pip_long_polygon_strategy
 
 pytestmark = pytest.mark.skipif(not metal_available(), reason="Metal not available")
 

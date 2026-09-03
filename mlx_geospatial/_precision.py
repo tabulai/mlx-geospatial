@@ -3,12 +3,12 @@
 Metal is fp32-only. Raw lon/lat degrees stored in fp32 carry roughly 1e-5
 degree spacing at continental longitudes (about a meter on the ground) —
 enough to flip containment decisions near polygon edges. All GPU work in
-mlx-spatial therefore runs in *locally re-centered* coordinates: a float64
+mlx-geospatial therefore runs in *locally re-centered* coordinates: a float64
 origin (the dataset bbox center) is subtracted on the CPU before casting to
 float32. At city/state extents this restores millimeter-scale resolution.
 
 Points and polygons taking part in the same predicate must share one origin;
-:class:`mlx_spatial.PolygonSet` owns it and re-centers query points with it.
+:class:`mlx_geospatial.PolygonSet` owns it and re-centers query points with it.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ class PrecisionWarning(UserWarning):
     Re-center from float64 once with ``PolygonSet.to_local(np_points)`` or
     build the array with ``mx.array(x, dtype=mx.float64)`` (``mx.array`` of a
     float64 NumPy array silently produces float32). Silence with
-    ``warnings.filterwarnings("ignore", category=mlx_spatial.PrecisionWarning)``
+    ``warnings.filterwarnings("ignore", category=mlx_geospatial.PrecisionWarning)``
     or make it an error with ``warnings.simplefilter("error", ...)``.
     """
 

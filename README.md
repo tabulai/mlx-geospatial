@@ -1,10 +1,10 @@
-# mlx-spatial
+# mlx-geospatial
 
 GPU-accelerated spatial operations for Apple silicon, built on
 [MLX](https://github.com/ml-explore/mlx): haversine distances,
 point-in-polygon, and grid-indexed spatial joins.
 
-The pitch beyond speed: mlx-spatial is **array-native in unified memory**.
+The pitch beyond speed: mlx-geospatial is **array-native in unified memory**.
 Re-center a point table once with `PolygonSet.to_local`, and zone
 assignment, distance-to-POI features and nearest-neighbor lookups run
 entirely on the GPU and come back as MLX arrays: no NumPy round trip, no
@@ -15,12 +15,12 @@ the predicates return the container you pass in.
 ## Install
 
 ```bash
-pip install mlx-spatial          # once published; for now:
+pip install mlx-geospatial          # once published; for now:
 pip install -e .
 ```
 
 Requires macOS on Apple silicon (Metal), Python ≥ 3.10, `mlx`, `numpy`,
-`shapely ≥ 2.0`. `geopandas` is optional (`pip install "mlx-spatial[geo]"`).
+`shapely ≥ 2.0`. `geopandas` is optional (`pip install "mlx-geospatial[geo]"`).
 
 ## Quickstart
 
@@ -31,7 +31,7 @@ layer); the second continues from it and elides the model.
 
 ```python
 import numpy as np, shapely
-import mlx_spatial as ms
+import mlx_geospatial as ms
 
 rng = np.random.default_rng(0)
 pickups = np.column_stack([rng.uniform(-74.03, -73.9, 200_000), rng.uniform(40.7, 40.82, 200_000)])
@@ -126,7 +126,7 @@ side is never checked.
 ## Precision, honestly
 
 Metal GPUs are fp32-only, and raw lon/lat in fp32 carries ~1 m rounding —
-enough to flip containment at polygon edges. mlx-spatial handles this
+enough to flip containment at polygon edges. mlx-geospatial handles this
 structurally rather than hopefully:
 
 - All GPU predicates run in **locally re-centered coordinates**: a float64
@@ -160,7 +160,7 @@ structurally rather than hopefully:
   float64 NumPy array is silently float32) are re-centered in float64 and keep
   this contract. A float32 (or 16-bit) MLX array already carries ~0.5 ulp of
   raw lon/lat rounding (about 0.4 m at longitude 74), wider than the band at
-  city or state extents, so the join re-centers it on the device and emits `mlx_spatial.PrecisionWarning`
+  city or state extents, so the join re-centers it on the device and emits `mlx_geospatial.PrecisionWarning`
   once per call site; silence it with `warnings.filterwarnings("ignore",
   category=ms.PrecisionWarning)` or make it strict with
   `warnings.simplefilter("error", ms.PrecisionWarning)`.
@@ -204,7 +204,7 @@ consistency, not speed: it is about 1.5-2x slower than GEOS per point on
 and carries ~50 µs of fixed setup, so a loop of tiny queries pays roughly
 0.05-0.2 ms per call. Device-resident inputs (`mx.array`, `LocalPoints`) run on
 the GPU whenever Metal is available, because the fallback would need a host
-copy. Force a path with `backend="gpu" | "cpu"` or `MLX_SPATIAL_BACKEND`;
+copy. Force a path with `backend="gpu" | "cpu"` or `MLX_GEOSPATIAL_BACKEND`;
 `backend="cpu"` on device inputs copies the fp32 local coordinates to the host
 and runs the same predicate there (a parity/debug path).
 
@@ -340,11 +340,11 @@ the BallTree baseline is shown both with the tree built inside the timing (a
 one-off query) and query-only on a prebuilt tree (repeated queries against a
 fixed reference set, where the tree amortizes):
 
-| workload | mlx-spatial | numpy float64, 1 core | scikit-learn, 1 core |
+| workload | mlx-geospatial | numpy float64, 1 core | scikit-learn, 1 core |
 | --- | --- | --- | --- |
 | cross 20k × 20k | **10.2 ms** | 2.69 s (263x) | 3.98 s (389x) |
 
-| kNN workload (k=10) | mlx-spatial (brute force) | BallTree build + query | BallTree query only (prebuilt) |
+| kNN workload (k=10) | mlx-geospatial (brute force) | BallTree build + query | BallTree query only (prebuilt) |
 | --- | --- | --- | --- |
 | 1k queries × 1M refs | 26 ms | 305 ms (11.7x) | **9.1 ms (0.35x)** |
 | 1M queries × 10k refs | **147 ms** | 4.53 s (31x) | 4.52 s (31x) |

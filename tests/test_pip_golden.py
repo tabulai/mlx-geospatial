@@ -28,9 +28,9 @@ import shapely
 import pytest
 from shapely.geometry import MultiPolygon, Polygon
 
-import mlx_spatial as ms
-from mlx_spatial._dispatch import metal_available
-from mlx_spatial._pip import _pip_dense_composed, pip_pairs
+import mlx_geospatial as ms
+from mlx_geospatial._dispatch import metal_available
+from mlx_geospatial._pip import _pip_dense_composed, pip_pairs
 from conftest import (
     make_convex_polygons,
     make_donut,

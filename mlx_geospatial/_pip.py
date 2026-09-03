@@ -46,6 +46,7 @@ import numpy as np
 
 from ._dispatch import metal_available
 from ._ingest import PolygonSet
+from ._validation import check_chunk_bytes
 
 __all__ = [
     "pip_pairs",
@@ -108,7 +109,7 @@ _PIP_SIMDGROUP_HEADER = """
     #pragma clang fp contract(off)
     template <typename Coords, typename RingOffsets,
               typename GeomRingOffsets, typename Bboxes>
-    METAL_FUNC uint mlx_spatial_pip_contains_simdgroup(
+    METAL_FUNC uint mlx_geospatial_pip_contains_simdgroup(
         float px, float py, long pg, uint lane,
         Coords coords, RingOffsets ring_offsets,
         GeomRingOffsets geom_ring_offsets, Bboxes bboxes) {
@@ -153,7 +154,7 @@ _PIP_THREADGROUP_HEADER = """
     #pragma clang fp contract(off)
     template <typename Coords, typename RingOffsets,
               typename GeomRingOffsets, typename Bboxes>
-    METAL_FUNC void mlx_spatial_pip_contains_threadgroup(
+    METAL_FUNC void mlx_geospatial_pip_contains_threadgroup(
         float px, float py, long pg, uint local, uint lane, uint simd,
         Coords coords, RingOffsets ring_offsets,
         GeomRingOffsets geom_ring_offsets, Bboxes bboxes,
@@ -214,7 +215,7 @@ _PAIR_SIMDGROUP_KERNEL_SOURCE = """
     long pg = pair_poly[pair];
     float px = points[2 * pt + 0];
     float py = points[2 * pt + 1];
-    uint hit = mlx_spatial_pip_contains_simdgroup(
+    uint hit = mlx_geospatial_pip_contains_simdgroup(
         px, py, pg, lane, coords, ring_offsets, geom_ring_offsets, bboxes);
     if (lane == 0) inside[pair] = (uint8_t)hit;
 """
@@ -238,7 +239,7 @@ _PAIR_THREADGROUP_KERNEL_SOURCE = """
     float px = points[2 * pt + 0];
     float py = points[2 * pt + 1];
     threadgroup uint partial[4];
-    mlx_spatial_pip_contains_threadgroup(
+    mlx_geospatial_pip_contains_threadgroup(
         px, py, pg, local, lane, simd, coords, ring_offsets,
         geom_ring_offsets, bboxes, partial);
     if (local == 0) inside[pair] = (uint8_t)partial[0];
@@ -261,7 +262,7 @@ _FIRST_MATCH_SIMDGROUP_KERNEL_SOURCE = """
     for (long candidate = candidate_begin;
          candidate < candidate_end; ++candidate) {
         int pg = cell_poly[candidate];
-        uint hit = mlx_spatial_pip_contains_simdgroup(
+        uint hit = mlx_geospatial_pip_contains_simdgroup(
             px, py, pg, lane, coords, ring_offsets,
             geom_ring_offsets, bboxes);
         if (hit) {
@@ -290,7 +291,7 @@ _FIRST_MATCH_THREADGROUP_KERNEL_SOURCE = """
     for (long candidate = candidate_begin;
          candidate < candidate_end; ++candidate) {
         int pg = cell_poly[candidate];
-        mlx_spatial_pip_contains_threadgroup(
+        mlx_geospatial_pip_contains_threadgroup(
             px, py, (long)pg, local, lane, simd, coords, ring_offsets,
             geom_ring_offsets, bboxes, partial);
         // Unlike the pair kernel, every SIMDgroup must observe the reduced
@@ -370,7 +371,7 @@ _DENSE_SIMDGROUP_KERNEL_SOURCE = """
     size_t out = pt * (size_t)n_geoms + pg;
     float px = points[2 * (size_t)pt + 0];
     float py = points[2 * (size_t)pt + 1];
-    uint hit = mlx_spatial_pip_contains_simdgroup(
+    uint hit = mlx_geospatial_pip_contains_simdgroup(
         px, py, (long)pg, lane, coords, ring_offsets,
         geom_ring_offsets, bboxes);
     if (lane == 0) inside[out] = hit != 0;
@@ -392,7 +393,7 @@ _DENSE_THREADGROUP_KERNEL_SOURCE = """
     float px = points[2 * (size_t)pt + 0];
     float py = points[2 * (size_t)pt + 1];
     threadgroup uint partial[4];
-    mlx_spatial_pip_contains_threadgroup(
+    mlx_geospatial_pip_contains_threadgroup(
         px, py, (long)pg, local, lane, simd, coords, ring_offsets,
         geom_ring_offsets, bboxes, partial);
     if (local == 0) inside[out] = partial[0] != 0;
@@ -455,7 +456,7 @@ _ALL_MATCHES_HEADER = """
     #pragma clang fp contract(off)
     template <typename Coords, typename RingOffsets,
               typename GeomRingOffsets, typename Bboxes>
-    METAL_FUNC bool mlx_spatial_pip_contains(
+    METAL_FUNC bool mlx_geospatial_pip_contains(
         float px, float py, int pg,
         Coords coords, RingOffsets ring_offsets,
         GeomRingOffsets geom_ring_offsets, Bboxes bboxes) {
@@ -513,7 +514,7 @@ _ALL_MATCHES_COUNT_SOURCE = """
     for (long candidate = candidate_begin;
          candidate < candidate_end; ++candidate) {
         int pg = cell_poly[cell_begin + candidate - point_begin];
-        if (mlx_spatial_pip_contains(
+        if (mlx_geospatial_pip_contains(
                 px, py, pg, coords, ring_offsets,
                 geom_ring_offsets, bboxes)) {
             count += 1;
@@ -543,7 +544,7 @@ _ALL_MATCHES_WRITE_SOURCE = """
     for (long candidate = candidate_begin;
          candidate < candidate_end; ++candidate) {
         int pg = cell_poly[cell_begin + candidate - point_begin];
-        if (mlx_spatial_pip_contains(
+        if (mlx_geospatial_pip_contains(
                 px, py, pg, coords, ring_offsets,
                 geom_ring_offsets, bboxes)) {
             out_point[out] = (long)pt;
@@ -578,7 +579,7 @@ _ALL_MATCHES_PAIR_COUNT_SOURCE = """
     int pg = cell_poly[cell_candidate];
     float px = points[2 * (size_t)pt + 0];
     float py = points[2 * (size_t)pt + 1];
-    match_flag[pair] = (int)mlx_spatial_pip_contains(
+    match_flag[pair] = (int)mlx_geospatial_pip_contains(
         px, py, pg, coords, ring_offsets, geom_ring_offsets, bboxes);
 """
 
@@ -608,7 +609,7 @@ _ALL_MATCHES_PAIR_SIMDGROUP_COUNT_SOURCE = """
     int pg = cell_poly[cell_candidate];
     float px = points[2 * (size_t)pt + 0];
     float py = points[2 * (size_t)pt + 1];
-    uint hit = mlx_spatial_pip_contains_simdgroup(
+    uint hit = mlx_geospatial_pip_contains_simdgroup(
         px, py, (long)pg, lane, coords, ring_offsets,
         geom_ring_offsets, bboxes);
     if (lane == 0) match_flag[pair] = (int)hit;
@@ -639,7 +640,7 @@ _ALL_MATCHES_PAIR_THREADGROUP_COUNT_SOURCE = """
     float px = points[2 * (size_t)pt + 0];
     float py = points[2 * (size_t)pt + 1];
     threadgroup uint partial[4];
-    mlx_spatial_pip_contains_threadgroup(
+    mlx_geospatial_pip_contains_threadgroup(
         px, py, (long)pg, local, lane, simd, coords, ring_offsets,
         geom_ring_offsets, bboxes, partial);
     if (local == 0) match_flag[pair] = (int)partial[0];
@@ -779,7 +780,7 @@ def _get_pair_kernel():
     global _pair_kernel
     if _pair_kernel is None:
         _pair_kernel = mx.fast.metal_kernel(
-            name="mlx_spatial_pip_pairs",
+            name="mlx_geospatial_pip_pairs",
             input_names=[
                 "points",
                 "pair_point",
@@ -800,7 +801,7 @@ def _get_pair_simdgroup_kernel():
     global _pair_simdgroup_kernel
     if _pair_simdgroup_kernel is None:
         _pair_simdgroup_kernel = mx.fast.metal_kernel(
-            name="mlx_spatial_pip_pairs_simdgroup",
+            name="mlx_geospatial_pip_pairs_simdgroup",
             input_names=[
                 "points",
                 "pair_point",
@@ -822,7 +823,7 @@ def _get_pair_threadgroup_kernel():
     global _pair_threadgroup_kernel
     if _pair_threadgroup_kernel is None:
         _pair_threadgroup_kernel = mx.fast.metal_kernel(
-            name="mlx_spatial_pip_pairs_threadgroup",
+            name="mlx_geospatial_pip_pairs_threadgroup",
             input_names=[
                 "points",
                 "pair_point",
@@ -912,7 +913,7 @@ def _get_first_match_simdgroup_kernel():
     global _first_match_simdgroup_kernel
     if _first_match_simdgroup_kernel is None:
         _first_match_simdgroup_kernel = mx.fast.metal_kernel(
-            name="mlx_spatial_pip_first_match_simdgroup",
+            name="mlx_geospatial_pip_first_match_simdgroup",
             input_names=[
                 "points",
                 "point_cell",
@@ -935,7 +936,7 @@ def _get_first_match_threadgroup_kernel():
     global _first_match_threadgroup_kernel
     if _first_match_threadgroup_kernel is None:
         _first_match_threadgroup_kernel = mx.fast.metal_kernel(
-            name="mlx_spatial_pip_first_match_threadgroup",
+            name="mlx_geospatial_pip_first_match_threadgroup",
             input_names=[
                 "points",
                 "point_cell",
@@ -1030,7 +1031,7 @@ def _get_dense_kernel():
     global _dense_kernel
     if _dense_kernel is None:
         _dense_kernel = mx.fast.metal_kernel(
-            name="mlx_spatial_pip_dense",
+            name="mlx_geospatial_pip_dense",
             input_names=[
                 "points",
                 "coords",
@@ -1049,7 +1050,7 @@ def _get_dense_simdgroup_kernel():
     global _dense_simdgroup_kernel
     if _dense_simdgroup_kernel is None:
         _dense_simdgroup_kernel = mx.fast.metal_kernel(
-            name="mlx_spatial_pip_dense_simdgroup",
+            name="mlx_geospatial_pip_dense_simdgroup",
             input_names=[
                 "points",
                 "coords",
@@ -1069,7 +1070,7 @@ def _get_dense_threadgroup_kernel():
     global _dense_threadgroup_kernel
     if _dense_threadgroup_kernel is None:
         _dense_threadgroup_kernel = mx.fast.metal_kernel(
-            name="mlx_spatial_pip_dense_threadgroup",
+            name="mlx_geospatial_pip_dense_threadgroup",
             input_names=[
                 "points",
                 "coords",
@@ -1089,7 +1090,7 @@ def _get_first_match_kernel():
     global _first_match_kernel
     if _first_match_kernel is None:
         _first_match_kernel = mx.fast.metal_kernel(
-            name="mlx_spatial_pip_first_match",
+            name="mlx_geospatial_pip_first_match",
             input_names=[
                 "points",
                 "point_cell",
@@ -1111,7 +1112,7 @@ def _get_all_matches_count_kernel():
     global _all_matches_count_kernel
     if _all_matches_count_kernel is None:
         _all_matches_count_kernel = mx.fast.metal_kernel(
-            name="mlx_spatial_pip_all_matches_count",
+            name="mlx_geospatial_pip_all_matches_count",
             input_names=[
                 "points",
                 "point_id",
@@ -1137,7 +1138,7 @@ def _get_all_matches_write_kernel():
     global _all_matches_write_kernel
     if _all_matches_write_kernel is None:
         _all_matches_write_kernel = mx.fast.metal_kernel(
-            name="mlx_spatial_pip_all_matches_write",
+            name="mlx_geospatial_pip_all_matches_write",
             input_names=[
                 "points",
                 "point_id",
@@ -1164,7 +1165,7 @@ def _get_all_matches_pair_count_kernel():
     global _all_matches_pair_count_kernel
     if _all_matches_pair_count_kernel is None:
         _all_matches_pair_count_kernel = mx.fast.metal_kernel(
-            name="mlx_spatial_pip_all_matches_pair_count",
+            name="mlx_geospatial_pip_all_matches_pair_count",
             input_names=[
                 "points",
                 "point_id",
@@ -1190,7 +1191,7 @@ def _get_all_matches_pair_simdgroup_count_kernel():
     global _all_matches_pair_simdgroup_count_kernel
     if _all_matches_pair_simdgroup_count_kernel is None:
         _all_matches_pair_simdgroup_count_kernel = mx.fast.metal_kernel(
-            name="mlx_spatial_pip_all_matches_pair_simdgroup_count",
+            name="mlx_geospatial_pip_all_matches_pair_simdgroup_count",
             input_names=[
                 "points",
                 "point_id",
@@ -1216,7 +1217,7 @@ def _get_all_matches_pair_threadgroup_count_kernel():
     global _all_matches_pair_threadgroup_count_kernel
     if _all_matches_pair_threadgroup_count_kernel is None:
         _all_matches_pair_threadgroup_count_kernel = mx.fast.metal_kernel(
-            name="mlx_spatial_pip_all_matches_pair_threadgroup_count",
+            name="mlx_geospatial_pip_all_matches_pair_threadgroup_count",
             input_names=[
                 "points",
                 "point_id",
@@ -1242,7 +1243,7 @@ def _get_all_matches_pair_write_kernel():
     global _all_matches_pair_write_kernel
     if _all_matches_pair_write_kernel is None:
         _all_matches_pair_write_kernel = mx.fast.metal_kernel(
-            name="mlx_spatial_pip_all_matches_pair_write",
+            name="mlx_geospatial_pip_all_matches_pair_write",
             input_names=[
                 "point_id",
                 "point_cell",
@@ -1732,14 +1733,19 @@ def contains_matrix(points, polygons, *, chunk_bytes: int = 256 * 1024 * 1024):
     """Public dense containment matrix: ``result[i, j]`` iff point i is in polygon j.
 
     Intended for small-to-moderate polygon counts (the ``N x M`` matrix is
-    materialized). For large polygon sets use :func:`mlx_spatial.point_in_polygon`,
+    materialized). For large polygon sets use :func:`mlx_geospatial.point_in_polygon`,
     which goes through the grid index.
 
     The output container follows the input: host points (numpy, sequences,
     shapely, GeoSeries) return a NumPy bool matrix; ``mx.array`` or
-    :class:`~mlx_spatial.LocalPoints` inputs return an MLX bool array that
-    never leaves unified memory.
+    :class:`~mlx_geospatial.LocalPoints` inputs return an MLX bool array that
+    never leaves unified memory. ``chunk_bytes`` must be a positive integer;
+    it bounds composed-fallback temporaries and is otherwise inert on Metal.
     """
+    # Metal writes directly to the result and does not consume this budget,
+    # but validate it on every route so behavior cannot depend on the active
+    # MLX device or polygon shape.
+    chunk_bytes = check_chunk_bytes(chunk_bytes)
     polyset = polygons if isinstance(polygons, PolygonSet) else PolygonSet(polygons)
     _, points_local, on_device = polyset._ingest_points(points, stacklevel=4)
     out = pip_dense(points_local, polyset, chunk_bytes=chunk_bytes)

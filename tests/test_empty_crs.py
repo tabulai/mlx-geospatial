@@ -7,7 +7,7 @@ import mlx.core as mx
 import pytest
 import shapely
 
-import mlx_spatial as ms
+import mlx_geospatial as ms
 
 
 gpd = pytest.importorskip("geopandas")
