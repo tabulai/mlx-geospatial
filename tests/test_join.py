@@ -1268,6 +1268,54 @@ class TestOneContainmentContract:
         np.testing.assert_array_equal(cpt, gpt)
         np.testing.assert_array_equal(cpg, gpg)
 
+    def test_cpu_chunk_caps_are_hard_for_one_point_and_one_polygon(self, monkeypatch):
+        """Skew inside one CSR segment cannot make either host batch exceed its cap."""
+        from mlx_spatial import join
+
+        # Seven overlapping polygons give one point seven candidates.  With a
+        # cap of two the point itself must span four pair batches.  First-match
+        # must retain polygon zero when later pieces of that point are visited.
+        index = GridIndex([shapely.box(0, 0, 1, 1) for _ in range(7)])
+        point = np.array([[0.5, 0.5]])
+        expected_first = index.query(point, backend="cpu")
+        expected_pairs = index.query(point, backend="cpu", all_matches=True)
+
+        pair_batches = []
+        original_hits = GridIndex._cpu_hits
+
+        def hits_spy(self, pts32, counts, cum, starts, pair0, pair1):
+            pair_batches.append(pair1 - pair0)
+            return original_hits(self, pts32, counts, cum, starts, pair0, pair1)
+
+        monkeypatch.setattr(GridIndex, "_cpu_hits", hits_spy)
+        monkeypatch.setattr(join, "_CPU_PAIRS_PER_CHUNK", 2)
+        monkeypatch.setattr(join, "_CPU_ROWS_PER_CHUNK", 3)
+        np.testing.assert_array_equal(index.query(point, backend="cpu"), expected_first)
+        assert pair_batches == [2, 2, 2, 1]
+        pair_batches.clear()
+        got_pairs = index.query(point, backend="cpu", all_matches=True)
+        np.testing.assert_array_equal(got_pairs[0], expected_pairs[0])
+        np.testing.assert_array_equal(got_pairs[1], expected_pairs[1])
+        assert pair_batches == [2, 2, 2, 1]
+
+        # One 18-edge polygon must likewise span six edge-row batches.  Spy at
+        # the crossing primitive: these are the actual materialized row arrays,
+        # so the assertion proves that no internal crossing batch exceeds three.
+        angle = np.linspace(0.0, 2.0 * np.pi, 18, endpoint=False)
+        ring = shapely.Polygon(np.column_stack([np.cos(angle), np.sin(angle)]))
+        ring_index = GridIndex([ring])
+        center = np.array([[0.0, 0.0]])
+        edge_batches = []
+        original_crossed = join._cpu_crossed_rows
+
+        def crossed_spy(pxr, pyr, edges):
+            edge_batches.append(len(edges))
+            return original_crossed(pxr, pyr, edges)
+
+        monkeypatch.setattr(join, "_cpu_crossed_rows", crossed_spy)
+        np.testing.assert_array_equal(ring_index.query(center, backend="cpu"), [0])
+        assert edge_batches == [3] * 6
+
     def test_near_boundary_matches_geos_distance(self, rng, monkeypatch):
         """The band search is exact against a GEOS distance to the boundary.
 

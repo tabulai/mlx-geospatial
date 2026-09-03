@@ -201,6 +201,69 @@ def test_localpoints_api(workload):
         LocalPoints(np.zeros((3, 2), dtype=np.float32), polyset.origin)
 
 
+def test_localpoints_integer_gather_dtypes_and_bounds(workload):
+    """Every advertised integer dtype is safe, including uint64 extremes."""
+    _, _, polyset, _ = workload
+    local = polyset.to_local(np.arange(16, dtype=np.float64).reshape(8, 2))
+    coords = np.asarray(local.coords)
+
+    signed_dtypes = (
+        (np.int8, mx.int8),
+        (np.int16, mx.int16),
+        (np.int32, mx.int32),
+        (np.int64, mx.int64),
+    )
+    for np_dtype, mx_dtype in signed_dtypes:
+        values = [-1, -8, 0, 3]
+        expected = coords[values]
+        np.testing.assert_array_equal(
+            np.asarray(local[np.array(values, dtype=np_dtype)].coords), expected
+        )
+        np.testing.assert_array_equal(
+            np.asarray(local[mx.array(values, dtype=mx_dtype)].coords), expected
+        )
+        for bad in (-9, 8):
+            with pytest.raises(IndexError, match="out of range"):
+                local[np.array([bad], dtype=np_dtype)]
+            with pytest.raises(IndexError, match="out of range"):
+                local[mx.array([bad], dtype=mx_dtype)]
+
+    unsigned_dtypes = (
+        (np.uint8, mx.uint8),
+        (np.uint16, mx.uint16),
+        (np.uint32, mx.uint32),
+        (np.uint64, mx.uint64),
+    )
+    for np_dtype, mx_dtype in unsigned_dtypes:
+        values = [0, 3, 7]
+        expected = coords[values]
+        np.testing.assert_array_equal(
+            np.asarray(local[np.array(values, dtype=np_dtype)].coords), expected
+        )
+        np.testing.assert_array_equal(
+            np.asarray(local[mx.array(values, dtype=mx_dtype)].coords), expected
+        )
+
+        # Both the first ordinary out-of-range value and the dtype maximum
+        # must raise before mx.take; uint64 max must not wrap to signed -1.
+        for bad in (8, np.iinfo(np_dtype).max):
+            with pytest.raises(IndexError, match="out of range"):
+                local[np.array([bad], dtype=np_dtype)]
+            with pytest.raises(IndexError, match="out of range"):
+                # MLX on Python 3.10 cannot construct uint64.max directly
+                # from a NumPy scalar nested in a Python list (std::bad_cast).
+                # A typed NumPy array is the portable device-array input path.
+                local[mx.array(np.array([bad], dtype=np_dtype))]
+
+        for empty in (
+            np.array([], dtype=np_dtype),
+            mx.array([], dtype=mx_dtype),
+        ):
+            gathered = local[empty]
+            assert gathered.shape == (0, 2)
+            assert gathered.coords.dtype == mx.float32
+
+
 def test_localpoints_rejected_outside_the_join(workload):
     polys, pts, polyset, index = workload
     local = polyset.to_local(pts[:10])
