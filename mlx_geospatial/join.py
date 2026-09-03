@@ -855,6 +855,13 @@ class GridIndex:
             edges_per_point=self._edges_per_point,
             all_matches=all_matches,
         )
+        if self._max_cell_count == 0:
+            # An all-empty layer cannot match or need boundary refinement.
+            # Do not launch a custom kernel with its empty CSR/geometry
+            # buffers: Metal requires bindings even for inputs never read.
+            # Point and backend validation above still applies on this path.
+            return _empty_result(all_matches, on_device, n)
+
         def finish(out):
             if exact_boundary:
                 out = self._refine_boundary(

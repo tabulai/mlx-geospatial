@@ -878,6 +878,89 @@ class TestEdgeGeometry:
             pt_idx, poly_idx = index.query(pts, all_matches=True, backend=backend)
             assert len(pt_idx) == 0 and len(poly_idx) == 0
 
+    @pytest.mark.parametrize("backend", ["cpu", "gpu"])
+    @pytest.mark.parametrize("input_kind", ["numpy", "mlx", "local"])
+    @pytest.mark.parametrize("all_matches", [False, True])
+    def test_all_empty_queries_skip_geometry_work(
+        self, monkeypatch, backend, input_kind, all_matches
+    ):
+        if backend == "gpu" and not metal_available():
+            pytest.skip("Metal GPU required")
+        index = GridIndex([Polygon(), Polygon()])
+        pts = np.array([[0.0, 0.0], [0.5, 0.5], [np.nan, np.nan]])
+        if input_kind == "mlx":
+            points = mx.array(pts, dtype=mx.float64)
+        elif input_kind == "local":
+            points = index.polygons.to_local(pts)
+        else:
+            points = pts
+
+        def unexpected(*args, **kwargs):
+            pytest.fail("an empty index must not inspect candidates or launch kernels")
+
+        monkeypatch.setattr(index, "_device_grid", unexpected)
+        monkeypatch.setattr(index, "_query_cpu", unexpected)
+        result = index.query(
+            points,
+            backend=backend,
+            all_matches=all_matches,
+            exact_boundary=input_kind == "numpy",
+        )
+        arrays = result if all_matches else (result,)
+        container = np.ndarray if input_kind == "numpy" else mx.array
+        for array in arrays:
+            assert isinstance(array, container)
+            values = np.asarray(array)
+            if all_matches:
+                assert values.shape == (0,)
+                assert values.dtype == np.int64
+            else:
+                np.testing.assert_array_equal(values, [-1, -1, -1])
+                assert values.dtype == np.int32
+        assert index._cell_poly_mx is None
+        assert index._grid_params_mx is None
+
+    @pytest.mark.parametrize(
+        "points, kwargs, message",
+        [
+            (np.zeros((1, 3)), {"predicate": "bad", "backend": "bad"}, "predicate"),
+            (np.zeros((1, 3)), {"max_pairs_per_batch": 0, "backend": "bad"},
+             "max_pairs_per_batch"),
+            (np.zeros((1, 3)), {"backend": "bad"}, "shape"),
+            (np.zeros((1, 2)), {"backend": False}, "backend"),
+        ],
+    )
+    def test_all_empty_query_validation_matches_nonempty(self, points, kwargs, message):
+        errors = []
+        for polygon in (Polygon(), shapely.box(0, 0, 1, 1)):
+            with pytest.raises(ValueError, match=message) as error:
+                GridIndex([polygon]).query(points, **kwargs)
+            errors.append(str(error.value))
+        assert errors[0] == errors[1]
+
+    def test_all_empty_query_validates_device_contract_and_backend(self, monkeypatch):
+        index = GridIndex([Polygon()])
+        pts = np.zeros((1, 2))
+        local = index.polygons.to_local(pts)
+        with pytest.raises(ValueError, match="exact_boundary"):
+            index.query(local, exact_boundary=True)
+        other_local = ms.LocalPoints(mx.zeros((1, 2)), np.array([1.0, 1.0]))
+        with pytest.raises(ValueError, match="origin"):
+            index.query(other_local)
+        monkeypatch.setattr(dispatch, "metal_available", lambda: False)
+        with pytest.raises(RuntimeError, match="Metal is not available"):
+            index.query(pts, backend="gpu")
+        monkeypatch.setenv("MLX_GEOSPATIAL_BACKEND", "invalid")
+        with pytest.raises(ValueError, match="backend"):
+            index.query(pts)
+
+    def test_all_empty_query_still_validates_crs(self):
+        gpd = pytest.importorskip("geopandas")
+        index = GridIndex(gpd.GeoSeries([Polygon()], crs="EPSG:4326"))
+        points = gpd.GeoSeries([shapely.Point(0, 0)], crs="EPSG:3857")
+        with pytest.raises(ValueError, match="CRS mismatch"):
+            index.query(points)
+
 
 # ---------------------------------------------------------------------------
 # all_matches output contract

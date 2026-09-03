@@ -380,6 +380,12 @@ def haversine(a, b, *, radius: float = R_EARTH_M, degrees: bool = True) -> mx.ar
     radius = _check_radius(radius)
     a = _prep(a, degrees)
     b = _prep(b, degrees)
+    if a.size == 0 or b.size == 0:
+        # MLX's compiled graph can dispatch a zero-sized Metal grid for empty
+        # broadcasts. Validate the coordinate axes before returning an empty
+        # result, without slicing or evaluating either input's lazy graph.
+        shape = np.broadcast_shapes(a.shape[:-1], b.shape[:-1])
+        return mx.zeros(shape, dtype=mx.float32)
     return _hav(a[..., 0], a[..., 1], b[..., 0], b[..., 1], radius)
 
 
@@ -407,6 +413,10 @@ def haversine_cross(
     if a.ndim != 2 or b.ndim != 2:
         raise ValueError("haversine_cross expects 2-D inputs of shape (N, 2) and (M, 2)")
     n, m = a.shape[0], b.shape[0]
+    if n == 0 or m == 0:
+        # Avoid a zero-work dispatch in the compiled distance graph. All
+        # public argument and shape validation above still applies.
+        return mx.zeros((n, m), dtype=mx.float32)
     lon2 = b[:, 0][None, :]
     lat2 = b[:, 1][None, :]
     if chunk_bytes is None:

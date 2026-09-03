@@ -305,6 +305,54 @@ class TestInputHandling:
         each = np.array([float(ms.haversine(one, b[i])) for i in range(15)])
         np.testing.assert_array_equal(d, each)
 
+    @pytest.mark.parametrize("use_mlx", [False, True])
+    @pytest.mark.parametrize(
+        "a_shape,b_shape,expected",
+        [
+            ((0, 2), (2,), (0,)),
+            ((2,), (0, 2), (0,)),
+            ((0, 2), (0, 2), (0,)),
+            ((0, 1, 2), (1, 7, 2), (0, 7)),
+            ((3, 0, 1, 2), (1, 0, 5, 2), (3, 0, 5)),
+            ((2, 0, 3, 2), (1, 1, 3, 2), (2, 0, 3)),
+        ],
+    )
+    def test_empty_broadcasts_skip_distance_graph(
+        self, use_mlx, a_shape, b_shape, expected, monkeypatch
+    ):
+        import importlib
+
+        hv = importlib.import_module("mlx_geospatial.haversine")
+
+        def forbidden(*args, **kwargs):
+            pytest.fail("an empty result must not enter the distance graph")
+
+        monkeypatch.setattr(hv, "_hav", forbidden)
+        a, b = np.zeros(a_shape, dtype=np.float32), np.zeros(b_shape, dtype=np.float32)
+        if use_mlx:
+            a, b = mx.array(a), mx.array(b)
+        for degrees in (False, True):
+            out = ms.haversine(a, b, degrees=degrees)
+            assert isinstance(out, mx.array) and out.dtype == mx.float32
+            assert np.asarray(out).shape == expected
+
+    @pytest.mark.parametrize("use_mlx", [False, True])
+    def test_empty_elementwise_preserves_validation(self, use_mlx):
+        def array(shape):
+            out = np.zeros(shape, dtype=np.float32)
+            return mx.array(out) if use_mlx else out
+
+        empty, one = array((0, 2)), array((1, 2))
+        with pytest.raises(ValueError, match="radius"):
+            ms.haversine(empty, one, radius=0)
+        with pytest.raises(ValueError, match="expected"):
+            ms.haversine(empty, array((0, 3)))
+        with pytest.raises(ValueError, match="expected"):
+            ms.haversine(array((0, 3)), empty)
+        for a_shape, b_shape in [((0, 2), (3, 2)), ((2, 0, 2), (3, 1, 2))]:
+            with pytest.raises(ValueError):
+                ms.haversine(array(a_shape), array(b_shape))
+
     def test_wrong_last_dim_errors(self):
         good = np.zeros((3, 2))
         with pytest.raises(ValueError):
@@ -373,10 +421,50 @@ class TestCross:
         assert c3.shape == (1, 1)
         assert c3[0, 0] == 0.0
 
-    def test_empty_inputs(self, rng):
-        b = city_points(rng, 5)
-        assert np.array(ms.haversine_cross(np.zeros((0, 2)), b)).shape == (0, 5)
-        assert np.array(ms.haversine_cross(b, np.zeros((0, 2)))).shape == (5, 0)
+    @pytest.mark.parametrize("use_mlx", [False, True])
+    @pytest.mark.parametrize("n,m", [(0, 5), (5, 0), (0, 0)])
+    @pytest.mark.parametrize("chunk_bytes", [None, 1, np.int64(31)])
+    def test_empty_inputs(self, use_mlx, n, m, chunk_bytes, monkeypatch):
+        import importlib
+
+        hv = importlib.import_module("mlx_geospatial.haversine")
+
+        def forbidden(*args, **kwargs):
+            pytest.fail("an empty result must not enter the distance graph")
+
+        monkeypatch.setattr(hv, "_hav", forbidden)
+        a, b = np.zeros((n, 2), dtype=np.float32), np.zeros((m, 2), dtype=np.float32)
+        if use_mlx:
+            a, b = mx.array(a), mx.array(b)
+        for degrees in (False, True):
+            out = ms.haversine_cross(a, b, degrees=degrees, chunk_bytes=chunk_bytes)
+            assert isinstance(out, mx.array) and out.dtype == mx.float32
+            assert np.asarray(out).shape == (n, m)
+
+    @pytest.mark.parametrize("use_mlx", [False, True])
+    def test_empty_cross_preserves_validation(self, use_mlx):
+        def array(shape):
+            out = np.zeros(shape, dtype=np.float32)
+            return mx.array(out) if use_mlx else out
+
+        empty, good = array((0, 2)), array((5, 2))
+        with pytest.raises(ValueError, match="radius"):
+            ms.haversine_cross(empty, good, radius=0)
+        for value in (True, 1.5):
+            with pytest.raises(TypeError, match="chunk_bytes"):
+                ms.haversine_cross(empty, good, chunk_bytes=value)
+        for value in (0, -1):
+            with pytest.raises(ValueError, match="chunk_bytes"):
+                ms.haversine_cross(empty, good, chunk_bytes=value)
+        for a_shape, b_shape in [
+            ((0, 1, 2), (5, 2)),
+            ((0, 2), (0, 1, 2)),
+            ((0, 3), (5, 2)),
+            ((0, 2), (0, 3)),
+            ((0, 2), (2,)),
+        ]:
+            with pytest.raises(ValueError):
+                ms.haversine_cross(array(a_shape), array(b_shape))
 
     def test_dimension_errors(self, rng):
         b = city_points(rng, 5)
