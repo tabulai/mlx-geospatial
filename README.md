@@ -19,7 +19,7 @@ pip install mlx-geospatial          # once published; for now:
 pip install -e .
 ```
 
-Requires macOS on Apple silicon (Metal), Python ≥ 3.10, `mlx`, `numpy`,
+Requires macOS on Apple silicon (Metal), Python ≥ 3.10, MLX ≥ 0.32.0, `numpy`,
 `shapely ≥ 2.0`. `geopandas` is optional (`pip install "mlx-geospatial[geo]"`).
 
 ## Quickstart

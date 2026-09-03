@@ -20,7 +20,8 @@ classifiers = [
     "Topic :: Scientific/Engineering :: GIS",
 ]
 dependencies = [
-    "mlx>=0.30",
+    # Variable-size custom-kernel batches need the cache fix in MLX #3662.
+    "mlx>=0.32.0",
     "numpy>=1.24",
     "shapely>=2.0",
 ]
