@@ -15,8 +15,7 @@ the predicates return the container you pass in.
 ## Install
 
 ```bash
-pip install mlx-geospatial          # once published; for now:
-pip install -e .
+pip install mlx-geospatial
 ```
 
 Requires macOS on Apple silicon (Metal), Python ≥ 3.10, MLX ≥ 0.32.0, `numpy`,
@@ -211,8 +210,11 @@ and runs the same predicate there (a parity/debug path).
 ## Benchmarks
 
 Apple M4 Max (16 cores: 12 performance + 4 efficiency), macOS 26.2, mlx
-0.31.2, Python 3.13. End-to-end wall time from host-resident numpy/shapely
-inputs — ingestion, host→device transfer, and device result
+0.31.2, Python 3.13. These are pre-release reference measurements; v0.1.0
+requires MLX ≥ 0.32.0 for an upstream custom-kernel cache correctness fix,
+so reproduce them on your supported runtime before making capacity decisions.
+End-to-end wall time from host-resident numpy/shapely inputs — ingestion,
+host→device transfer, and device result
 evaluation/synchronization included; host-input join rows return NumPy labels
 as a zero-copy view of the MLX result; best of 3 (exceptions in
 `bench/README.md`). CPU baselines: shapely/GEOS, GeoPandas and scikit-learn

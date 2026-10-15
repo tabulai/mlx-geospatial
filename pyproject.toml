@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mlx-geospatial"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "GPU-accelerated spatial operations for Apple silicon, built on MLX: haversine distances, point-in-polygon, and grid-indexed spatial joins"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -33,6 +33,9 @@ bench = ["pandas>=2.0", "geopandas>=0.14", "duckdb>=1.0", "pyarrow>=14", "scikit
 
 [project.urls]
 Homepage = "https://github.com/tabulai/mlx-geospatial"
+Documentation = "https://github.com/tabulai/mlx-geospatial#readme"
+Issues = "https://github.com/tabulai/mlx-geospatial/issues"
+Source = "https://github.com/tabulai/mlx-geospatial"
 
 [tool.setuptools.packages.find]
 include = ["mlx_geospatial*"]
