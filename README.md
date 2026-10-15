@@ -223,34 +223,63 @@ GPU, with clocks warmed before each warm-index timing (steady-state burst
 numbers, like the crossover tables). Reproduce with `python bench/bench.py
 --all` (methodology in `bench/README.md`).
 
-**Point-in-polygon join.** The baselines evaluate every (point, polygon)
-pair (shapely and GeoPandas return them, DuckDB is timed as `count(*)` over
-the join), so their speedups (in parentheses) are against our
-`all_matches=True` column, which answers the same question. The first-match
-columns are the cheaper contract most joins want: NumPy in → NumPy out, and
-the array-native pattern (`LocalPoints` re-centered once, MLX array out,
-`mx.eval` inside the timing). GEOS gets its best configuration: the polygons
-are the prepared side (`STRtree(points).query(polygons)`, polygons on the
-left of `sjoin`), which is 8-60x faster on detailed polygons than querying a
-polygon tree with points and returns the same pairs. The synthetic zones are
-random star-shaped polygons that overlap and leave gaps (not a tiling, not
-convex): about two thirds of the points fall in a zone, in 1.6 zones on
-average, so the all-pairs outputs hold ~1.1 pairs per point. The coastline
-row is one 150,000-vertex polygon covering 22% of the extent. Cold runs with
-polygon ingestion and index construction included: 1.8 ms at 100k × 260,
-4.0 ms at 1M × 260, 22 ms at 1M × 10k, 45 ms on the 2,048-vertex zones,
-0.55 s on the coastline.
+**Point-in-polygon joins: all-pairs comparison.** The comparison denominator
+is always `mlx-geospatial` with `all_matches=True`, not the cheaper first-match
+mode. Every system evaluates all matching `(point, polygon)` pairs.
+`mlx-geospatial`, shapely and GeoPandas materialize the pair indices; DuckDB
+only computes `count(*)` and does not materialize them, a lighter output
+contract that favors DuckDB. Each baseline cell shows its elapsed time and how
+many times longer it took than `mlx-geospatial`. Lower time is better; a larger
+“× slower” value means a larger `mlx-geospatial` advantage.
 
-| workload | first match (NumPy) | first match (LocalPoints) | **all pairs (NumPy)** | shapely STRtree, prepared, 1 core | GeoPandas sjoin, prepared, 1 core | DuckDB spatial, 16 threads |
-| --- | --- | --- | --- | --- | --- | --- |
-| 100k pts × 260 zones, 48 vertices | 0.48 ms | 0.33 ms | **1.9 ms** | 49 ms (26x) | 56 ms (30x) | 127 ms (67x) |
-| 1M pts × 260 zones, 48 vertices | 2.5 ms | 1.5 ms | **7.7 ms** | 771 ms (100x) | 805 ms (105x) | 557 ms (72x) |
-| 10M pts × 260 zones, 48 vertices | 26 ms | 14 ms | **69 ms** | 8.5 s (124x) | 9.0 s (131x) | 6.4 s (93x) |
-| 1M pts × 10k zones, 48 vertices | 2.6 ms | 1.5 ms | **8.1 ms** | 884 ms (109x) | 930 ms (115x) | 566 ms (70x) |
-| 1M pts × 260 zones, 2,048 vertices | 39 ms | 38 ms | **48 ms** | 1.07 s (22x) | 1.11 s (23x) | 2.9 s (60x) |
-| 1M pts × one 150k-vertex polygon | 548 ms | 547 ms | **233 ms** | 1.79 s (7.7x) | 1.79 s (7.7x) | 25 s (107x) |
+| workload | **mlx-geospatial all pairs (NumPy)** | shapely STRtree, prepared, 1 core | GeoPandas sjoin, prepared, 1 core | DuckDB spatial `count(*)`, 16 threads |
+| :--- | ---: | ---: | ---: | ---: |
+| 100k pts × 260 zones, 48 vertices | **1.9 ms** | 49 ms · **26× slower** | 56 ms · **30× slower** | 127 ms · **67× slower** |
+| 1M pts × 260 zones, 48 vertices | **7.7 ms** | 771 ms · **100× slower** | 805 ms · **105× slower** | 557 ms · **72× slower** |
+| 10M pts × 260 zones, 48 vertices | **69 ms** | 8.5 s · **124× slower** | 9.0 s · **131× slower** | 6.4 s · **93× slower** |
+| 1M pts × 10k zones, 48 vertices | **8.1 ms** | 884 ms · **109× slower** | 930 ms · **115× slower** | 566 ms · **70× slower** |
+| 1M pts × 260 zones, 2,048 vertices | **48 ms** | 1.07 s · **22× slower** | 1.11 s · **23× slower** | 2.9 s · **60× slower** |
+| 1M pts × one 150k-vertex polygon | **233 ms** | 1.79 s · **7.7× slower** | 1.79 s · **7.7× slower** | 25 s · **107× slower** |
 
-Three things the table shows that a headline would hide. Against single-core
+For example, on 1M points × 260 zones, shapely takes 771 ms versus 7.7 ms
+for `mlx-geospatial`: `771 / 7.7 ≈ 100`, hence **100× slower**. Across the 18
+displayed baseline comparisons, `mlx-geospatial` is fastest in every one:
+**7.7–131× faster, with a median speedup of 71×**. These are results for the
+large, warm-index point-in-polygon workloads shown here on the tested M4 Max,
+not a claim that `mlx-geospatial` is faster for every geospatial operation,
+dataset or machine.
+
+GEOS gets its best configuration: the polygons are the prepared side
+(`STRtree(points).query(polygons)`, polygons on the left of `sjoin`), which
+is 8-60x faster on detailed polygons than querying a polygon tree with points
+and returns the same pairs. The synthetic zones are random star-shaped
+polygons that overlap and leave gaps (not a tiling, not convex): about two
+thirds of the points fall in a zone, in 1.6 zones on average, so the all-pairs
+outputs hold ~1.1 pairs per point. The coastline row is one 150,000-vertex
+polygon covering 22% of the extent.
+
+**First-match mode (a different, cheaper operation).** These queries return
+only the lowest-index containing polygon for each point, rather than every
+matching pair, so they must not be compared directly with the all-pairs
+baselines above. The NumPy path measures NumPy input to NumPy output. The
+array-native path assumes the points were re-centered once as `LocalPoints`,
+returns an MLX array, and includes `mx.eval` in the timing.
+
+| workload | first match (NumPy) | first match (prepared `LocalPoints`) |
+| :--- | ---: | ---: |
+| 100k pts × 260 zones, 48 vertices | 0.48 ms | 0.33 ms |
+| 1M pts × 260 zones, 48 vertices | 2.5 ms | 1.5 ms |
+| 10M pts × 260 zones, 48 vertices | 26 ms | 14 ms |
+| 1M pts × 10k zones, 48 vertices | 2.6 ms | 1.5 ms |
+| 1M pts × 260 zones, 2,048 vertices | 39 ms | 38 ms |
+| 1M pts × one 150k-vertex polygon | 548 ms | 547 ms |
+
+Both tables use a warm polygon index. Cold runs, including polygon ingestion
+and index construction, take 1.8 ms at 100k × 260, 4.0 ms at 1M × 260,
+22 ms at 1M × 10k, 45 ms on the 2,048-vertex zones, and 0.55 s on the
+coastline.
+
+Three things these results show that a headline would hide. Against single-core
 GEOS in its best configuration the advantage is 26-131x on 48-vertex zones
 and *shrinks* with geometric detail: 22x on 2,048-vertex zones, 7.7x on the
 150,000-vertex polygon. Prepared GEOS polygons carry an indexed point-in-area
