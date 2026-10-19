@@ -101,6 +101,12 @@ _CPU_ROWS_PER_CHUNK = 2_000_000
 _NEAR_BOUNDARY_POINTS_PER_SLICE = 1_000_000
 _NEAR_BOUNDARY_PAIRS_PER_SLICE = 8_000_000
 _NEAR_BOUNDARY_PROBE_POINTS = 4096
+# The host edge grid costs ~13 ns per candidate (point, edge) pair; the edge
+# box STRtree ~0.6-1.1 us per queried row and, until first built, ~250 ns per
+# edge. The grid answers while its pairs stay within that cost, which only
+# strongly clustered layers exceed.
+_NEAR_GRID_PAIRS_PER_ROW = 64
+_NEAR_GRID_PAIRS_PER_EDGE = 20
 
 
 def _replace_refined_pairs(out, near, point, polygon):
@@ -848,10 +854,12 @@ class GridIndex:
         every point within ``PolygonSet.boundary_tolerance`` of a boundary with
         GEOS honoring ``predicate``. GPU queries first conservatively filter
         possible boundary rows using the existing grid and polygon buffers;
-        a host edge-box STRtree and float64 distance test settle those rows.
-        Detailed rings, excessive candidate work, or unsafe numerical scales
-        retain the full host search. Refinement therefore still adds host
-        work and synchronization. Only the
+        a cached float64 host grid over the widened edge envelopes and a
+        float64 distance test settle those rows (an edge-box STRtree when the
+        layer is too clustered for a uniform grid). Detailed rings, excessive
+        candidate work, or unsafe numerical scales retain the full host
+        search. Refinement therefore still adds host work and
+        synchronization. Only the
         band is re-checked: interior points of invalid geometry keep the
         even-odd answer (valid geometry assumed; ``validate=True`` rejects the
         rest). It needs host coordinates, so it is not available for
@@ -1328,22 +1336,13 @@ class GridIndex:
         polygon boundary can differ, and those are re-evaluated with an
         STRtree query honoring ``predicate``. Non-finite rows (empty or
         missing points) are never near a boundary and keep their ``-1``.
+        ``candidate_rows`` (the GPU broad phase) restricts the search to a
+        conservative subset of rows.
         """
         polyset = self.polygons
-        if candidate_rows is None:
-            near = self._near_boundary(pts64, polyset.boundary_tolerance)
-        elif not candidate_rows.size:
+        if candidate_rows is not None and not candidate_rows.size:
             return out
-        else:
-            from ._boundary_indexed import indexed_near_boundary
-
-            candidates = pts64[candidate_rows]
-            local_near = indexed_near_boundary(
-                self, candidates, polyset.boundary_tolerance
-            )
-            if local_near is None:
-                local_near = self._near_boundary(candidates, polyset.boundary_tolerance)
-            near = candidate_rows[local_near]
+        near = self._near_rows(pts64, candidate_rows)
         if near.size == 0:
             return out
         pt_idx, poly_idx = polyset.strtree.query(
@@ -1358,11 +1357,36 @@ class GridIndex:
             return result
         return _replace_refined_pairs(out, near, pt_idx, poly_idx)
 
+    def _near_rows(self, pts64: np.ndarray, rows: np.ndarray | None) -> np.ndarray:
+        """Sorted rows of ``pts64`` (within ``rows``, if given) near an edge.
+
+        Exactly :meth:`_near_boundary` at ``boundary_tolerance``. The cached
+        float64 host edge grid answers it unless that grid cannot be built or
+        the query's candidate pairs would cost more than the edge-box STRtree
+        (layers too clustered for a uniform grid); the tree then answers.
+        """
+        polyset = self.polygons
+        grid = polyset._host_edge_grid()
+        if grid is not None:
+            n_rows = len(pts64) if rows is None else len(rows)
+            budget = _NEAR_GRID_PAIRS_PER_ROW * n_rows
+            if polyset._edge_box_strtree is None:
+                budget += _NEAR_GRID_PAIRS_PER_EDGE * len(grid.edges)
+            local = grid.near_rows(pts64, rows, max_pairs=budget)
+            if local is not None:
+                return local if rows is None else rows[local]
+        tol = polyset.boundary_tolerance
+        if rows is None:
+            return self._near_boundary(pts64, tol)
+        return rows[self._near_boundary(pts64[rows], tol)]
+
     def _near_boundary(self, pts64: np.ndarray, tol: float) -> np.ndarray:
         """Sorted row indices of the finite points within ``tol`` of an edge.
 
-        An STRtree over the edge envelopes widened by ``tol`` (cached on the
-        polygon set) yields the candidate (point, edge) pairs by envelope
+        The reference near-boundary search, and the fallback of
+        :meth:`_near_rows` (which answers the same rows from the host edge
+        grid). An STRtree over the edge envelopes widened by ``tol`` (cached
+        on the polygon set) yields the candidate (point, edge) pairs by envelope
         alone; a float64 point-to-segment distance test in NumPy settles them.
         Every point within ``tol`` of an edge lies in that edge's widened
         envelope, so nothing is missed, and GEOS is never asked for a distance:
