@@ -28,12 +28,21 @@ Two guards:
   that string protects; the test does not assert that, because it would pin
   compiler behaviour rather than the library's.
 
+The kNN selectors in ``haversine.py`` carry the same contract for the
+haversine ``h`` (``h_lat + qc * cos_lat * sdlon * sdlon``), which must round
+like ``_hav_graph`` for selection to rank exactly as ``haversine_cross``. Their
+static guard checks that every selector source turns contraction off before
+the first sine, keeps the ``h`` expression tree, and uses explicit ``fma``
+only in the squared-chord skip test, whose value never reaches a result.
+Their behavioural guard is the bit-identity suite in tests/test_knn_fused.py.
+
 Helpers are local to this file.
 """
 
 from __future__ import annotations
 
 import ast
+import importlib
 import inspect
 import re
 
@@ -75,18 +84,18 @@ def _protected(code: str) -> bool:
     return bool(modes) and modes[-1] == "off"
 
 
-def _module_strings() -> dict[str, str]:
-    return {n: v for n, v in vars(pip).items() if isinstance(v, str) and not n.startswith("__")}
+def _module_strings(module=pip) -> dict[str, str]:
+    return {n: v for n, v in vars(module).items() if isinstance(v, str) and not n.startswith("__")}
 
 
-def _kernel_calls() -> list[tuple[str, str | None, str]]:
+def _kernel_calls(module=pip) -> list[tuple[str, str | None, str]]:
     """``(kernel name, header text or None, source text)`` per metal_kernel call.
 
     Read from the module's source with ``ast`` so runtime wrappers around the
     getters (route spies) cannot hide a call; string expressions may be module
     constants, literals or concatenations of those.
     """
-    consts = _module_strings()
+    consts = _module_strings(module)
 
     def resolve(node):
         if isinstance(node, ast.Name):
@@ -98,7 +107,7 @@ def _kernel_calls() -> list[tuple[str, str | None, str]]:
         raise AssertionError(f"cannot resolve a kernel string from {ast.dump(node)[:80]}")
 
     calls = []
-    for node in ast.walk(ast.parse(inspect.getsource(pip))):
+    for node in ast.walk(ast.parse(inspect.getsource(module))):
         if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "metal_kernel":
             kw = {k.arg: k.value for k in node.keywords}
             header = resolve(kw["header"]) if "header" in kw else None
@@ -141,6 +150,72 @@ def test_pragma_and_arithmetic_pair_up_in_every_module_string():
         assert _protected(strings[name]), name
     with_pragma = sorted(n for n, code in strings.items() if CONTRACT.search(code))
     assert with_pragma == carriers
+
+
+# ---------------------------------------------------------------------------
+# static guard: haversine kNN selectors
+# ---------------------------------------------------------------------------
+
+hv = importlib.import_module("mlx_geospatial.haversine")
+
+KNN_SELECTORS = {
+    "mlx_geospatial_knn_select",
+    "mlx_geospatial_knn_simdgroup_select",
+    "mlx_geospatial_knn_chord_select",
+    "mlx_geospatial_knn_chord_simdgroup_select",
+}
+HAV_ARITH = re.compile(r"metal::precise::sin\(")
+FMA_CALL = re.compile(r"\bfma\s*\(")
+CHORD_DEF = re.compile(r"^float\s+(chord\d+)\s*=\s*metal::fma\(")
+# The _hav_graph tree: sin^2 terms, ((qc * cos_lat) * sdlon) * sdlon, sum.
+H_TREE = (
+    re.compile(r"float h_lat = sdlat \* sdlat;"),
+    re.compile(r"float h_lon = qc \* [\w\[\]\s*()+]+ \* sdlon \* sdlon;"),
+    re.compile(r"float h = h_lat \+ h_lon;"),
+)
+
+
+def _statements(code: str) -> list[str]:
+    return [" ".join(s.split()) for s in code.split(";")]
+
+
+def test_every_knn_selector_turns_contraction_off_before_h():
+    calls = _kernel_calls(hv)
+    assert {name for name, _, _ in calls} == KNN_SELECTORS, [c[0] for c in calls]
+    assert len(calls) == len(KNN_SELECTORS)
+    for name, header, source in calls:
+        assert header is None, name
+        code = _code(source)
+        first = HAV_ARITH.search(code)
+        assert first is not None, name
+        modes = [m for m in CONTRACT.finditer(code)]
+        # One pragma, before the first sine, and nothing re-enables fusion.
+        assert [m.group(1) for m in modes] == ["off"], name
+        assert modes[0].start() < first.start(), name
+        n_h = len(HAV_ARITH.findall(code)) // 2
+        assert n_h >= 1, name
+        for pattern in H_TREE:
+            assert len(pattern.findall(code)) == n_h, (name, pattern.pattern)
+
+
+def test_explicit_fma_only_feeds_the_chord_skip_test():
+    chord_selectors = 0
+    for name, _, source in _kernel_calls(hv):
+        code = _code(source)
+        fma_statements = [s for s in _statements(code) if FMA_CALL.search(s)]
+        chords = set()
+        for statement in fma_statements:
+            match = CHORD_DEF.match(statement)
+            assert match, f"{name}: fma outside a chord definition: {statement}"
+            chords.add(match.group(1))
+        for chord in chords:
+            for use in re.finditer(rf"\b{chord}\b", code):
+                rest = code[use.end():]
+                assert re.match(r"\s*(=\s*metal::fma\(|<=\s*thr\b)", rest), (
+                    f"{name}: {chord} (fma-contracted) used outside the skip test"
+                )
+        chord_selectors += bool(chords)
+    assert chord_selectors == 2
 
 
 # ---------------------------------------------------------------------------

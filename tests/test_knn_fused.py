@@ -2,7 +2,9 @@
 
 The two paths must agree exactly on selected indices (outside exact-tie
 ambiguity) and bit-for-bit on distances, since both report distances through
-the same fused ``_hav`` arithmetic.
+the same fused ``_hav`` arithmetic. The chord-filtered selectors must match
+the plain selectors bit for bit: same indices, distances, order and -1/inf
+padding.
 """
 
 from __future__ import annotations
@@ -17,6 +19,10 @@ import mlx_geospatial as ms
 from mlx_geospatial._dispatch import metal_available
 from mlx_geospatial.haversine import (
     _KNN_KERNEL_MAX_K,
+    _knn_chord,
+    _knn_chord_route,
+    _knn_chord_slack,
+    _knn_chord_strategy,
     _knn_composed,
     _knn_fused,
     _knn_metal_strategy,
@@ -112,6 +118,7 @@ def test_k_above_kernel_cap_falls_back(rng, monkeypatch):
 
     monkeypatch.setattr(haversine_module, "_knn_simdgroup", metal_must_not_run)
     monkeypatch.setattr(haversine_module, "_knn_fused", metal_must_not_run)
+    monkeypatch.setattr(haversine_module, "_knn_chord", metal_must_not_run)
     q = city_cloud(rng, 50)
     r = city_cloud(rng, 200)
     k = _KNN_KERNEL_MAX_K + 1
@@ -267,6 +274,7 @@ def test_public_api_respects_cpu_default_device(monkeypatch, rng):
     haversine_module = importlib.import_module("mlx_geospatial.haversine")
     monkeypatch.setattr(haversine_module, "_knn_simdgroup", metal_must_not_run)
     monkeypatch.setattr(haversine_module, "_knn_fused", metal_must_not_run)
+    monkeypatch.setattr(haversine_module, "_knn_chord", metal_must_not_run)
 
     old_device = mx.default_device()
     try:
@@ -281,3 +289,201 @@ def test_public_api_respects_cpu_default_device(monkeypatch, rng):
         mx.set_default_device(old_device)
     np.testing.assert_array_equal(np.array(got[0]), np.array(expected[0]))
     np.testing.assert_array_equal(np.array(got[1]), np.array(expected[1]))
+
+
+# ---------------------------------------------------------------------------
+# chord-filtered selectors
+# ---------------------------------------------------------------------------
+
+
+def _chord_cases():
+    """(name, query, reference) in degrees: geometry that stresses the bound,
+    ties, padding and the pruning switch."""
+    rng = np.random.default_rng(2026)
+
+    def globe(n):
+        return np.column_stack(
+            [rng.uniform(-180, 180, n), np.degrees(np.arcsin(rng.uniform(-1, 1, n)))]
+        )
+
+    def cluster(n, w, c=(10.0, 20.0)):
+        return np.column_stack(
+            [c[0] + rng.uniform(-w, w, n), c[1] + rng.uniform(-w, w, n)]
+        )
+
+    yield "city", city_cloud(rng, 150), city_cloud(rng, 3000)
+    yield "globe", globe(150), globe(3000)
+    yield "1m cluster", cluster(100, 1e-5), cluster(2000, 1e-5)
+    yield "1e-9 deg cluster", cluster(100, 1e-9), cluster(2000, 1e-9)
+    yield "gridded duplicates", np.round(city_cloud(rng, 100), 3), np.round(city_cloud(rng, 2000), 3)
+    yield "all duplicate refs", cluster(40, 1e-3), np.tile([[10.0, 20.0]], (500, 1))
+    dq = np.column_stack(
+        [rng.choice([-1, 1], 150) * rng.uniform(179.99, 180, 150), rng.uniform(-10, 10, 150)]
+    )
+    dr = np.column_stack(
+        [rng.choice([-1, 1], 2000) * rng.uniform(179.99, 180, 2000), rng.uniform(-10, 10, 2000)]
+    )
+    yield "dateline", dq, dr
+    wrapped = dr + np.column_stack([rng.choice([-720, -540, -360, 360, 540, 720], 2000), np.zeros(2000)])
+    yield "wrapped longitudes", dq + [540.0, 0.0], wrapped
+    poles_q = np.column_stack([rng.uniform(-180, 180, 150), rng.choice([-90.0, 90.0], 150)])
+    poles_r = np.column_stack(
+        [rng.uniform(-180, 180, 2000), rng.choice([-1, 1], 2000) * rng.uniform(89.999, 90, 2000)]
+    )
+    poles_r[:300, 1] = rng.choice([-90.0, 90.0], 300)
+    yield "exact and near poles", poles_q, poles_r
+    aq = globe(150)
+    ar = np.column_stack(
+        [aq[:, 0] + 180 + rng.normal(0, 1e-3, 150), -aq[:, 1] + rng.normal(0, 1e-3, 150)]
+    )
+    yield "near antipodes", aq, np.vstack([ar, globe(1500), np.column_stack([aq[:, 0] + 180, -aq[:, 1]])])
+    nq = city_cloud(rng, 150)
+    nq[::7] = np.nan
+    nq[3, 0], nq[5, 1] = np.inf, -np.inf
+    nr = city_cloud(rng, 2000)
+    nr[::3] = np.nan
+    nr[10, 0], nr[11, 1] = np.inf, -np.inf
+    yield "nan and inf rows", nq, nr
+    yield "latitude 95 (pruning off)", city_cloud(rng, 150), np.vstack([city_cloud(rng, 2000), [[-74.0, 95.0]]])
+    yield "latitude -100 query (pruning off)", np.vstack([city_cloud(rng, 150), [[-74.0, -100.0]]]), city_cloud(rng, 2000)
+    huge = globe(2000)
+    huge[:, 0] = rng.uniform(-5e4, 5e4, 2000)
+    yield "longitudes to 5e4 deg", globe(150), huge
+    huge[0, 0] = 7e4
+    yield "longitude 7e4 deg (pruning off)", globe(150), huge
+    few = np.full((70, 2), np.nan)
+    few[[3, 40, 66]] = city_cloud(rng, 3)
+    yield "fewer finite refs than k", city_cloud(rng, 100), few
+    yield "m = 1", city_cloud(rng, 50), city_cloud(rng, 1)
+    yield "m = 33", city_cloud(rng, 100), city_cloud(rng, 33)
+
+
+@pytest.mark.parametrize("radius", [ms.R_EARTH_M, 1.0], ids=["earth", "unit"])
+@pytest.mark.parametrize(("name", "q", "r"), list(_chord_cases()), ids=lambda v: v if isinstance(v, str) else "")
+def test_chord_selectors_match_plain_selectors_bit_for_bit(name, q, r, radius):
+    q_mx, r_mx = _prep(q, True), _prep(r, True)
+    for k in (1, 2, 5, 10, 16, 24, 31, 32):
+        if k > len(r):
+            continue
+        expected = _knn_fused(q_mx, r_mx, k, radius)
+        mx.eval(*expected)
+        expected = tuple(np.array(a) for a in expected)
+        for strategy in ("scalar", "simdgroup"):
+            got = _knn_chord(q_mx, r_mx, k, radius, strategy)
+            mx.eval(*got)
+            np.testing.assert_array_equal(np.array(got[1]), expected[1], err_msg=f"{name} k={k} {strategy}")
+            np.testing.assert_array_equal(np.array(got[0]), expected[0], err_msg=f"{name} k={k} {strategy}")
+
+
+@pytest.mark.parametrize("m", [1, 3, 4, 5, 31, 32, 33, 127, 128, 129, 131, 160, 161])
+def test_chord_selectors_at_unroll_and_lane_boundaries(rng, m):
+    """Four references per iteration (strided by 32 lanes in the SIMDgroup
+    kernel) plus a remainder loop; ties and NaN rows straddle both."""
+    q = city_cloud(rng, 37)
+    r = city_cloud(rng, m)
+    if m > 4:
+        r[4] = r[0]  # exact tie across unrolled groups
+    if m > 3:
+        r[2] = np.nan
+    q_mx, r_mx = _prep(q, True), _prep(r, True)
+    for k in (1, 3, 16, 32):
+        if k > m:
+            continue
+        expected = tuple(np.array(a) for a in _knn_simdgroup(q_mx, r_mx, k, ms.R_EARTH_M))
+        for strategy in ("scalar", "simdgroup"):
+            d, idx = _knn_chord(q_mx, r_mx, k, ms.R_EARTH_M, strategy)
+            np.testing.assert_array_equal(np.array(idx), expected[1], err_msg=f"k={k} {strategy}")
+            np.testing.assert_array_equal(np.array(d), expected[0], err_msg=f"k={k} {strategy}")
+
+
+@pytest.mark.parametrize("k", [16, 32])
+def test_chord_simdgroup_shared_threshold_keeps_one_lane_top_k(k):
+    """Every true neighbour sits in lane 0's stride while the other lanes see
+    only far references: the shared threshold must not prune lane 0."""
+    near = np.arange(0, 32 * 64, 32)
+    r = np.tile([120.0, 60.0], (32 * 64 + 5, 1))
+    r[near] = np.column_stack([(np.arange(64) + 1) * 1e-4, np.zeros(64)])
+    q = np.array([[0.0, 0.0]])
+    d, idx = _knn_chord(_prep(q, True), _prep(r, True), k, ms.R_EARTH_M, "simdgroup")
+    full = np.array(ms.haversine_cross(q, r))
+    d, idx = np.array(d), np.array(idx)
+    np.testing.assert_array_equal(idx[0], near[:k])
+    np.testing.assert_array_equal(d[0], full[0, near[:k]])
+
+
+def test_chord_slack_switches_pruning_off_only_for_unsafe_inputs():
+    city = city_cloud(np.random.default_rng(3), 100)
+
+    def slack(q, r):
+        return float(np.array(_knn_chord_slack(_prep(q, True), _prep(r, True)))[0])
+
+    assert 0 < slack(city, city) < 1e-5
+    assert slack(np.array([[0.0, 90.0], [0.0, -90.0]]), city) > 0  # fp32 pi/2 is fine
+    assert slack(city + [540.0, 0.0], city) > slack(city, city)  # grows with |lon|
+    assert slack(np.vstack([city, [[np.nan, np.inf], [np.inf, np.nan]]]), city) > 0
+    assert slack(np.array([[0.0, 90.0001]]), city) < 0
+    assert slack(city, np.vstack([city, [[-74.0, -95.0]]])) < 0
+    assert slack(np.array([[5e4, 0.0]]), city) > 0
+    assert slack(np.array([[7e4, 0.0]]), city) < 0
+
+
+@pytest.mark.parametrize(
+    ("n", "m", "k", "strategy", "chord"),
+    [
+        (1_000, 1_000_000, 10, "simdgroup", True),
+        (1_000_000, 10_000, 10, "scalar", True),
+        (200_000, 200_000, 10, "scalar", True),
+        (1_000_000, 200_000, 10, "scalar", True),
+        (16_384, 32, 10, "scalar", True),  # the fused refine pays alone
+        (16_383, 32, 10, "scalar", False),
+        (512, 32_768, 10, "simdgroup", True),
+        (256, 32_768, 10, "simdgroup", False),  # n * m < 2^24
+        (2_048, 8_192, 5, "simdgroup", True),
+        (2_048, 8_192, 10, "simdgroup", False),
+        (100, 1_000, 1, "simdgroup", False),
+        (1_000_000, 200_000, 17, "scalar", False),  # k > 16: plain selectors
+        (16_384, 32_768, 1, "simdgroup", True),
+        (16_385, 32_768, 1, "scalar", True),
+        (4_096, 131_072, 16, "simdgroup", True),
+        (4_097, 131_072, 16, "scalar", True),
+        (2_049, 8_192, 16, "scalar", True),
+        (4_096, 2_048, 16, "simdgroup", False),
+    ],
+)
+def test_chord_route_and_strategy(n, m, k, strategy, chord):
+    if k <= 16:
+        assert _knn_chord_strategy(n, m, k) == strategy
+    assert _knn_chord_route(n, m, k, strategy) is chord
+
+
+@pytest.mark.parametrize(("n", "m", "strategy"), [(16_384, 64, "scalar"), (512, 40_000, "simdgroup")])
+def test_public_api_chord_route_matches_bruteforce(monkeypatch, n, m, strategy):
+    rng = np.random.default_rng(n + m)
+    q, r = city_cloud(rng, n), city_cloud(rng, m)
+    r[5] = r[3]  # an exact tie
+    r[7] = np.nan
+    haversine_module = importlib.import_module("mlx_geospatial.haversine")
+    taken = []
+
+    def spy(*args, **kwargs):
+        taken.append(args[4])
+        return _knn_chord(*args, **kwargs)
+
+    monkeypatch.setattr(haversine_module, "_knn_chord", spy)
+    k = 5
+    dist, idx = ms.haversine_knn(q, r, k=k)
+    assert taken == [strategy]
+    full = np.array(ms.haversine_cross(q, r))
+    full = np.where(np.isnan(full), np.inf, full)
+    ref_idx = np.argsort(full, axis=1, kind="stable")[:, :k]
+    np.testing.assert_array_equal(np.array(idx), ref_idx)
+    np.testing.assert_array_equal(np.array(dist), np.take_along_axis(full, ref_idx, axis=1))
+
+
+def test_chord_rejects_unknown_strategy_and_bad_threadgroup():
+    q = _prep(np.array([[0.0, 0.0]]), True)
+    r = _prep(np.array([[1.0, 0.0]]), True)
+    with pytest.raises(ValueError, match="strategy"):
+        _knn_chord(q, r, 1, ms.R_EARTH_M, "threadgroup")
+    with pytest.raises(ValueError, match="multiple.*32"):
+        _knn_chord(q, r, 1, ms.R_EARTH_M, "scalar", threadgroup=48)

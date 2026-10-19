@@ -138,7 +138,28 @@ haversine `h` term inline (no asin/sqrt in the scan) and avoid both the
 
 Selected survivors get their distances recomputed through the exact `_hav`
 graph, so reported distances are bit-identical to `haversine_cross`, followed
-by a k-element distance sort. Exact `h` ties use the lower reference index;
+by a k-element distance sort.
+
+For `k <= 16` on large inputs, chord-filtered variants of both selectors
+skip most of that exact work. On the unit sphere the squared chord between
+two points is exactly `4h`, so each reference first costs a 16-byte read of its
+precomputed unit vector and three multiply-adds; the two precise sines of the
+exact `h` run only when the chord passes a conservative threshold derived
+from the current k-th best `h` and recomputed on insertion. The threshold's
+slack covers the fp32 error of both quantities with a margin of more than 40x
+on adversarial pairs, so a skipped reference could never have been inserted
+and the output is bit-identical to the plain selectors. The SIMDgroup variant
+shares the tightest lane threshold across its 32 lanes, since any lane's
+k-th best bounds the query's. Latitudes beyond ±90° or coordinates beyond
+1e3 rad void the error budget; a device-side flag then runs the plain scan
+without a host sync. These kernels also compute the distances and the final
+stable distance sort in-kernel, with the `_hav` arithmetic. Routing keeps the
+plain selectors for `k > 16` and for small shapes that cannot repay the
+unit-vector pass. Inputs that defeat the filter, such as references packed
+into a cluster much smaller than its distance from the queries, run about 15%
+slower than the plain selectors.
+
+Exact `h` ties use the lower reference index;
 distinct `h` values that round to the same reported fp32 distance retain the
 documented near-tie ambiguity. Shape-aware dispatch retains the scalar kernel
 once query parallelism is sufficient or SIMDgroup merge/register pressure

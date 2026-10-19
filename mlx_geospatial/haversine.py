@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 import operator
+import textwrap
 
 import numpy as np
 import mlx.core as mx
@@ -355,6 +356,398 @@ def _knn_simdgroup(
     return _knn_refine(q, r, out_i, radius)
 
 
+# ---------------------------------------------------------------------------
+# Chord-filtered kNN selectors
+#
+# The selectors above spend two precise sines on every (query, reference)
+# pair. On the unit sphere the squared chord between two points is exactly
+# 4 * h, so a reference whose squared chord clearly exceeds 4 * w, with w the
+# current k-th best h, cannot be inserted. These selectors compute the squared
+# chord from precomputed unit vectors (three loads from one 16-byte row, three
+# subtractions, three multiply-adds) and evaluate the unchanged exact h only
+# when the chord passes a conservative threshold
+#
+#     thr(w) = (1 + rho) * ((1 + rho) * (2 * sqrt(w) + slack) + eta)^2,
+#
+# recomputed on insertion only. A skipped reference has an fp32 h above w, so
+# it could not have been inserted: the selected set, its order and every
+# output bit match the selectors above. The error budget:
+#
+# - eta (1e-5, in chord units) covers the absolute error of the fp32 unit
+#   vectors and their squared difference, about 1e-6 at worst;
+# - rho (1e-4) covers relative rounding in sin, the products, sqrt and the
+#   threshold arithmetic itself, a few 1e-7;
+# - slack = 16 * 2^-24 * B, with B the largest finite |coordinate| in
+#   radians, covers the kernel's rounded coordinate differences: with
+#   unwrapped longitudes (540 degrees, say) the half-angle passed to sin is off
+#   by up to 2^-24 * B, which moves 2 * sqrt(h) by up to 2 * 2^-24 * B, and
+#   the latitude difference adds at most as much again.
+#
+# Two input conditions break that budget, and the device-side slack then
+# switches pruning off (slack < 0), so the kernel runs the plain loop of the
+# selectors above: a latitude beyond +-pi/2 makes cos(lat) negative, h_lat and
+# h_lon then cancel and h carries ~1e-8 absolute error (1e-4 after the sqrt);
+# coordinates beyond 1e3 rad (~57,000 degrees) leave the validated range. A
+# NaN or inf coordinate gives a NaN chord, which fails the test, but such a
+# pair has a NaN h that never inserts either.
+#
+# In the SIMDgroup selector each lane keeps its own top-k, and any lane's k-th
+# best is an upper bound on the query's global k-th best. The lanes therefore
+# share the smallest threshold: a reference it skips is worse than k others
+# and cannot reach the merged top-k, even if it would have entered its lane's
+# list.
+#
+# Both kernels also fuse _knn_refine: the k distances use the _hav_graph
+# arithmetic (MLX's arcsin and sqrt are metal::precise), and a stable sort by
+# distance replaces its argsort, which is stable as well.
+# ---------------------------------------------------------------------------
+
+_KNN_CHORD_RHO = 1e-4
+_KNN_CHORD_ETA = 1e-5
+_KNN_CHORD_SLACK_PER_RADIAN = 16.0 * 2.0**-24
+_KNN_CHORD_MAX_COORD = 1e3  # radians
+_HALF_PI_F32 = float(np.float32(math.pi / 2))
+_KNN_CHORD_MAX_K = 16
+
+# Exact h of reference REF, with the expression tree of _KNN_SELECT_SOURCE,
+# and strict insertion. COS_LAT is the reference's cos(lat) (rcos[REF], or the
+# same value from the unit-vector row just loaded); TIGHTEN marks where an
+# insertion lowers the threshold.
+_KNN_CHORD_VISIT = """\
+float sdlat = metal::precise::sin((r[2 * (size_t)(REF) + 1] - qlat) * 0.5f);
+float sdlon = metal::precise::sin((r[2 * (size_t)(REF) + 0] - qlon) * 0.5f);
+float h_lat = sdlat * sdlat;
+float h_lon = qc * COS_LAT * sdlon * sdlon;
+float h = h_lat + h_lon;
+if (h < 0.0f) h = 0.0f;
+else if (h > 1.0f) h = 1.0f;
+if (h < best_h[K - 1]) {
+    int s = K - 1;
+    while (s > 0 && best_h[s - 1] > h) {
+        best_h[s] = best_h[s - 1];
+        best_i[s] = best_i[s - 1];
+        --s;
+    }
+    best_h[s] = h;
+    best_i[s] = (REF);
+TIGHTEN}
+"""
+
+_KNN_CHORD_TIGHTEN = """\
+    float t = RHO1 * (2.0f * metal::precise::sqrt(best_h[K - 1]) + slack) + ETA;
+    thr = metal::min(thr, t * t * RHO1);
+"""
+
+# Squared chord to reference REF. The fma never reaches a result: chordU only
+# decides whether the exact h is evaluated.
+_KNN_CHORD_CHORD = """\
+float exU = rv[4 * (size_t)(REF) + 0] - qx;
+float eyU = rv[4 * (size_t)(REF) + 1] - qy;
+float ezU = rv[4 * (size_t)(REF) + 2] - qz;
+float chordU = metal::fma(exU, exU, metal::fma(eyU, eyU, ezU * ezU));
+"""
+
+
+def _knn_chord_scan(simdgroup: bool) -> str:
+    """Reference loop: four chords per iteration, all four skipped together
+    when none passes; the plain loop when the slack disables pruning."""
+    start, step = ("(int)lane", "32") if simdgroup else ("0", "1")
+
+    def visit(ref, tighten=True):
+        # The plain scan reads the contiguous rcos; the filtered scan reuses
+        # the unit-vector row whose x, y, z the chord just loaded.
+        cos_lat = "rv[4 * (size_t)(REF) + 3]" if tighten else "rcos[REF]"
+        code = _KNN_CHORD_VISIT.replace("COS_LAT", cos_lat).replace("REF", ref)
+        return code.replace("TIGHTEN", _KNN_CHORD_TIGHTEN if tighten else "")
+
+    def chord(ref, u):
+        return _KNN_CHORD_CHORD.replace("REF", ref).replace("U", str(u))
+
+    def block(test, code):
+        return f"if ({test}) {{\n{textwrap.indent(code, '    ')}}}\n"
+
+    refs = [f"j + {u} * {step}" for u in range(4)]
+    passes = " | ".join(f"(chord{u} <= thr)" for u in range(4))
+    group = "thr = metal::simd_min(thr);\n" if simdgroup else ""
+    group += "".join(chord(ref, u) for u, ref in enumerate(refs))
+    group += f"if (!({passes})) continue;\n"
+    group += "".join(block(f"chord{u} <= thr", visit(ref)) for u, ref in enumerate(refs))
+    tail = chord("j", 0) + block("chord0 <= thr", visit("j"))
+    plain = visit("j", tighten=False)
+    scan = f"""\
+float thr = INFINITY;
+if (slack < 0.0f) {{
+    // Pruning is off for these inputs: the plain scan of the selectors above.
+    for (int j = {start}; j < m; j += {step}) {{
+{textwrap.indent(plain, ' ' * 8)}    }}
+}} else {{
+    int j = {start};
+    for (; j < m - 3 * {step}; j += 4 * {step}) {{
+{textwrap.indent(group, ' ' * 8)}    }}
+    for (; j < m; j += {step}) {{
+{textwrap.indent(tail, ' ' * 8)}    }}
+}}
+"""
+    return textwrap.indent(scan, " " * 4)
+
+
+def _knn_chord_source(simdgroup: bool) -> str:
+    head = """
+    // See _KNN_SELECT_SOURCE: h must keep the _hav_graph expression tree.
+    #pragma clang fp contract(off)
+
+    uint tid = thread_position_in_grid.x;
+"""
+    if simdgroup:
+        head += """\
+    uint lane = thread_index_in_simdgroup;
+    uint qid = tid / 32;
+    int n_q = shape[0];
+    // Uniform per SIMDgroup, as in _KNN_SIMDGROUP_SELECT_SOURCE.
+    if (qid >= (uint)n_q) return;
+"""
+        tail = """
+    // The exact merge of _KNN_SIMDGROUP_SELECT_SOURCE; lane s keeps slot s.
+    int cursor = 0;
+    float my_h = INFINITY;
+    int my_i = -1;
+    for (int s = 0; s < K; ++s) {
+        float winner_h = cursor < K ? best_h[cursor] : INFINITY;
+        int winner_i = cursor < K ? best_i[cursor] : -1;
+        uint winner_lane = lane;
+        for (ushort delta = 16; delta > 0; delta >>= 1) {
+            float other_h = metal::simd_shuffle_down(winner_h, delta);
+            int other_i = metal::simd_shuffle_down(winner_i, delta);
+            uint other_lane = metal::simd_shuffle_down(winner_lane, delta);
+            bool other_wins = other_h < winner_h ||
+                (other_h == winner_h && other_i >= 0 &&
+                 (winner_i < 0 || other_i < winner_i));
+            if (other_wins) {
+                winner_h = other_h;
+                winner_i = other_i;
+                winner_lane = other_lane;
+            }
+        }
+        uint chosen_lane = metal::simd_broadcast(winner_lane, 0);
+        int chosen_i = metal::simd_broadcast(winner_i, 0);
+        float chosen_h = metal::simd_broadcast(winner_h, 0);
+        if (lane == (uint)s) {
+            my_h = chosen_h;
+            my_i = chosen_i;
+        }
+        if (lane == chosen_lane && cursor < K) ++cursor;
+    }
+    // Rank by distance; ties keep the merged (h, index) order (stable).
+    float my_d = my_i < 0 ? INFINITY
+        : rad2[0] * metal::precise::asin(metal::precise::sqrt(my_h));
+    int rank = 0;
+    for (int t = 0; t < K; ++t) {
+        float other_d = metal::simd_shuffle(my_d, (ushort)t);
+        rank += (other_d < my_d || (other_d == my_d && t < (int)lane)) ? 1 : 0;
+    }
+    if (lane < (uint)K) {
+        out_d[(size_t)qid * K + rank] = my_d;
+        out_i[(size_t)qid * K + rank] = my_i;
+    }
+"""
+    else:
+        head += """\
+    uint qid = tid;
+    int n_q = shape[0];
+    if (qid >= (uint)n_q) return;
+"""
+        tail = """
+    // Distances, then a stable insertion sort by distance: ties keep the
+    // (h, index) order. In place on purpose: separate private dd[K] / ii[K]
+    // arrays miscompile (column K - 2 comes back 0) for K >= 24.
+    for (int s = 0; s < K; ++s) {
+        int bi = best_i[s];
+        float d = bi < 0 ? INFINITY
+            : rad2[0] * metal::precise::asin(metal::precise::sqrt(best_h[s]));
+        int t = s;
+        while (t > 0 && best_h[t - 1] > d) {
+            best_h[t] = best_h[t - 1];
+            best_i[t] = best_i[t - 1];
+            --t;
+        }
+        best_h[t] = d;
+        best_i[t] = bi;
+    }
+    for (int s = 0; s < K; ++s) {
+        out_d[(size_t)qid * K + s] = best_h[s];
+        out_i[(size_t)qid * K + s] = best_i[s];
+    }
+"""
+    body = """
+    int m = shape[1];
+    float qlon = q[2 * (size_t)qid + 0];
+    float qlat = q[2 * (size_t)qid + 1];
+    float qx = qv[4 * (size_t)qid + 0];
+    float qy = qv[4 * (size_t)qid + 1];
+    float qz = qv[4 * (size_t)qid + 2];
+    float qc = qv[4 * (size_t)qid + 3];
+    float slack = bound[0];
+
+    float best_h[K];
+    int best_i[K];
+    for (int s = 0; s < K; ++s) { best_h[s] = INFINITY; best_i[s] = -1; }
+
+"""
+    source = head + body + _knn_chord_scan(simdgroup) + tail
+    return (
+        source.replace("RHO1", _f32_literal(1.0 + _KNN_CHORD_RHO))
+        .replace("ETA", _f32_literal(_KNN_CHORD_ETA))
+    )
+
+
+def _f32_literal(value: float) -> str:
+    return repr(float(np.float32(value))) + "f"
+
+
+_KNN_CHORD_SELECT_SOURCE = _knn_chord_source(simdgroup=False)
+_KNN_CHORD_SIMDGROUP_SELECT_SOURCE = _knn_chord_source(simdgroup=True)
+
+_knn_chord_kernels: dict[str, object] = {}
+
+
+def _get_knn_chord_kernel(strategy: str):
+    kernel = _knn_chord_kernels.get(strategy)
+    if kernel is None:
+        if strategy == "simdgroup":
+            kernel = mx.fast.metal_kernel(
+                name="mlx_geospatial_knn_chord_simdgroup_select",
+                input_names=["q", "qv", "r", "rv", "rcos", "bound", "rad2", "shape"],
+                output_names=["out_d", "out_i"],
+                source=_KNN_CHORD_SIMDGROUP_SELECT_SOURCE,
+            )
+        else:
+            kernel = mx.fast.metal_kernel(
+                name="mlx_geospatial_knn_chord_select",
+                input_names=["q", "qv", "r", "rv", "rcos", "bound", "rad2", "shape"],
+                output_names=["out_d", "out_i"],
+                source=_KNN_CHORD_SELECT_SOURCE,
+            )
+        _knn_chord_kernels[strategy] = kernel
+    return kernel
+
+
+def _knn_unit_vectors_graph(p: mx.array) -> tuple[mx.array, mx.array]:
+    lon, lat = p[:, 0], p[:, 1]
+    cos_lat = mx.cos(lat)
+    rows = mx.stack(
+        [cos_lat * mx.cos(lon), cos_lat * mx.sin(lon), mx.sin(lat), cos_lat], axis=1
+    )
+    return rows, cos_lat
+
+
+# ``(x, y, z, cos lat)`` rows and the ``cos lat`` column on its own. The cosine
+# is metal::precise::cos, compiled or not, so it equals the selectors'
+# mx.cos(lat) bit for bit. Compiled to halve the passes over large inputs.
+_knn_unit_vectors = mx.compile(_knn_unit_vectors_graph)
+
+
+# One pass instead of three. Only exact constants belong in compiled graphs:
+# mx.compile inlines float constants into the kernel source with too few
+# digits (fp32 pi/2 compares as 1.570796), so the bounds below stay eager.
+_finite_abs = mx.compile(lambda p: mx.where(mx.isfinite(p), mx.abs(p), 0.0))
+
+
+def _knn_chord_slack(q: mx.array, r: mx.array) -> mx.array:
+    """Device-side threshold slack ``16 * 2^-24 * B``, or -1 to disable pruning.
+
+    Lazy on the GPU, so choosing the route never waits for a host sync.
+    """
+    lon_lat = mx.maximum(
+        mx.max(_finite_abs(q), axis=0), mx.max(_finite_abs(r), axis=0)
+    )
+    b = mx.max(lon_lat)
+    safe = (lon_lat[1] <= _HALF_PI_F32) & (b <= _KNN_CHORD_MAX_COORD)
+    slack = mx.where(safe, b * _KNN_CHORD_SLACK_PER_RADIAN, -1.0)
+    return slack.astype(mx.float32).reshape(1)
+
+
+def _knn_chord(
+    q: mx.array, r: mx.array, k: int, radius: float, strategy: str, *, threadgroup: int = 128
+) -> tuple[mx.array, mx.array]:
+    """Chord-filtered selection with the refine fused in; ``strategy`` is
+    ``"scalar"`` (one thread per query) or ``"simdgroup"`` (32 lanes)."""
+    radius = _check_radius(radius)
+    if strategy not in ("scalar", "simdgroup"):
+        raise ValueError(f"unknown kNN strategy {strategy!r}")
+    if not _KNN_SIMDGROUP_WIDTH <= threadgroup <= 1024 or (
+        threadgroup % _KNN_SIMDGROUP_WIDTH
+    ):
+        raise ValueError(
+            "threadgroup must be a multiple of the SIMDgroup width (32) "
+            "between 32 and 1024"
+        )
+    n, m = int(q.shape[0]), int(r.shape[0])
+    lanes = _KNN_SIMDGROUP_WIDTH if strategy == "simdgroup" else 1
+    grid_x = ((n * lanes + threadgroup - 1) // threadgroup) * threadgroup
+    # The float32 value _hav uses for (2.0 * radius).
+    rad2 = mx.array(np.array([2.0 * np.float32(radius)], dtype=np.float32))
+    rv, rcos = _knn_unit_vectors(r)
+    out_d, out_i = _get_knn_chord_kernel(strategy)(
+        inputs=[
+            q,
+            _knn_unit_vectors(q)[0],
+            r,
+            rv,
+            rcos,
+            _knn_chord_slack(q, r),
+            rad2,
+            mx.array([n, m], dtype=mx.int32),
+        ],
+        template=[("K", k)],
+        grid=(grid_x, 1, 1),
+        threadgroup=(threadgroup, 1, 1),
+        output_shapes=[(n, k), (n, k)],
+        output_dtypes=[mx.float32, mx.int32],
+        stream=mx.gpu,
+    )
+    return out_d, out_i
+
+
+# SIMDgroup query limits for the chord-filtered selectors, as (minimum m,
+# limits by k). Pruning shortens the scans, so one thread per query fills the
+# GPU from about half the query counts of _KNN_SIMDGROUP_QUERY_LIMITS.
+# Measured on an M4 Max, like the routing rule in _knn_chord_route.
+_KNN_CHORD_SIMDGROUP_QUERY_LIMITS = (
+    (131_072, ((1, 16_384), (5, 8_192), (10, 8_192), (16, 4_096))),
+    (4_096, ((1, 16_384), (5, 8_192), (10, 4_096), (16, 2_048))),
+    (0, ((1, 8_192), (5, 4_096), (10, 4_096), (16, 4_096))),
+)
+
+
+def _knn_chord_strategy(n: int, m: int, k: int) -> str:
+    """The faster chord-filtered selector for ``k <= 16``."""
+    for min_m, limits in _KNN_CHORD_SIMDGROUP_QUERY_LIMITS:
+        if m >= min_m:
+            break
+    for max_k, max_queries in limits:
+        if k <= max_k:
+            return "simdgroup" if n <= max_queries else "scalar"
+    return "scalar"
+
+
+def _knn_chord_route(n: int, m: int, k: int, strategy: str) -> bool:
+    """Whether the chord-filtered ``strategy`` beats today's selectors.
+
+    Over n in [256, 262144], m in [128, 1e6] and k in {1, 5, 10, 16} this rule
+    is never more than 3% slower than the plain selectors and gains 1.8x in
+    geometric mean. Beyond k = 16 the larger top-k loosens the threshold and
+    the extra registers cost occupancy (0.7x at k = 32 with small m), and tiny
+    shapes cannot repay the unit-vector and slack passes (~0.05 ms).
+    """
+    if k > _KNN_CHORD_MAX_K:
+        return False
+    if strategy == "scalar":
+        # Large query batches gain from the fused refine alone.
+        return n >= 16_384 or n * m >= 1 << 24
+    # A lane scans m / 32 references; pruning pays on long scans only.
+    return n * m >= 1 << 24 and (m >= 32_768 or (k <= 5 and m >= 8_192))
+
+
 def _knn_metal_strategy(n: int, m: int, k: int) -> str:
     """Choose the faster exact Metal selector for an ``(n, m, k)`` shape."""
     # A SIMDgroup also wins launch-bound workloads, but multiplying every
@@ -456,7 +849,9 @@ def haversine_knn(
     two fused selection kernels: a 32-lane SIMDgroup cooperates on each query
     when query parallelism is scarce, while one thread per query wins for
     large query batches. Neither materializes an ``(N, M)`` matrix or sorts
-    the reference set. Otherwise a chunked distance-matrix +
+    the reference set. For ``k <= 16`` on large inputs both skip most exact
+    distance evaluations with a conservative chord-distance bound; results
+    are bit-identical either way. Otherwise a chunked distance-matrix +
     ``argpartition`` fallback runs; that fallback is sort-bound, so for large
     reference sets with ``k > 32`` a CPU tree (sklearn
     ``BallTree(metric="haversine")``) may win. ``chunk_bytes`` must be a
@@ -496,7 +891,10 @@ def haversine_knn(
         and mx.default_device() == mx.gpu
         and k <= _KNN_KERNEL_MAX_K
     ):
-        if _knn_metal_strategy(n, m, k) == "simdgroup":
+        strategy = _knn_chord_strategy(n, m, k)
+        if _knn_chord_route(n, m, k, strategy):
+            d, idx = _knn_chord(q, r, k, radius, strategy)
+        elif _knn_metal_strategy(n, m, k) == "simdgroup":
             d, idx = _knn_simdgroup(q, r, k, radius)
         else:
             d, idx = _knn_fused(q, r, k, radius)
