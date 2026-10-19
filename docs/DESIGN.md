@@ -119,7 +119,16 @@ edge), each candidate pair re-applies the inclusive envelope test, and the
 float64 point-to-segment arithmetic settles the result. Building it costs a
 few float64 passes and a uint16 radix sort instead of one shapely box per
 edge. A query whose candidate pairs far exceed its rows (a layer too
-clustered for a uniform grid) falls back to that STRtree. All-match
+clustered for a uniform grid) falls back to that STRtree. GEOS then
+evaluates the predicate for the near rows per (point, polygon) pair, except
+that a single-ring polygon with at least 512 edges and enough near points to
+amortize preparing it (16, or 48 from 10,000 edges) is evaluated
+polygon-major, as `contains`/`covers(polygon, points)` with the polygon
+prepared only for that query: its indexed locator replaces a full walk of
+the ring per pair. On one ring the prepared locator and GEOS relate apply the
+same ray-crossing test, so answers are unchanged even for invalid rings;
+multi-ring geometry, where they can differ on invalid input, keeps the
+per-pair route. All-match
 refinement sorts only the GEOS replacement pairs and merges them into the
 already sorted output; unchanged groups leave the original arrays intact.
 This avoids sorting the complete join after correcting a few boundary rows.
