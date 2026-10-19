@@ -1,9 +1,15 @@
-"""Benchmark harness for mlx-geospatial.
+"""Array-operation and kernel benchmark harness for mlx-geospatial.
+
+For fresh-index joins with exact boundaries and complete GeoDataFrame
+outputs, use ``bench/e2e/run_e2e.py``; see ``bench/README.md``. This harness
+measures a different output contract and retains the historical component
+comparisons documented in ``bench/HISTORICAL.md``.
 
 Honesty rules:
-- All timings are end-to-end from host-resident numpy/shapely inputs,
-  including ingestion, host->device input transfer, device result evaluation,
-  and synchronization. Host-input join rows return NumPy labels as a
+- Host-input timings include numpy/shapely point preparation,
+  host->device input transfer, device result evaluation, and synchronization.
+  Warm join rows exclude polygon ingestion and index construction; cold rows
+  include them. Host-input join rows return NumPy labels as a
   zero-copy view of the MLX result (no copy-back is timed); other MLX results
   stay MLX arrays.
 - Like against like: the join baselines evaluate every (point, polygon)
@@ -28,8 +34,8 @@ Honesty rules:
   where baseline configuration matters most (prepared vs unprepared polygons
   differ 8-60x) and where our per-candidate ring walk meets GEOS's indexed
   locator.
-- The explicitly labeled dense-PIP microbenchmark is the exception to the
-  end-to-end rule: it uses a pre-ingested PolygonSet and GPU-resident points to
+- The explicitly labeled dense-PIP microbenchmark uses a pre-ingested
+  PolygonSet and GPU-resident points to
   isolate the replacement kernel from its retained composed oracle.
 - ``cold`` numbers include building the PolygonSet + grid index; ``warm``
   numbers reuse a prebuilt index (the realistic repeated-query pattern) and

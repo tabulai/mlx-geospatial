@@ -508,6 +508,7 @@ class PolygonSet:
         self._grid_index = None
         self._origin_f64_mx = None
         self._origin_hi_lo_mx = None
+        self._y_edge_index = False  # False: unbuilt; None: traversal is preferable.
 
     def __len__(self) -> int:
         return self.n_polygons

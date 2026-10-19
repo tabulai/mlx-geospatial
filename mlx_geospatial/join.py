@@ -39,6 +39,7 @@ import mlx.core as mx
 import shapely
 
 from ._dispatch import resolve_backend
+from ._boundary import boundary_candidate_rows
 from ._ingest import (
     LocalPoints,
     PolygonSet,
@@ -100,6 +101,50 @@ _CPU_ROWS_PER_CHUNK = 2_000_000
 _NEAR_BOUNDARY_POINTS_PER_SLICE = 1_000_000
 _NEAR_BOUNDARY_PAIRS_PER_SLICE = 8_000_000
 _NEAR_BOUNDARY_PROBE_POINTS = 4096
+
+
+def _replace_refined_pairs(out, near, point, polygon):
+    """Replace all matches for sorted ``near`` rows, preserving pair order.
+
+    The GPU output is already sorted. GEOS may change a point's match count
+    and returns arbitrary polygon order, so sort only its replacement rows
+    and merge them into the retained output instead of sorting the full join.
+    """
+    old_pt, old_pg = (np.asarray(value, dtype=np.int64) for value in out)
+    new_pt = near[point].astype(np.int64, copy=False)
+    new_pg = np.asarray(polygon, dtype=np.int64)
+    order = np.lexsort((new_pg, new_pt))
+    new_pt, new_pg = new_pt[order], new_pg[order]
+
+    starts = np.searchsorted(old_pt, near, side="left")
+    counts = np.searchsorted(old_pt, near, side="right") - starts
+    n_old = int(counts.sum())
+    if n_old == len(new_pt):
+        # Boundary refinement commonly confirms the existing answer. Inspect
+        # only those rows, leaving the full output untouched in that case.
+        offsets = np.cumsum(counts) - counts
+        positions = np.repeat(starts - offsets, counts) + np.arange(n_old)
+        if (np.array_equal(old_pt[positions], new_pt)
+                and np.array_equal(old_pg[positions], new_pg)):
+            return old_pt, old_pg
+
+    keep = ~np.isin(old_pt, near)
+    kept_pt, kept_pg = old_pt[keep], old_pg[keep]
+    if not len(new_pt):
+        return kept_pt, kept_pg
+    if not len(kept_pt):
+        return new_pt, new_pg
+    # No point appears in both streams: every old match of a refined point
+    # was removed. Each insertion rank is therefore unambiguous, including
+    # several replacement matches for one point.
+    destination = np.searchsorted(kept_pt, new_pt, side="left") + np.arange(len(new_pt))
+    size = len(kept_pt) + len(new_pt)
+    retained = np.ones(size, dtype=bool)
+    retained[destination] = False
+    result_pt, result_pg = np.empty(size, dtype=np.int64), np.empty(size, dtype=np.int64)
+    result_pt[retained], result_pg[retained] = kept_pt, kept_pg
+    result_pt[destination], result_pg[destination] = new_pt, new_pg
+    return result_pt, result_pg
 
 
 def _cpu_crossed_rows(pxr: np.ndarray, pyr: np.ndarray, edges: np.ndarray) -> np.ndarray:
@@ -801,11 +846,12 @@ class GridIndex:
         fp32 tolerance band where the even-odd result is undefined, so by
         default both return the same result. ``exact_boundary=True`` re-checks
         every point within ``PolygonSet.boundary_tolerance`` of a boundary with
-        GEOS honoring ``predicate``. Finding those points is a host pass over
-        all points (an STRtree over tolerance-widened edge boxes plus a
-        float64 distance test: roughly 0.3 s per million points on 48-vertex
-        zones, 0.5 s on 10k zones), cheaper than a full shapely join but far
-        from GPU speed, so reserve it for boundary-sensitive work. Only the
+        GEOS honoring ``predicate``. GPU queries first conservatively filter
+        possible boundary rows using the existing grid and polygon buffers;
+        a host edge-box STRtree and float64 distance test settle those rows.
+        Detailed rings, excessive candidate work, or unsafe numerical scales
+        retain the full host search. Refinement therefore still adds host
+        work and synchronization. Only the
         band is re-checked: interior points of invalid geometry keep the
         even-odd answer (valid geometry assumed; ``validate=True`` rejects the
         rest). It needs host coordinates, so it is not available for
@@ -864,8 +910,14 @@ class GridIndex:
 
         def finish(out):
             if exact_boundary:
+                candidates = (
+                    boundary_candidate_rows(
+                        self, local, cell, max_pairs_per_batch=max_pairs_per_batch
+                    ) if chosen == "gpu" else None
+                )
                 out = self._refine_boundary(
-                    pts64, out, all_matches=all_matches, predicate=predicate
+                    pts64, out, all_matches=all_matches, predicate=predicate,
+                    candidate_rows=candidates,
                 )
             return _to_container(out, on_device)
 
@@ -1265,7 +1317,10 @@ class GridIndex:
         hit = parity & ~rejected
         return pair_point[hit].astype(np.int32), pair_poly[hit].astype(np.int32)
 
-    def _refine_boundary(self, pts64: np.ndarray, out, *, all_matches: bool, predicate: str):
+    def _refine_boundary(
+        self, pts64: np.ndarray, out, *, all_matches: bool, predicate: str,
+        candidate_rows: np.ndarray | None = None,
+    ):
         """Re-check points within the tolerance band of a boundary with GEOS.
 
         Turns the fp32 even-odd answer into exact GEOS ``predicate`` semantics
@@ -1275,7 +1330,20 @@ class GridIndex:
         missing points) are never near a boundary and keep their ``-1``.
         """
         polyset = self.polygons
-        near = self._near_boundary(pts64, polyset.boundary_tolerance)
+        if candidate_rows is None:
+            near = self._near_boundary(pts64, polyset.boundary_tolerance)
+        elif not candidate_rows.size:
+            return out
+        else:
+            from ._boundary_indexed import indexed_near_boundary
+
+            candidates = pts64[candidate_rows]
+            local_near = indexed_near_boundary(
+                self, candidates, polyset.boundary_tolerance
+            )
+            if local_near is None:
+                local_near = self._near_boundary(candidates, polyset.boundary_tolerance)
+            near = candidate_rows[local_near]
         if near.size == 0:
             return out
         pt_idx, poly_idx = polyset.strtree.query(
@@ -1288,14 +1356,7 @@ class GridIndex:
             result = np.array(out, dtype=np.int32, copy=True)
             result[near] = fixed
             return result
-        pt_all, pg_all = (np.asarray(out[0], dtype=np.int64), np.asarray(out[1], dtype=np.int64))
-        keep = ~np.isin(pt_all, near)
-        new_pt = near[pt_idx].astype(np.int64)
-        new_pg = poly_idx.astype(np.int64)
-        pt_all = np.concatenate([pt_all[keep], new_pt])
-        pg_all = np.concatenate([pg_all[keep], new_pg])
-        order = np.lexsort((pg_all, pt_all))
-        return pt_all[order], pg_all[order]
+        return _replace_refined_pairs(out, near, pt_idx, poly_idx)
 
     def _near_boundary(self, pts64: np.ndarray, tol: float) -> np.ndarray:
         """Sorted row indices of the finite points within ``tol`` of an edge.
@@ -1505,6 +1566,7 @@ def sjoin(
     *,
     how: str = "inner",
     predicate: str = "intersects",
+    all_matches: bool = False,
     exact_boundary: bool = False,
     backend: str | None = None,
 ):
@@ -1515,8 +1577,12 @@ def sjoin(
     plain pandas DataFrame with a ``geometry`` column of shapely objects works
     too. Returns the left rows with an ``index_right`` column plus the right
     table's non-geometry columns (suffixed ``_right`` on collision). Each
-    point matches at most one polygon (the lowest polygon index wins when
-    polygons overlap). ``predicate`` defaults to ``"intersects"`` like
+    point matches at most one polygon by default (the lowest polygon position
+    wins when polygons overlap). Pass ``all_matches=True`` to return every
+    matching pair, in left-row then right-row order; a left join also keeps
+    each unmatched point once. Right attributes are gathered positionally,
+    preserving extension dtypes and avoiding extra matches from duplicate
+    index labels. ``predicate`` defaults to ``"intersects"`` like
     GeoPandas; ``"within"`` would exclude points exactly on a polygon
     boundary, a distinction inside the fp32 tolerance band that the default
     even-odd rule leaves undefined. Pass ``exact_boundary=True`` to re-check
@@ -1551,18 +1617,48 @@ def sjoin(
         # on data shape, so backend= still goes through resolve_backend.
         resolve_backend(backend, 0)
         _as_geometry_array(right)
-        assigned = np.full(len(as_point_array(left_geom)), -1, dtype=np.int32)
+        n_points = len(as_point_array(left_geom))
+        if all_matches:
+            pairs = (np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64))
+        else:
+            assigned = np.full(n_points, -1, dtype=np.int32)
     else:
-        assigned = np.asarray(
-            point_in_polygon(
-                left_geom,
-                right_geom,
-                predicate=predicate,
-                exact_boundary=exact_boundary,
-                backend=backend,
-            )
+        result = point_in_polygon(
+            left_geom,
+            right_geom,
+            all_matches=all_matches,
+            predicate=predicate,
+            exact_boundary=exact_boundary,
+            backend=backend,
         )
-    matched = assigned >= 0
+        if all_matches:
+            pairs = result
+            n_points = len(left_geom)
+        else:
+            assigned = np.asarray(result)
+            n_points = len(assigned)
+
+    if all_matches:
+        point_pos, right_pos = (np.asarray(values, dtype=np.int64) for values in pairs)
+        if how == "left":
+            matched = np.zeros(n_points, dtype=bool)
+            matched[point_pos] = True
+            missing = np.flatnonzero(~matched)
+            if missing.size:
+                # The query's pairs are already point-major. Insert each
+                # unmatched row directly, without sorting or a label join.
+                destination = np.arange(len(point_pos)) + np.searchsorted(missing, point_pos)
+                missing_destination = np.arange(len(missing)) + np.searchsorted(point_pos, missing)
+                output_points = np.empty(len(point_pos) + len(missing), dtype=np.int64)
+                output_right = np.full(len(output_points), -1, dtype=np.int64)
+                output_points[destination] = point_pos
+                output_right[destination] = right_pos
+                output_points[missing_destination] = missing
+                point_pos, right_pos = output_points, output_right
+    else:
+        matched = assigned >= 0
+        point_pos = np.flatnonzero(matched) if how == "inner" else np.arange(n_points)
+        right_pos = assigned[matched] if how == "inner" else assigned
 
     if isinstance(left, pd.DataFrame):
         base = left
@@ -1571,7 +1667,7 @@ def sjoin(
         index = (
             candidate_index
             if callable(getattr(candidate_index, "to_numpy", None))
-            else pd.RangeIndex(len(assigned))
+            else pd.RangeIndex(n_points)
         )
         base = pd.DataFrame({"geometry": np.asarray(left_geom, dtype=object)}, index=index)
 
@@ -1579,48 +1675,37 @@ def sjoin(
     right_index = (
         candidate_index
         if callable(getattr(candidate_index, "to_numpy", None))
-        else pd.RangeIndex(len(right_geom))
+        else pd.RangeIndex(n_right)
     )
-    right_labels = right_index.to_numpy()
 
-    if how == "inner":
-        out = base.iloc[np.flatnonzero(matched)].copy()
-        out["index_right"] = right_labels[assigned[matched]]
-    else:
+    if how == "left" and not all_matches:
         out = base.copy()
-        col = np.full(len(assigned), np.nan, dtype=object)
-        col[matched] = right_labels[assigned[matched]]
+        # Retain the original first-match left join's object label column.
+        col = np.full(n_points, np.nan, dtype=object)
+        col[matched] = right_index.to_numpy()[assigned[matched]]
         out["index_right"] = col
+    else:
+        out = base.iloc[point_pos].copy()
+        if isinstance(right_index, pd.MultiIndex):
+            out["index_right"] = pd.api.extensions.take(
+                right_index.to_numpy(), right_pos, allow_fill=how == "left"
+            )
+        else:
+            out["index_right"] = right_index.array.take(right_pos, allow_fill=how == "left")
 
     if isinstance(right, pd.DataFrame):
-        right_cols = right
         geom_name = getattr(getattr(right, "geometry", None), "name", None)
         if geom_name is None and "geometry" in right.columns:
             geom_name = "geometry"
-        if geom_name is not None and geom_name in right_cols.columns:
-            right_cols = right_cols.drop(columns=[geom_name])
-        if len(right_cols.columns):
-            # Attach right columns POSITIONALLY. A label-based join on
-            # index_right fans rows out when right index labels repeat and
-            # attaches attributes from polygons that don't contain the point.
-            if how == "inner":
-                pos = assigned[matched]
-                keep = None
-            else:
-                pos = np.where(matched, assigned, 0)
-                keep = matched
-            existing = set(out.columns)
-            for col in right_cols.columns:
-                name = col
-                while name in existing:  # keep suffixing until unique
-                    name = f"{name}_right"
-                existing.add(name)
-                rvals = right_cols[col].to_numpy()
-                if len(rvals):
-                    vals = rvals[pos]
-                    if keep is not None:
-                        vals = pd.Series(vals).where(pd.Series(keep)).to_numpy()
-                else:  # zero right rows: nothing matched, only NaN to carry
-                    vals = np.full(len(pos), np.nan, dtype=object)
-                out[name] = vals
+        existing = set(out.columns)
+        for col in right.columns:
+            if col == geom_name:
+                continue
+            name = col
+            while name in existing:  # keep suffixing until unique
+                name = f"{name}_right"
+            existing.add(name)
+            # ExtensionArray.take preserves nullable, categorical, string,
+            # and datetime dtypes. -1 is a missing row only for a left join.
+            out[name] = right[col].array.take(right_pos, allow_fill=how == "left")
     return out

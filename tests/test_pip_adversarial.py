@@ -604,7 +604,10 @@ def test_multipolygon_parts_share_vertex():
 
 
 def test_high_vertex_count_circle(rng, monkeypatch):
-    """10k-vertex circle: correctness outside the band, no crash, paths agree."""
+    """10k-vertex circle: cooperative fallback paths retain their contract."""
+    # The indexed routes have dedicated parity/launch tests. Keep exercising
+    # the long-ring fallback here even when this geometry is indexable.
+    monkeypatch.setattr(pip_impl, "indexed_pip", lambda *args, **kwargs: None)
     route_calls = _spy_routes(
         monkeypatch,
         {

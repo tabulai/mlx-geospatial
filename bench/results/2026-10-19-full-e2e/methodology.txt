@@ -1,0 +1,31 @@
+date: 2026-10-19
+
+repetitions: 3
+
+warmups: 1
+
+paired_output_checks: 48
+
+output_equality_checked: True
+
+timing: Median of three alternating paired measured trials after one untimed full warmup per method and workload.
+
+included: Fresh PolygonSet/grid/edge indexes, point extraction, GPU query and materialization, exact float64/GEOS boundary refinement, complete joined GeoDataFrames with attributes, and canonical sorting.
+
+excluded: Ready input GeoDataFrame construction/copies, imports and runtime initialization, cold kernel compilation, I/O, correctness validation.
+
+predicate: within
+
+join: inner
+
+matching: All matching point-polygon pairs.
+
+mlx_adapter: Unchanged all-pairs query plus GeoDataFrame attribute assembly; native ms.sjoin is validated separately, not timed here.
+
+cpu_baseline: Native geopandas.sjoin(left, right, how=inner, predicate=within), without parallel partitioning.
+
+verification: 48 paired full-output checks passed; all 25 input fingerprints and every output pair hash match between hosts. The exact same final optimized package was used on both.
+
+prior_tests: The same unchanged wheel previously passed 610 tests per host with Metal validation enabled; this rerun validates all benchmark outputs afresh.
+
+scope: Six synthetic point-in-polygon joins from ready GeoDataFrames; includes index builds, excludes process startup and cold kernel compilation. Different macOS versions across hosts.
