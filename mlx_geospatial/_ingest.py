@@ -457,6 +457,10 @@ class PolygonSet:
             raise ValueError("polygon sets beyond 2^31 vertices are not supported")
 
         self._shapely = arr
+        # Original float64 vertices in ragged order, for the exact-boundary
+        # host edge table (no second to_ragged_array).
+        coords.flags.writeable = False
+        self._coords_f64 = coords
         self.n_polygons = len(arr)
         self.n_rings = len(ring_offsets) - 1
         self.n_vertices = len(coords)
@@ -576,6 +580,7 @@ class PolygonSet:
         self._strtree = None
         self._edge_box_strtree = None
         self._edges_f64_cache = None
+        self._host_edge_grid_cache = False  # False: unbuilt; None: unbuildable.
         self._edges_np_cache = None
         self._bboxes_local_np_cache = None
         self._grid_index = None
@@ -638,15 +643,35 @@ class PolygonSet:
         measure point-to-edge distances on the host.
         """
         if self._edges_f64_cache is None:
-            _, coords, _ = shapely.to_ragged_array(self._shapely)
-            coords = np.asarray(coords, dtype=np.float64)[:, :2]
-            keep = np.ones(len(coords), dtype=bool)
+            # One 16-byte (x, y) item per vertex: boolean selection of the
+            # edge starts and of their successors (the vertex after each kept
+            # one) is several times faster than a (C, 2) fancy-index gather.
+            vertices = np.ascontiguousarray(self._coords_f64, dtype=np.float64)
+            vertices = vertices.view(np.complex128).reshape(-1)
+            keep = np.ones(len(vertices), dtype=bool)
             keep[self._ring_offsets[1:] - 1] = False
-            start_idx = np.flatnonzero(keep)
-            self._edges_f64_cache = np.concatenate(
-                [coords[start_idx], coords[start_idx + 1]], axis=1
-            )
+            edges = np.empty((int(keep.sum()), 2), dtype=np.complex128)
+            edges[:, 0] = vertices[keep]
+            # Vertex C - 1 always closes the last ring, so rolling ``keep``
+            # marks exactly the successors.
+            edges[:, 1] = vertices[np.roll(keep, 1)]
+            self._edges_f64_cache = edges.view(np.float64).reshape(-1, 4)
         return self._edges_f64_cache
+
+    def _host_edge_grid(self):
+        """Cached :class:`~mlx_geospatial._edge_grid.HostEdgeGrid`, or ``None``.
+
+        The float64 uniform grid over the same widened edge envelopes as
+        :meth:`_edge_box_tree`; it answers the same near-boundary rows
+        without building one shapely box per edge.
+        """
+        if self._host_edge_grid_cache is False:
+            from ._edge_grid import HostEdgeGrid
+
+            self._host_edge_grid_cache = HostEdgeGrid.build(
+                self._edges_f64(), self.boundary_tolerance
+            )
+        return self._host_edge_grid_cache
 
     def _edge_box_tree(self) -> shapely.STRtree:
         """Cached STRtree over every edge's envelope widened by the tolerance.

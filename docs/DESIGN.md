@@ -109,14 +109,26 @@ additional edge-work budget. Detailed rings reuse the y-band edge index
 described below. Excessive per-point work, unfavorable edge-index expansion
 and unsafe numerical scales retain the full host route.
 
-Only rows retained by the GPU filter need the exact host band test. When a
-y-band index is already cached and this shortlist is sparse, the host reuses
-its edge references. Bounds over all ragged rings shortlist polygons, then
-the original float64 edge envelopes and point-to-segment arithmetic settle
-the result. This avoids building another index over every edge. The path
-caps point/polygon comparisons and expanded edge pairs before allocation;
-unsafe numerical scales, dense work and CPU queries retain the original
-STRtree over tolerance-widened edge envelopes. All-match
+Only rows retained by the GPU filter need the exact host band test (CPU
+queries test every row). A float64 uniform grid over the tolerance-widened
+edge envelopes, built once per polygon set, finds exactly the rows of an
+STRtree over those envelopes: the envelopes use the same float64 box
+arithmetic, envelope corners and points map to cells through one monotone
+float64 formula (so a point inside an envelope lands in a cell listing that
+edge), each candidate pair re-applies the inclusive envelope test, and the
+float64 point-to-segment arithmetic settles the result. Building it costs a
+few float64 passes and a uint16 radix sort instead of one shapely box per
+edge. A query whose candidate pairs far exceed its rows (a layer too
+clustered for a uniform grid) falls back to that STRtree. GEOS then
+evaluates the predicate for the near rows per (point, polygon) pair, except
+that a single-ring polygon with at least 512 edges and enough near points to
+amortize preparing it (16, or 48 from 10,000 edges) is evaluated
+polygon-major, as `contains`/`covers(polygon, points)` with the polygon
+prepared only for that query: its indexed locator replaces a full walk of
+the ring per pair. On one ring the prepared locator and GEOS relate apply the
+same ray-crossing test, so answers are unchanged even for invalid rings;
+multi-ring geometry, where they can differ on invalid input, keeps the
+per-pair route. All-match
 refinement sorts only the GEOS replacement pairs and merges them into the
 already sorted output; unchanged groups leave the original arrays intact.
 This avoids sorting the complete join after correcting a few boundary rows.
