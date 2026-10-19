@@ -8,6 +8,15 @@ handling, origin/re-centering semantics, and validation errors.
 
 from __future__ import annotations
 
+import os
+import signal
+import subprocess
+import sys
+import threading
+import time
+import warnings
+from pathlib import Path
+
 import numpy as np
 import mlx.core as mx
 import pytest
@@ -15,6 +24,7 @@ import shapely
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 
 import mlx_geospatial as ms
+from mlx_geospatial import _ingest
 from mlx_geospatial._ingest import EdgeData
 from mlx_geospatial._precision import (
     boundary_tolerance,
@@ -760,3 +770,233 @@ def test_as_point_array_fast_path_matches_masked_path():
     np.testing.assert_array_equal(got[:3], xy[:3])
     assert np.isnan(got[3:5]).all()
     np.testing.assert_array_equal(got[5:], xy[3:6])
+
+
+# ---------------------------------------------------------------------------
+# threaded point extraction (object arrays split across a thread pool)
+# ---------------------------------------------------------------------------
+
+_EMPTY_Z = shapely.from_wkt("POINT Z EMPTY")
+
+
+def _get_coordinates_oracle(arr):
+    """The pre-threading single-pass extraction: the bit-exact reference."""
+    arr = np.asarray(arr, dtype=object)
+    type_ids = shapely.get_type_id(arr)
+    if not np.all((type_ids == shapely.GeometryType.POINT.value) | (type_ids == -1)):
+        raise ValueError("object arrays must contain only Point geometries")
+    coords = shapely.get_coordinates(arr)
+    if len(coords) == len(arr):
+        return np.ascontiguousarray(coords, dtype=np.float64)
+    out = np.full((len(arr), 2), np.nan, dtype=np.float64)
+    out[(type_ids == shapely.GeometryType.POINT.value) & ~shapely.is_empty(arr)] = coords
+    return out
+
+
+def _assert_bit_identical(got, expected):
+    assert got.dtype == expected.dtype == np.float64
+    assert got.shape == expected.shape
+    assert got.flags.c_contiguous and got.flags.writeable
+    # uint64 views compare NaN payloads, signed zeros and subnormals exactly.
+    np.testing.assert_array_equal(got.view(np.uint64), expected.view(np.uint64))
+
+
+def _special_points(n, seed):
+    rng = np.random.default_rng(seed)
+    xy = rng.uniform(-180, 180, size=(n, 2))
+    specials = np.array(
+        [-0.0, 5e-324, -5e-324, np.inf, -np.inf, np.nan, 1.7976931348623157e308]
+        + list(np.array([0xFFF8000000000000, 0x7FF0000000000001], np.uint64).view(np.float64))
+    )
+    k = max(1, n // 100)
+    xy[rng.integers(0, n, k), rng.integers(0, 2, k)] = rng.choice(specials, k)
+    return np.array(shapely.points(xy), dtype=object)
+
+
+@pytest.fixture
+def four_workers(monkeypatch):
+    """Chunk across four workers whatever this machine's CPU count."""
+    monkeypatch.setattr(_ingest, "_POINT_WORKERS", 4)
+
+
+@pytest.mark.parametrize("n", [32767, 32768, 65536, 65537, 1_000_000])
+def test_as_point_array_threaded_bit_identical(n, four_workers):
+    rng = np.random.default_rng(n)
+    base = _special_points(n, seed=n)
+    variants = {"plain": base}
+    if n < 1_000_000:
+        missing = base.copy()
+        idx = rng.choice(n, n // 50, replace=False)
+        missing[idx] = np.array([None, Point(), _EMPTY_Z, Point(np.nan, np.nan)], dtype=object)[
+            rng.integers(0, 4, len(idx))
+        ]
+        variants["missing"] = missing
+        last_only = base.copy()
+        last_only[-1] = Point()  # only the last chunk takes the empty-point fallback
+        variants["empty-last"] = last_only
+        variants["all-empty"] = np.array([Point()] * n, dtype=object)
+        variants["all-none"] = np.array([None] * n, dtype=object)
+    for name, arr in variants.items():
+        _assert_bit_identical(ms.as_point_array(arr), _get_coordinates_oracle(arr))
+
+
+def test_as_point_array_threaded_zm_and_containers(four_workers):
+    gpd = pytest.importorskip("geopandas")
+    n = 65537
+    rng = np.random.default_rng(3)
+    xy = rng.uniform(-1, 1, size=(n, 2))
+    z = np.array(shapely.points(np.column_stack([xy, rng.uniform(size=n)])), dtype=object)
+    z[::997] = _EMPTY_Z
+    zm = shapely.from_wkt([f"POINT ZM ({x:.17g} {y:.17g} 1 2)" for x, y in xy[:n]])
+    m = shapely.from_wkt([f"POINT M ({x:.17g} {y:.17g} 2)" for x, y in xy[:n]])
+    for arr in (z, zm, m):
+        _assert_bit_identical(ms.as_point_array(arr), _get_coordinates_oracle(arr))
+    series = gpd.GeoSeries(z)
+    expected = _get_coordinates_oracle(z)
+    for form in (series, series.values, gpd.GeoDataFrame(geometry=series), list(z)):
+        _assert_bit_identical(ms.as_point_array(form), expected)
+    _assert_bit_identical(ms.as_point_array(series.iloc[::-3]), _get_coordinates_oracle(z[::-3]))
+
+
+def test_as_point_array_threaded_uses_chunks(monkeypatch, four_workers):
+    seen = []
+    real = _ingest._fill_point_chunk
+
+    def spy(arr, out):
+        seen.append((len(arr), threading.current_thread().name))
+        return real(arr, out)
+
+    monkeypatch.setattr(_ingest, "_fill_point_chunk", spy)
+    ms.as_point_array(np.array(shapely.points(np.zeros((32768 * 4 + 1, 2))), dtype=object))
+    assert sorted(size for size, _ in seen) == [32768, 32768, 32768, 32769]
+    assert all(name.startswith("mlx_geospatial-points") for _, name in seen)
+    seen.clear()
+    ms.as_point_array(np.array(shapely.points(np.zeros((65535, 2))), dtype=object))
+    assert seen == [(65535, threading.current_thread().name)]  # small: one serial chunk
+
+
+@pytest.mark.parametrize("n", [100, 65537, 262147])
+def test_as_point_array_threaded_error_precedence(n, four_workers):
+    """Same exception type and message as one whole-array pass: a non-geometry
+    object anywhere (TypeError) wins over a non-Point geometry anywhere."""
+    base = np.array(shapely.points(np.ones((n, 2))), dtype=object)
+
+    def outcome(fn, arr):
+        with pytest.raises(Exception) as info:
+            fn(arr)
+        return type(info.value), str(info.value)
+
+    cases = []
+    for first, last in [
+        (shapely.box(0, 0, 1, 1), "not a geometry"),
+        ("not a geometry", shapely.box(0, 0, 1, 1)),
+        (LineString([(0, 0), (1, 1)]), Point()),
+        (Point(), shapely.box(0, 0, 1, 1)),
+        (None, 1.5),
+    ]:
+        arr = base.copy()
+        arr[0], arr[-1] = first, last
+        cases.append(arr)
+    for i in (0, n // 4, n - 1):
+        arr = base.copy()
+        arr[i] = shapely.box(0, 0, 1, 1)
+        cases.append(arr)
+    for arr in cases:
+        assert outcome(ms.as_point_array, arr) == outcome(_get_coordinates_oracle, arr)
+    assert outcome(ms.as_point_array, cases[0])[0] is TypeError
+    assert outcome(ms.as_point_array, cases[-1]) == (
+        ValueError,
+        "object arrays must contain only Point geometries",
+    )
+
+
+@pytest.mark.parametrize("fail_at", [0, 2])
+def test_as_point_array_falls_back_when_pool_refuses(monkeypatch, fail_at, four_workers):
+    """After interpreter shutdown ThreadPoolExecutor.submit raises RuntimeError;
+    extraction must fall back to the serial path, not fail. Chunks already
+    submitted must finish first: one landing later would overwrite a caller's
+    in-place edits of the returned array."""
+    pool = _ingest._point_executor()
+    submitted = []
+
+    def slow(fn, *args):
+        time.sleep(0.2)
+        return fn(*args)
+
+    class Refusing:
+        def submit(self, fn, *args):
+            if len(submitted) == fail_at:
+                raise RuntimeError("cannot schedule new futures after interpreter shutdown")
+            submitted.append(pool.submit(slow, fn, *args))
+            return submitted[-1]
+
+    monkeypatch.setattr(_ingest, "_point_executor", Refusing)
+    arr = _special_points(32768 * 4, seed=11)
+    arr[5] = Point()
+    _assert_bit_identical(ms.as_point_array(arr), _get_coordinates_oracle(arr))
+    assert len(submitted) == fail_at and all(f.done() for f in submitted)
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+def test_as_point_array_threaded_after_fork():
+    """A forked child inherits the pool object but none of its threads; it must
+    build its own instead of queueing work that never runs (deadlock)."""
+    arr = _special_points(200_000, seed=5)
+    expected = _get_coordinates_oracle(arr)
+    _assert_bit_identical(ms.as_point_array(arr), expected)  # parent pool is live
+    assert _ingest._point_pool is not None
+    read_fd, write_fd = os.pipe()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)  # multi-threaded fork
+        pid = os.fork()
+    if pid == 0:  # child: never return into pytest
+        code = 1
+        try:
+            os.close(read_fd)
+            reset = _ingest._point_pool is None
+            got = ms.as_point_array(arr)
+            ok = reset and np.array_equal(got.view(np.uint64), expected.view(np.uint64))
+            os.write(write_fd, b"ok" if ok else b"mismatch")
+            code = 0
+        finally:
+            os._exit(code)
+    os.close(write_fd)
+    deadline = time.monotonic() + 60
+    while True:
+        done, status = os.waitpid(pid, os.WNOHANG)
+        if done:
+            break
+        if time.monotonic() > deadline:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            pytest.fail("as_point_array deadlocked in a forked child")
+        time.sleep(0.01)
+    with os.fdopen(read_fd, "rb") as f:
+        assert f.read() == b"ok"
+    assert os.waitstatus_to_exitcode(status) == 0
+
+
+def test_as_point_array_threaded_at_interpreter_exit(tmp_path):
+    """atexit handlers run after concurrent.futures stops accepting work."""
+    script = tmp_path / "at_exit.py"
+    script.write_text(
+        "import atexit, numpy as np, shapely, mlx_geospatial as ms\n"
+        "print(ms.__file__)\n"
+        "pts = shapely.points(np.arange(400_000.0).reshape(-1, 2))\n"
+        "ms.as_point_array(pts)  # pool already running at exit\n"
+        "atexit.register(lambda: print(ms.as_point_array(pts).sum()))\n"
+    )
+    root = Path(ms.__file__).resolve().parents[1]
+    res = subprocess.run(
+        [sys.executable, str(script)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        cwd=str(root),
+        env={**os.environ, "PYTHONPATH": str(root)},
+    )
+    assert res.returncode == 0, res.stderr
+    lines = res.stdout.split()
+    assert Path(lines[0]).resolve() == Path(ms.__file__).resolve()
+    assert float(lines[1]) == np.arange(400_000.0).sum()
+    assert "Traceback" not in res.stderr
