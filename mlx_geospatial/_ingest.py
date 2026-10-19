@@ -10,8 +10,11 @@ one parity count.
 
 from __future__ import annotations
 
+import os
+import threading
 import warnings
 from collections import namedtuple
+from concurrent.futures import ThreadPoolExecutor, wait
 
 import numpy as np
 import mlx.core as mx
@@ -237,6 +240,91 @@ def _ragged_geometry_bounds(
     return bounds
 
 
+# Object-array point extraction. shapely's get_type_id / get_x / get_y ufuncs
+# release the GIL (get_coordinates does not), so large inputs are split into
+# contiguous chunks and extracted on a small, lazily created thread pool.
+_POINT_CHUNK = 32768
+_POINT_WORKERS = min(8, os.cpu_count() or 1)
+_point_pool = None
+_point_pool_lock = threading.Lock()
+
+
+def _point_executor() -> ThreadPoolExecutor:
+    global _point_pool
+    if _point_pool is None:
+        with _point_pool_lock:
+            if _point_pool is None:
+                _point_pool = ThreadPoolExecutor(
+                    max_workers=_POINT_WORKERS,
+                    thread_name_prefix="mlx_geospatial-points",
+                )
+    return _point_pool
+
+
+def _reset_point_executor_after_fork() -> None:
+    # A forked child inherits the executor object but none of its worker
+    # threads (and possibly a held lock), so submitted work would never run.
+    # Drop both; the child lazily builds its own pool.
+    global _point_pool, _point_pool_lock
+    _point_pool = None
+    _point_pool_lock = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_point_executor_after_fork)
+
+
+def _fill_point_chunk(arr: np.ndarray, out: np.ndarray) -> bool:
+    """Write ``(x, y)`` of a 1-D object array of points into ``out``.
+
+    Returns False, rather than raising, when a non-Point geometry is present,
+    so a ``TypeError`` for a non-geometry object in any chunk still takes
+    precedence over the ``ValueError``, as in one whole-array pass.
+    """
+    type_ids = shapely.get_type_id(arr)
+    # Missing geometries (None) carry type id -1 and become NaN rows.
+    if not np.all((type_ids == GeometryType.POINT.value) | (type_ids == -1)):
+        return False
+    try:
+        shapely.get_x(arr, out=out[:, 0])
+        shapely.get_y(arr, out=out[:, 1])
+    except shapely.errors.GEOSException:
+        # GEOS refuses getX on an empty Point. get_coordinates emits no row
+        # for empty or missing points; preserve alignment with NaN rows
+        # instead of silently shifting every later row.
+        out.fill(np.nan)
+        present = (type_ids == GeometryType.POINT.value) & ~shapely.is_empty(arr)
+        out[present] = shapely.get_coordinates(arr)
+    return True
+
+
+def _point_object_coords(arr: np.ndarray) -> np.ndarray:
+    """``(N, 2)`` float64 coordinates of a 1-D object array of points."""
+    n = len(arr)
+    out = np.empty((n, 2), dtype=np.float64)
+    k = min(_POINT_WORKERS, n // _POINT_CHUNK)
+    ok = None
+    if k > 1:
+        bounds = [i * n // k for i in range(k + 1)]
+        futures = []
+        try:
+            pool = _point_executor()
+            for lo, hi in zip(bounds[:-1], bounds[1:]):
+                futures.append(pool.submit(_fill_point_chunk, arr[lo:hi], out[lo:hi]))
+        except RuntimeError:
+            # Interpreter shutdown: no new futures. Let the submitted chunks
+            # finish, then redo the whole array serially below.
+            wait(futures)
+        else:
+            # In chunk order, so the first chunk's exception wins.
+            ok = all([f.result() for f in futures])
+    if ok is None:
+        ok = _fill_point_chunk(arr, out)
+    if not ok:
+        raise ValueError("object arrays must contain only Point geometries")
+    return out
+
+
 def as_point_array(points) -> np.ndarray:
     """Normalize point input to a float64 ``(N, 2)`` array of ``(x, y)``.
 
@@ -269,22 +357,7 @@ def as_point_array(points) -> np.ndarray:
             raise ValueError(
                 f"expected a 1-D sequence of points, got shape {arr.shape}"
             )
-        type_ids = shapely.get_type_id(arr)
-        # Missing geometries (None) carry type id -1 and are treated like
-        # empty points below.
-        if not np.all((type_ids == GeometryType.POINT.value) | (type_ids == -1)):
-            raise ValueError("object arrays must contain only Point geometries")
-        coords = shapely.get_coordinates(arr)
-        if len(coords) == len(arr):
-            # Every geometry produced one row: no empty or missing points, so
-            # the is_empty pass and the masked copy are unnecessary.
-            return np.ascontiguousarray(coords, dtype=np.float64)
-        # get_coordinates emits no row for empty or missing points; preserve
-        # alignment with NaN rows instead of silently shifting every later row.
-        out = np.full((len(arr), 2), np.nan, dtype=np.float64)
-        present = (type_ids == GeometryType.POINT.value) & ~shapely.is_empty(arr)
-        out[present] = coords
-        return out
+        return _point_object_coords(arr)
     pts = np.asarray(arr, dtype=np.float64)
     if pts.ndim == 1 and pts.size == 2:
         pts = pts[None, :]
