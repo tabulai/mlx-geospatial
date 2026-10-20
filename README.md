@@ -156,6 +156,19 @@ for warm-array, distance, kNN and crossover measurements, including the new
 chord-distance kNN filter. These use different timing and output contracts.
 [Historical measurements](bench/HISTORICAL.md) remain archived separately.
 
+## Warm-index point-in-polygon benchmarks
+
+These component benchmarks reuse the MLX polygon index and report **minimum
+wall times** with `exact_boundary=False`. Each ratio compares a CPU baseline
+with MLX on the same machine; both panels use a **0–2,500× linear scale**.
+
+[![Warm-index point-in-polygon component comparisons on M1 Ultra and M4 Max, using the same ratio scale](bench/results/2026-10-19-opus-speedups/pip-m1-m4-side-by-side.png)](bench/results/2026-10-19-opus-speedups/pip-m1-m4-side-by-side.png)
+
+MLX returns pair arrays, GeoPandas returns a joined frame, and DuckDB returns
+a count. Timed setup differs across methods, so these ratios are not equivalent
+end-to-end join speedups. See the [component tables and timing contracts](bench/results/2026-10-19-opus-speedups/COMPONENTS.md)
+for details, or download the [editable SVG](bench/results/2026-10-19-opus-speedups/pip-m1-m4-side-by-side.svg).
+
 ## API at a glance
 
 | API | Result |

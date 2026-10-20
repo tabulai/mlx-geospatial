@@ -1,0 +1,1295 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="1152pt" height="835.2pt" viewBox="0 0 1152 835.2" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-10-19T20:57:53.246442</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>MLX geospatial benchmark renderer</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 835.2
+L 1152 835.2
+L 1152 0
+L 0 0
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="patch_2">
+   <path d="M 33.408 185.76
+L 182.592 185.76
+Q 192.96 185.76 192.96 178.2432
+L 192.96 103.9968
+Q 192.96 96.48 182.592 96.48
+L 33.408 96.48
+Q 23.04 96.48 23.04 103.9968
+L 23.04 178.2432
+Q 23.04 185.76 33.408 185.76
+z
+" style="fill: #f4f4f4"/>
+  </g>
+  <g id="patch_3">
+   <path d="M 213.408 185.76
+L 362.592 185.76
+Q 372.96 185.76 372.96 178.2432
+L 372.96 103.9968
+Q 372.96 96.48 362.592 96.48
+L 213.408 96.48
+Q 203.04 96.48 203.04 103.9968
+L 203.04 178.2432
+Q 203.04 185.76 213.408 185.76
+z
+" style="fill: #f4f4f4"/>
+  </g>
+  <g id="patch_4">
+   <path d="M 393.408 185.76
+L 542.592 185.76
+Q 552.96 185.76 552.96 178.2432
+L 552.96 103.9968
+Q 552.96 96.48 542.592 96.48
+L 393.408 96.48
+Q 383.04 96.48 383.04 103.9968
+L 383.04 178.2432
+Q 383.04 185.76 393.408 185.76
+z
+" style="fill: #f4f4f4"/>
+  </g>
+  <g id="patch_5">
+   <path d="M 22.32 231.84
+L 24.48 231.84
+L 24.48 203.76
+L 22.32 203.76
+z
+" style="fill: #2e6bd4"/>
+  </g>
+  <g id="patch_6">
+   <path d="M 293.76 268.2
+L 493.92 268.2
+L 493.92 260.28
+L 293.76 260.28
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_7">
+   <path d="M 293.76 268.2
+L 295.168837 268.2
+L 295.168837 260.28
+L 293.76 260.28
+z
+" style="fill: #2e6bd4"/>
+  </g>
+  <g id="patch_8">
+   <path d="M 293.76 291.6
+L 493.92 291.6
+L 493.92 283.68
+L 293.76 283.68
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_9">
+   <path d="M 293.76 291.6
+L 295.342491 291.6
+L 295.342491 283.68
+L 293.76 283.68
+z
+" style="fill: #f4cb42"/>
+  </g>
+  <g id="patch_10">
+   <path d="M 293.76 315
+L 493.92 315
+L 493.92 307.08
+L 293.76 307.08
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_11">
+   <path d="M 293.76 315
+L 297.469845 315
+L 297.469845 307.08
+L 293.76 307.08
+z
+" style="fill: #eb6fab"/>
+  </g>
+  <g id="patch_12">
+   <path d="M 293.76 340.92
+L 493.92 340.92
+L 493.92 333
+L 293.76 333
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_13">
+   <path d="M 293.76 340.92
+L 301.699398 340.92
+L 301.699398 333
+L 293.76 333
+z
+" style="fill: #2e6bd4"/>
+  </g>
+  <g id="patch_14">
+   <path d="M 293.76 364.32
+L 493.92 364.32
+L 493.92 356.4
+L 293.76 356.4
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_15">
+   <path d="M 293.76 364.32
+L 301.743377 364.32
+L 301.743377 356.4
+L 293.76 356.4
+z
+" style="fill: #f4cb42"/>
+  </g>
+  <g id="patch_16">
+   <path d="M 293.76 387.72
+L 493.92 387.72
+L 493.92 379.8
+L 293.76 379.8
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_17">
+   <path d="M 293.76 387.72
+L 296.326275 387.72
+L 296.326275 379.8
+L 293.76 379.8
+z
+" style="fill: #eb6fab"/>
+  </g>
+  <g id="patch_18">
+   <path d="M 293.76 413.64
+L 493.92 413.64
+L 493.92 405.72
+L 293.76 405.72
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_19">
+   <path d="M 293.76 413.64
+L 306.648148 413.64
+L 306.648148 405.72
+L 293.76 405.72
+z
+" style="fill: #2e6bd4"/>
+  </g>
+  <g id="patch_20">
+   <path d="M 293.76 437.04
+L 493.92 437.04
+L 493.92 429.12
+L 293.76 429.12
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_21">
+   <path d="M 293.76 437.04
+L 307.07282 437.04
+L 307.07282 429.12
+L 293.76 429.12
+z
+" style="fill: #f4cb42"/>
+  </g>
+  <g id="patch_22">
+   <path d="M 293.76 460.44
+L 493.92 460.44
+L 493.92 452.52
+L 293.76 452.52
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_23">
+   <path d="M 293.76 460.44
+L 297.950646 460.44
+L 297.950646 452.52
+L 293.76 452.52
+z
+" style="fill: #eb6fab"/>
+  </g>
+  <g id="patch_24">
+   <path d="M 293.76 486.36
+L 493.92 486.36
+L 493.92 478.44
+L 293.76 478.44
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_25">
+   <path d="M 293.76 486.36
+L 301.29159 486.36
+L 301.29159 478.44
+L 293.76 478.44
+z
+" style="fill: #2e6bd4"/>
+  </g>
+  <g id="patch_26">
+   <path d="M 293.76 509.76
+L 493.92 509.76
+L 493.92 501.84
+L 293.76 501.84
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_27">
+   <path d="M 293.76 509.76
+L 301.913106 509.76
+L 301.913106 501.84
+L 293.76 501.84
+z
+" style="fill: #f4cb42"/>
+  </g>
+  <g id="patch_28">
+   <path d="M 293.76 533.16
+L 493.92 533.16
+L 493.92 525.24
+L 293.76 525.24
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_29">
+   <path d="M 293.76 533.16
+L 296.199063 533.16
+L 296.199063 525.24
+L 293.76 525.24
+z
+" style="fill: #eb6fab"/>
+  </g>
+  <g id="patch_30">
+   <path d="M 293.76 559.08
+L 493.92 559.08
+L 493.92 551.16
+L 293.76 551.16
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_31">
+   <path d="M 293.76 559.08
+L 300.060697 559.08
+L 300.060697 551.16
+L 293.76 551.16
+z
+" style="fill: #2e6bd4"/>
+  </g>
+  <g id="patch_32">
+   <path d="M 293.76 582.48
+L 493.92 582.48
+L 493.92 574.56
+L 293.76 574.56
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_33">
+   <path d="M 293.76 582.48
+L 300.219694 582.48
+L 300.219694 574.56
+L 293.76 574.56
+z
+" style="fill: #f4cb42"/>
+  </g>
+  <g id="patch_34">
+   <path d="M 293.76 605.88
+L 493.92 605.88
+L 493.92 597.96
+L 293.76 597.96
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_35">
+   <path d="M 293.76 605.88
+L 309.573661 605.88
+L 309.573661 597.96
+L 293.76 597.96
+z
+" style="fill: #eb6fab"/>
+  </g>
+  <g id="patch_36">
+   <path d="M 293.76 631.8
+L 493.92 631.8
+L 493.92 623.88
+L 293.76 623.88
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_37">
+   <path d="M 293.76 631.8
+L 301.470287 631.8
+L 301.470287 623.88
+L 293.76 623.88
+z
+" style="fill: #2e6bd4"/>
+  </g>
+  <g id="patch_38">
+   <path d="M 293.76 655.2
+L 493.92 655.2
+L 493.92 647.28
+L 293.76 647.28
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_39">
+   <path d="M 293.76 655.2
+L 301.524284 655.2
+L 301.524284 647.28
+L 293.76 647.28
+z
+" style="fill: #f4cb42"/>
+  </g>
+  <g id="patch_40">
+   <path d="M 293.76 678.6
+L 493.92 678.6
+L 493.92 670.68
+L 293.76 670.68
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_41">
+   <path d="M 293.76 678.6
+L 394.780788 678.6
+L 394.780788 670.68
+L 293.76 670.68
+z
+" style="fill: #eb6fab"/>
+  </g>
+  <g id="patch_42">
+   <path d="M 609.408 185.76
+L 758.592 185.76
+Q 768.96 185.76 768.96 178.2432
+L 768.96 103.9968
+Q 768.96 96.48 758.592 96.48
+L 609.408 96.48
+Q 599.04 96.48 599.04 103.9968
+L 599.04 178.2432
+Q 599.04 185.76 609.408 185.76
+z
+" style="fill: #f4f4f4"/>
+  </g>
+  <g id="patch_43">
+   <path d="M 789.408 185.76
+L 938.592 185.76
+Q 948.96 185.76 948.96 178.2432
+L 948.96 103.9968
+Q 948.96 96.48 938.592 96.48
+L 789.408 96.48
+Q 779.04 96.48 779.04 103.9968
+L 779.04 178.2432
+Q 779.04 185.76 789.408 185.76
+z
+" style="fill: #f4f4f4"/>
+  </g>
+  <g id="patch_44">
+   <path d="M 969.408 185.76
+L 1118.592 185.76
+Q 1128.96 185.76 1128.96 178.2432
+L 1128.96 103.9968
+Q 1128.96 96.48 1118.592 96.48
+L 969.408 96.48
+Q 959.04 96.48 959.04 103.9968
+L 959.04 178.2432
+Q 959.04 185.76 969.408 185.76
+z
+" style="fill: #f4f4f4"/>
+  </g>
+  <g id="patch_45">
+   <path d="M 598.32 231.84
+L 600.48 231.84
+L 600.48 203.76
+L 598.32 203.76
+z
+" style="fill: #2e6bd4"/>
+  </g>
+  <g id="patch_46">
+   <path d="M 869.76 268.2
+L 1069.92 268.2
+L 1069.92 260.28
+L 869.76 260.28
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_47">
+   <path d="M 869.76 268.2
+L 871.414358 268.2
+L 871.414358 260.28
+L 869.76 260.28
+z
+" style="fill: #2e6bd4"/>
+  </g>
+  <g id="patch_48">
+   <path d="M 869.76 291.6
+L 1069.92 291.6
+L 1069.92 283.68
+L 869.76 283.68
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_49">
+   <path d="M 869.76 291.6
+L 871.720934 291.6
+L 871.720934 283.68
+L 869.76 283.68
+z
+" style="fill: #f4cb42"/>
+  </g>
+  <g id="patch_50">
+   <path d="M 869.76 315
+L 1069.92 315
+L 1069.92 307.08
+L 869.76 307.08
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_51">
+   <path d="M 869.76 315
+L 875.246739 315
+L 875.246739 307.08
+L 869.76 307.08
+z
+" style="fill: #eb6fab"/>
+  </g>
+  <g id="patch_52">
+   <path d="M 869.76 340.92
+L 1069.92 340.92
+L 1069.92 333
+L 869.76 333
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_53">
+   <path d="M 869.76 340.92
+L 875.855062 340.92
+L 875.855062 333
+L 869.76 333
+z
+" style="fill: #2e6bd4"/>
+  </g>
+  <g id="patch_54">
+   <path d="M 869.76 364.32
+L 1069.92 364.32
+L 1069.92 356.4
+L 869.76 356.4
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_55">
+   <path d="M 869.76 364.32
+L 875.996027 364.32
+L 875.996027 356.4
+L 869.76 356.4
+z
+" style="fill: #f4cb42"/>
+  </g>
+  <g id="patch_56">
+   <path d="M 869.76 387.72
+L 1069.92 387.72
+L 1069.92 379.8
+L 869.76 379.8
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_57">
+   <path d="M 869.76 387.72
+L 874.453075 387.72
+L 874.453075 379.8
+L 869.76 379.8
+z
+" style="fill: #eb6fab"/>
+  </g>
+  <g id="patch_58">
+   <path d="M 869.76 413.64
+L 1069.92 413.64
+L 1069.92 405.72
+L 869.76 405.72
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_59">
+   <path d="M 869.76 413.64
+L 879.008124 413.64
+L 879.008124 405.72
+L 869.76 405.72
+z
+" style="fill: #2e6bd4"/>
+  </g>
+  <g id="patch_60">
+   <path d="M 869.76 437.04
+L 1069.92 437.04
+L 1069.92 429.12
+L 869.76 429.12
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_61">
+   <path d="M 869.76 437.04
+L 879.612774 437.04
+L 879.612774 429.12
+L 869.76 429.12
+z
+" style="fill: #f4cb42"/>
+  </g>
+  <g id="patch_62">
+   <path d="M 869.76 460.44
+L 1069.92 460.44
+L 1069.92 452.52
+L 869.76 452.52
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_63">
+   <path d="M 869.76 460.44
+L 877.345038 460.44
+L 877.345038 452.52
+L 869.76 452.52
+z
+" style="fill: #eb6fab"/>
+  </g>
+  <g id="patch_64">
+   <path d="M 869.76 486.36
+L 1069.92 486.36
+L 1069.92 478.44
+L 869.76 478.44
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_65">
+   <path d="M 869.76 486.36
+L 878.049261 486.36
+L 878.049261 478.44
+L 869.76 478.44
+z
+" style="fill: #2e6bd4"/>
+  </g>
+  <g id="patch_66">
+   <path d="M 869.76 509.76
+L 1069.92 509.76
+L 1069.92 501.84
+L 869.76 501.84
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_67">
+   <path d="M 869.76 509.76
+L 878.353768 509.76
+L 878.353768 501.84
+L 869.76 501.84
+z
+" style="fill: #f4cb42"/>
+  </g>
+  <g id="patch_68">
+   <path d="M 869.76 533.16
+L 1069.92 533.16
+L 1069.92 525.24
+L 869.76 525.24
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_69">
+   <path d="M 869.76 533.16
+L 875.609162 533.16
+L 875.609162 525.24
+L 869.76 525.24
+z
+" style="fill: #eb6fab"/>
+  </g>
+  <g id="patch_70">
+   <path d="M 869.76 559.08
+L 1069.92 559.08
+L 1069.92 551.16
+L 869.76 551.16
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_71">
+   <path d="M 869.76 559.08
+L 879.354291 559.08
+L 879.354291 551.16
+L 869.76 551.16
+z
+" style="fill: #2e6bd4"/>
+  </g>
+  <g id="patch_72">
+   <path d="M 869.76 582.48
+L 1069.92 582.48
+L 1069.92 574.56
+L 869.76 574.56
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_73">
+   <path d="M 869.76 582.48
+L 879.600808 582.48
+L 879.600808 574.56
+L 869.76 574.56
+z
+" style="fill: #f4cb42"/>
+  </g>
+  <g id="patch_74">
+   <path d="M 869.76 605.88
+L 1069.92 605.88
+L 1069.92 597.96
+L 869.76 597.96
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_75">
+   <path d="M 869.76 605.88
+L 892.249646 605.88
+L 892.249646 597.96
+L 869.76 597.96
+z
+" style="fill: #eb6fab"/>
+  </g>
+  <g id="patch_76">
+   <path d="M 869.76 631.8
+L 1069.92 631.8
+L 1069.92 623.88
+L 869.76 623.88
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_77">
+   <path d="M 869.76 631.8
+L 881.670034 631.8
+L 881.670034 623.88
+L 869.76 623.88
+z
+" style="fill: #2e6bd4"/>
+  </g>
+  <g id="patch_78">
+   <path d="M 869.76 655.2
+L 1069.92 655.2
+L 1069.92 647.28
+L 869.76 647.28
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_79">
+   <path d="M 869.76 655.2
+L 881.894755 655.2
+L 881.894755 647.28
+L 869.76 647.28
+z
+" style="fill: #f4cb42"/>
+  </g>
+  <g id="patch_80">
+   <path d="M 869.76 678.6
+L 1069.92 678.6
+L 1069.92 670.68
+L 869.76 670.68
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_81">
+   <path d="M 869.76 678.6
+L 1030.277706 678.6
+L 1030.277706 670.68
+L 869.76 670.68
+z
+" style="fill: #eb6fab"/>
+  </g>
+  <g id="line2d_1">
+   <path d="M 293.76 686.16
+L 493.92 686.16
+" style="fill: none; stroke: #d9dcdf; stroke-width: 0.5; stroke-linecap: square"/>
+  </g>
+  <g id="line2d_2">
+   <path d="M 869.76 686.16
+L 1069.92 686.16
+" style="fill: none; stroke: #d9dcdf; stroke-width: 0.5; stroke-linecap: square"/>
+  </g>
+  <g id="line2d_3">
+   <path d="M 576 810.9792
+L 576 24.2208
+" style="fill: none; stroke: #e6e8ea; stroke-width: 0.7; stroke-linecap: square"/>
+  </g>
+  <g id="text_1">
+   <text style="font-weight: 700; font-size: 20px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="32.080625" transform="rotate(-0 23.04 32.080625)">Point-in-polygon speedups</text>
+  </g>
+  <g id="text_2">
+   <text style="font-weight: 700; font-size: 16.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="57.91575" transform="rotate(-0 23.04 57.91575)">Apple M1 Ultra vs its own CPU</text>
+  </g>
+  <g id="text_3">
+   <text style="font-size: 11.3px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="23.04" y="78.718094" transform="rotate(-0 23.04 78.718094)">20 CPU cores · 64 GPU cores</text>
+  </g>
+  <g id="text_4">
+   <text style="font-size: 11.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="30.24" y="119.7305" transform="rotate(-0 30.24 119.7305)">MLX output</text>
+  </g>
+  <g id="text_5">
+   <text style="font-size: 19px; font-family: 'DejaVu Sans Mono'; text-anchor: start; fill: #25282b" x="30.24" y="146.413281" transform="rotate(-0 30.24 146.413281)">all pairs</text>
+  </g>
+  <g id="text_6">
+   <text style="font-size: 10.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="30.24" y="169.134562" transform="rotate(-0 30.24 169.134562)">Every point–polygon hit</text>
+  </g>
+  <g id="text_7">
+   <text style="font-size: 11.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="210.24" y="119.7305" transform="rotate(-0 210.24 119.7305)">CPU / MLX ratio range</text>
+  </g>
+  <g id="text_8">
+   <text style="font-size: 19px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="210.24" y="146.362813" transform="rotate(-0 210.24 146.362813)">18–1,262×</text>
+  </g>
+  <g id="text_9">
+   <text style="font-size: 10.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="210.24" y="169.134562" transform="rotate(-0 210.24 169.134562)">Across 18 comparisons</text>
+  </g>
+  <g id="text_10">
+   <text style="font-size: 11.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="390.24" y="119.7305" transform="rotate(-0 390.24 119.7305)">Median ratio</text>
+  </g>
+  <g id="text_11">
+   <text style="font-size: 19px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="390.24" y="146.362813" transform="rotate(-0 390.24 146.362813)">95×</text>
+  </g>
+  <g id="text_12">
+   <text style="font-size: 10.2px; font-family: 'DejaVu Sans'; fill: #777c81" transform="translate(390.24 163.036158)">Machine- and workload-</text>
+   <text style="font-size: 10.2px; font-family: 'DejaVu Sans'; fill: #777c81" transform="translate(390.24 175.232967)">specific</text>
+  </g>
+  <g id="text_13">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans Mono'; text-anchor: start; fill: #25282b" x="33.12" y="214.163828" transform="rotate(-0 33.12 214.163828)">all pairs</text>
+  </g>
+  <g id="text_14">
+   <text style="font-size: 10.7px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="33.12" y="230.472531" transform="rotate(-0 33.12 230.472531)">Warm-index MLX · CPU baseline time / MLX time</text>
+  </g>
+  <g id="text_15">
+   <text style="font-size: 12.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="263.369219" transform="rotate(-0 23.04 263.369219)">100k × 260</text>
+  </g>
+  <g id="text_16">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="23.04" y="280.900125" transform="rotate(-0 23.04 280.900125)">48 vertices</text>
+  </g>
+  <g id="text_17">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="298.900125" transform="rotate(-0 23.04 298.900125)">MLX 3.83 ms</text>
+  </g>
+  <g id="text_18">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="260.075312" transform="rotate(-0 164.88 260.075312)">Shapely</text>
+  </g>
+  <g id="text_19">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="272.039375" transform="rotate(-0 164.88 272.039375)">67.4 ms</text>
+  </g>
+  <g id="text_20">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="267.413281" transform="rotate(-0 552.96 267.413281)">18×</text>
+  </g>
+  <g id="text_21">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="283.475312" transform="rotate(-0 164.88 283.475312)">GeoPandas</text>
+  </g>
+  <g id="text_22">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="295.439375" transform="rotate(-0 164.88 295.439375)">75.7 ms</text>
+  </g>
+  <g id="text_23">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="290.813281" transform="rotate(-0 552.96 290.813281)">20×</text>
+  </g>
+  <g id="text_24">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="306.875313" transform="rotate(-0 164.88 306.875313)">DuckDB</text>
+  </g>
+  <g id="text_25">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="318.839375" transform="rotate(-0 164.88 318.839375)">177 ms</text>
+  </g>
+  <g id="text_26">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="314.213281" transform="rotate(-0 552.96 314.213281)">46×</text>
+  </g>
+  <g id="text_27">
+   <text style="font-size: 12.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="336.089219" transform="rotate(-0 23.04 336.089219)">1M × 260</text>
+  </g>
+  <g id="text_28">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="23.04" y="353.620125" transform="rotate(-0 23.04 353.620125)">48 vertices</text>
+  </g>
+  <g id="text_29">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="371.620125" transform="rotate(-0 23.04 371.620125)">MLX 13.9 ms</text>
+  </g>
+  <g id="text_30">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="332.795313" transform="rotate(-0 164.88 332.795313)">Shapely</text>
+  </g>
+  <g id="text_31">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="344.759375" transform="rotate(-0 164.88 344.759375)">1.38 s</text>
+  </g>
+  <g id="text_32">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="340.133281" transform="rotate(-0 552.96 340.133281)">99×</text>
+  </g>
+  <g id="text_33">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="356.195312" transform="rotate(-0 164.88 356.195312)">GeoPandas</text>
+  </g>
+  <g id="text_34">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="368.159375" transform="rotate(-0 164.88 368.159375)">1.39 s</text>
+  </g>
+  <g id="text_35">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="363.533281" transform="rotate(-0 552.96 363.533281)">100×</text>
+  </g>
+  <g id="text_36">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="379.595312" transform="rotate(-0 164.88 379.595312)">DuckDB</text>
+  </g>
+  <g id="text_37">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="391.559375" transform="rotate(-0 164.88 391.559375)">446 ms</text>
+  </g>
+  <g id="text_38">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="386.933281" transform="rotate(-0 552.96 386.933281)">32×</text>
+  </g>
+  <g id="text_39">
+   <text style="font-size: 12.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="408.809219" transform="rotate(-0 23.04 408.809219)">10M × 260</text>
+  </g>
+  <g id="text_40">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="23.04" y="426.340125" transform="rotate(-0 23.04 426.340125)">48 vertices</text>
+  </g>
+  <g id="text_41">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="444.340125" transform="rotate(-0 23.04 444.340125)">MLX 108 ms</text>
+  </g>
+  <g id="text_42">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="405.515312" transform="rotate(-0 164.88 405.515312)">Shapely</text>
+  </g>
+  <g id="text_43">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="417.479375" transform="rotate(-0 164.88 417.479375)">17.4 s</text>
+  </g>
+  <g id="text_44">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="412.853281" transform="rotate(-0 552.96 412.853281)">161×</text>
+  </g>
+  <g id="text_45">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="428.915312" transform="rotate(-0 164.88 428.915312)">GeoPandas</text>
+  </g>
+  <g id="text_46">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="440.879375" transform="rotate(-0 164.88 440.879375)">18.0 s</text>
+  </g>
+  <g id="text_47">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="436.253281" transform="rotate(-0 552.96 436.253281)">166×</text>
+  </g>
+  <g id="text_48">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="452.315312" transform="rotate(-0 164.88 452.315312)">DuckDB</text>
+  </g>
+  <g id="text_49">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="464.279375" transform="rotate(-0 164.88 464.279375)">5.66 s</text>
+  </g>
+  <g id="text_50">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="459.653281" transform="rotate(-0 552.96 459.653281)">52×</text>
+  </g>
+  <g id="text_51">
+   <text style="font-size: 12.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="481.529219" transform="rotate(-0 23.04 481.529219)">1M × 10k</text>
+  </g>
+  <g id="text_52">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="23.04" y="499.060125" transform="rotate(-0 23.04 499.060125)">48 vertices</text>
+  </g>
+  <g id="text_53">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="517.060125" transform="rotate(-0 23.04 517.060125)">MLX 15.1 ms</text>
+  </g>
+  <g id="text_54">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="478.235312" transform="rotate(-0 164.88 478.235312)">Shapely</text>
+  </g>
+  <g id="text_55">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="490.199375" transform="rotate(-0 164.88 490.199375)">1.42 s</text>
+  </g>
+  <g id="text_56">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="485.573281" transform="rotate(-0 552.96 485.573281)">94×</text>
+  </g>
+  <g id="text_57">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="501.635312" transform="rotate(-0 164.88 501.635312)">GeoPandas</text>
+  </g>
+  <g id="text_58">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="513.599375" transform="rotate(-0 164.88 513.599375)">1.54 s</text>
+  </g>
+  <g id="text_59">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="508.973281" transform="rotate(-0 552.96 508.973281)">102×</text>
+  </g>
+  <g id="text_60">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="525.035312" transform="rotate(-0 164.88 525.035312)">DuckDB</text>
+  </g>
+  <g id="text_61">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="536.999375" transform="rotate(-0 164.88 536.999375)">460 ms</text>
+  </g>
+  <g id="text_62">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="532.373281" transform="rotate(-0 552.96 532.373281)">30×</text>
+  </g>
+  <g id="text_63">
+   <text style="font-size: 12.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="554.249219" transform="rotate(-0 23.04 554.249219)">1M × 260</text>
+  </g>
+  <g id="text_64">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="23.04" y="571.780125" transform="rotate(-0 23.04 571.780125)">2,048 vertices</text>
+  </g>
+  <g id="text_65">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="589.780125" transform="rotate(-0 23.04 589.780125)">MLX 18.9 ms</text>
+  </g>
+  <g id="text_66">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="550.955312" transform="rotate(-0 164.88 550.955312)">Shapely</text>
+  </g>
+  <g id="text_67">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="562.919375" transform="rotate(-0 164.88 562.919375)">1.49 s</text>
+  </g>
+  <g id="text_68">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="558.293281" transform="rotate(-0 552.96 558.293281)">79×</text>
+  </g>
+  <g id="text_69">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="574.355312" transform="rotate(-0 164.88 574.355312)">GeoPandas</text>
+  </g>
+  <g id="text_70">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="586.319375" transform="rotate(-0 164.88 586.319375)">1.52 s</text>
+  </g>
+  <g id="text_71">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="581.693281" transform="rotate(-0 552.96 581.693281)">81×</text>
+  </g>
+  <g id="text_72">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="597.755312" transform="rotate(-0 164.88 597.755312)">DuckDB</text>
+  </g>
+  <g id="text_73">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="609.719375" transform="rotate(-0 164.88 609.719375)">3.73 s</text>
+  </g>
+  <g id="text_74">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="605.093281" transform="rotate(-0 552.96 605.093281)">198×</text>
+  </g>
+  <g id="text_75">
+   <text style="font-size: 12.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="626.969219" transform="rotate(-0 23.04 626.969219)">1M × 1</text>
+  </g>
+  <g id="text_76">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="23.04" y="644.500125" transform="rotate(-0 23.04 644.500125)">150k vertices</text>
+  </g>
+  <g id="text_77">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="662.500125" transform="rotate(-0 23.04 662.500125)">MLX 29.4 ms</text>
+  </g>
+  <g id="text_78">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="623.675312" transform="rotate(-0 164.88 623.675312)">Shapely</text>
+  </g>
+  <g id="text_79">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="635.639375" transform="rotate(-0 164.88 635.639375)">2.84 s</text>
+  </g>
+  <g id="text_80">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="631.013281" transform="rotate(-0 552.96 631.013281)">96×</text>
+  </g>
+  <g id="text_81">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="647.075312" transform="rotate(-0 164.88 647.075312)">GeoPandas</text>
+  </g>
+  <g id="text_82">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="659.039375" transform="rotate(-0 164.88 659.039375)">2.86 s</text>
+  </g>
+  <g id="text_83">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="654.413281" transform="rotate(-0 552.96 654.413281)">97×</text>
+  </g>
+  <g id="text_84">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="670.475312" transform="rotate(-0 164.88 670.475312)">DuckDB</text>
+  </g>
+  <g id="text_85">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="164.88" y="682.439375" transform="rotate(-0 164.88 682.439375)">37.2 s</text>
+  </g>
+  <g id="text_86">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="677.813281" transform="rotate(-0 552.96 677.813281)">1,262×</text>
+  </g>
+  <g id="text_87">
+   <text style="font-size: 9.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="293.76" y="700.301406" transform="rotate(-0 293.76 700.301406)">0×</text>
+  </g>
+  <g id="text_88">
+   <text style="font-size: 9.5px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #777c81" x="393.84" y="700.301406" transform="rotate(-0 393.84 700.301406)">1,250×</text>
+  </g>
+  <g id="text_89">
+   <text style="font-size: 9.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #777c81" x="493.92" y="700.301406" transform="rotate(-0 493.92 700.301406)">2,500×</text>
+  </g>
+  <g id="text_90">
+   <text style="font-size: 9.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="23.04" y="724.570687" transform="rotate(-0 23.04 724.570687)">Warm-index all-pairs · host inputs · exact_boundary=False</text>
+  </g>
+  <g id="text_91">
+   <text style="font-size: 9.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="23.04" y="739.818625" transform="rotate(-0 23.04 739.818625)">MLX: pair arrays; GeoPandas: joined frame; DuckDB: count only</text>
+  </g>
+  <g id="text_92">
+   <text style="font-size: 9.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="23.04" y="754.938625" transform="rotate(-0 23.04 754.938625)">Shapely / GeoPandas include point creation and spatial index builds</text>
+  </g>
+  <g id="text_93">
+   <text style="font-size: 9.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="23.04" y="770.058625" transform="rotate(-0 23.04 770.058625)">Shapely / GeoPandas: 1 CPU core; DuckDB: 20 threads</text>
+  </g>
+  <g id="text_94">
+   <text style="font-size: 9.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="23.04" y="785.178625" transform="rotate(-0 23.04 785.178625)">MLX/Shapely: best of 3; DuckDB: best of 2; GeoPandas: best of 3 (10M: 1 run)</text>
+  </g>
+  <g id="text_95">
+   <text style="font-size: 9.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="23.04" y="800.298625" transform="rotate(-0 23.04 800.298625)">Measured 2026-10-19 · source 8805228 · shared linear scale 0–2,500×</text>
+  </g>
+  <g id="text_96">
+   <text style="font-size: 9.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="23.04" y="815.418625" transform="rotate(-0 23.04 815.418625)">Different output and timing contracts; these are component benchmark ratios.</text>
+  </g>
+  <g id="text_97">
+   <text style="font-weight: 700; font-size: 20px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="599.04" y="32.080625" transform="rotate(-0 599.04 32.080625)">Point-in-polygon speedups</text>
+  </g>
+  <g id="text_98">
+   <text style="font-weight: 700; font-size: 16.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="599.04" y="57.91575" transform="rotate(-0 599.04 57.91575)">Apple M4 Max vs its own CPU</text>
+  </g>
+  <g id="text_99">
+   <text style="font-size: 11.3px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="599.04" y="78.718094" transform="rotate(-0 599.04 78.718094)">16 CPU cores · 40 GPU cores</text>
+  </g>
+  <g id="text_100">
+   <text style="font-size: 11.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="606.24" y="119.7305" transform="rotate(-0 606.24 119.7305)">MLX output</text>
+  </g>
+  <g id="text_101">
+   <text style="font-size: 19px; font-family: 'DejaVu Sans Mono'; text-anchor: start; fill: #25282b" x="606.24" y="146.413281" transform="rotate(-0 606.24 146.413281)">all pairs</text>
+  </g>
+  <g id="text_102">
+   <text style="font-size: 10.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="606.24" y="169.134562" transform="rotate(-0 606.24 169.134562)">Every point–polygon hit</text>
+  </g>
+  <g id="text_103">
+   <text style="font-size: 11.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="786.24" y="119.7305" transform="rotate(-0 786.24 119.7305)">CPU / MLX ratio range</text>
+  </g>
+  <g id="text_104">
+   <text style="font-size: 19px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="786.24" y="146.362813" transform="rotate(-0 786.24 146.362813)">21–2,005×</text>
+  </g>
+  <g id="text_105">
+   <text style="font-size: 10.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="786.24" y="169.134562" transform="rotate(-0 786.24 169.134562)">Across 18 comparisons</text>
+  </g>
+  <g id="text_106">
+   <text style="font-size: 11.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="966.24" y="119.7305" transform="rotate(-0 966.24 119.7305)">Median ratio</text>
+  </g>
+  <g id="text_107">
+   <text style="font-size: 19px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="966.24" y="146.362813" transform="rotate(-0 966.24 146.362813)">105×</text>
+  </g>
+  <g id="text_108">
+   <text style="font-size: 10.2px; font-family: 'DejaVu Sans'; fill: #777c81" transform="translate(966.24 163.036158)">Machine- and workload-</text>
+   <text style="font-size: 10.2px; font-family: 'DejaVu Sans'; fill: #777c81" transform="translate(966.24 175.232967)">specific</text>
+  </g>
+  <g id="text_109">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans Mono'; text-anchor: start; fill: #25282b" x="609.12" y="214.163828" transform="rotate(-0 609.12 214.163828)">all pairs</text>
+  </g>
+  <g id="text_110">
+   <text style="font-size: 10.7px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="609.12" y="230.472531" transform="rotate(-0 609.12 230.472531)">Warm-index MLX · CPU baseline time / MLX time</text>
+  </g>
+  <g id="text_111">
+   <text style="font-size: 12.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="599.04" y="263.369219" transform="rotate(-0 599.04 263.369219)">100k × 260</text>
+  </g>
+  <g id="text_112">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="599.04" y="280.900125" transform="rotate(-0 599.04 280.900125)">48 vertices</text>
+  </g>
+  <g id="text_113">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="599.04" y="298.900125" transform="rotate(-0 599.04 298.900125)">MLX 1.89 ms</text>
+  </g>
+  <g id="text_114">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="260.075312" transform="rotate(-0 740.88 260.075312)">Shapely</text>
+  </g>
+  <g id="text_115">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="272.039375" transform="rotate(-0 740.88 272.039375)">39.0 ms</text>
+  </g>
+  <g id="text_116">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="1128.96" y="267.413281" transform="rotate(-0 1128.96 267.413281)">21×</text>
+  </g>
+  <g id="text_117">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="283.475312" transform="rotate(-0 740.88 283.475312)">GeoPandas</text>
+  </g>
+  <g id="text_118">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="295.439375" transform="rotate(-0 740.88 295.439375)">46.3 ms</text>
+  </g>
+  <g id="text_119">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="1128.96" y="290.813281" transform="rotate(-0 1128.96 290.813281)">24×</text>
+  </g>
+  <g id="text_120">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="306.875313" transform="rotate(-0 740.88 306.875313)">DuckDB</text>
+  </g>
+  <g id="text_121">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="318.839375" transform="rotate(-0 740.88 318.839375)">129 ms</text>
+  </g>
+  <g id="text_122">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="1128.96" y="314.213281" transform="rotate(-0 1128.96 314.213281)">69×</text>
+  </g>
+  <g id="text_123">
+   <text style="font-size: 12.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="599.04" y="336.089219" transform="rotate(-0 599.04 336.089219)">1M × 260</text>
+  </g>
+  <g id="text_124">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="599.04" y="353.620125" transform="rotate(-0 599.04 353.620125)">48 vertices</text>
+  </g>
+  <g id="text_125">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="599.04" y="371.620125" transform="rotate(-0 599.04 371.620125)">MLX 9.16 ms</text>
+  </g>
+  <g id="text_126">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="332.795313" transform="rotate(-0 740.88 332.795313)">Shapely</text>
+  </g>
+  <g id="text_127">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="344.759375" transform="rotate(-0 740.88 344.759375)">698 ms</text>
+  </g>
+  <g id="text_128">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="1128.96" y="340.133281" transform="rotate(-0 1128.96 340.133281)">76×</text>
+  </g>
+  <g id="text_129">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="356.195312" transform="rotate(-0 740.88 356.195312)">GeoPandas</text>
+  </g>
+  <g id="text_130">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="368.159375" transform="rotate(-0 740.88 368.159375)">714 ms</text>
+  </g>
+  <g id="text_131">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="1128.96" y="363.533281" transform="rotate(-0 1128.96 363.533281)">78×</text>
+  </g>
+  <g id="text_132">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="379.595312" transform="rotate(-0 740.88 379.595312)">DuckDB</text>
+  </g>
+  <g id="text_133">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="391.559375" transform="rotate(-0 740.88 391.559375)">537 ms</text>
+  </g>
+  <g id="text_134">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="1128.96" y="386.933281" transform="rotate(-0 1128.96 386.933281)">59×</text>
+  </g>
+  <g id="text_135">
+   <text style="font-size: 12.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="599.04" y="408.809219" transform="rotate(-0 599.04 408.809219)">10M × 260</text>
+  </g>
+  <g id="text_136">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="599.04" y="426.340125" transform="rotate(-0 599.04 426.340125)">48 vertices</text>
+  </g>
+  <g id="text_137">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="599.04" y="444.340125" transform="rotate(-0 599.04 444.340125)">MLX 69.3 ms</text>
+  </g>
+  <g id="text_138">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="405.515312" transform="rotate(-0 740.88 405.515312)">Shapely</text>
+  </g>
+  <g id="text_139">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="417.479375" transform="rotate(-0 740.88 417.479375)">8.01 s</text>
+  </g>
+  <g id="text_140">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="1128.96" y="412.853281" transform="rotate(-0 1128.96 412.853281)">116×</text>
+  </g>
+  <g id="text_141">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="428.915312" transform="rotate(-0 740.88 428.915312)">GeoPandas</text>
+  </g>
+  <g id="text_142">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="440.879375" transform="rotate(-0 740.88 440.879375)">8.53 s</text>
+  </g>
+  <g id="text_143">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="1128.96" y="436.253281" transform="rotate(-0 1128.96 436.253281)">123×</text>
+  </g>
+  <g id="text_144">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="452.315312" transform="rotate(-0 740.88 452.315312)">DuckDB</text>
+  </g>
+  <g id="text_145">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="464.279375" transform="rotate(-0 740.88 464.279375)">6.57 s</text>
+  </g>
+  <g id="text_146">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="1128.96" y="459.653281" transform="rotate(-0 1128.96 459.653281)">95×</text>
+  </g>
+  <g id="text_147">
+   <text style="font-size: 12.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="599.04" y="481.529219" transform="rotate(-0 599.04 481.529219)">1M × 10k</text>
+  </g>
+  <g id="text_148">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="599.04" y="499.060125" transform="rotate(-0 599.04 499.060125)">48 vertices</text>
+  </g>
+  <g id="text_149">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="599.04" y="517.060125" transform="rotate(-0 599.04 517.060125)">MLX 7.79 ms</text>
+  </g>
+  <g id="text_150">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="478.235312" transform="rotate(-0 740.88 478.235312)">Shapely</text>
+  </g>
+  <g id="text_151">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="490.199375" transform="rotate(-0 740.88 490.199375)">807 ms</text>
+  </g>
+  <g id="text_152">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="1128.96" y="485.573281" transform="rotate(-0 1128.96 485.573281)">104×</text>
+  </g>
+  <g id="text_153">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="501.635312" transform="rotate(-0 740.88 501.635312)">GeoPandas</text>
+  </g>
+  <g id="text_154">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="513.599375" transform="rotate(-0 740.88 513.599375)">837 ms</text>
+  </g>
+  <g id="text_155">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="1128.96" y="508.973281" transform="rotate(-0 1128.96 508.973281)">107×</text>
+  </g>
+  <g id="text_156">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="525.035312" transform="rotate(-0 740.88 525.035312)">DuckDB</text>
+  </g>
+  <g id="text_157">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="536.999375" transform="rotate(-0 740.88 536.999375)">569 ms</text>
+  </g>
+  <g id="text_158">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="1128.96" y="532.373281" transform="rotate(-0 1128.96 532.373281)">73×</text>
+  </g>
+  <g id="text_159">
+   <text style="font-size: 12.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="599.04" y="554.249219" transform="rotate(-0 599.04 554.249219)">1M × 260</text>
+  </g>
+  <g id="text_160">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="599.04" y="571.780125" transform="rotate(-0 599.04 571.780125)">2,048 vertices</text>
+  </g>
+  <g id="text_161">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="599.04" y="589.780125" transform="rotate(-0 599.04 589.780125)">MLX 7.95 ms</text>
+  </g>
+  <g id="text_162">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="550.955312" transform="rotate(-0 740.88 550.955312)">Shapely</text>
+  </g>
+  <g id="text_163">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="562.919375" transform="rotate(-0 740.88 562.919375)">953 ms</text>
+  </g>
+  <g id="text_164">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="1128.96" y="558.293281" transform="rotate(-0 1128.96 558.293281)">120×</text>
+  </g>
+  <g id="text_165">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="574.355312" transform="rotate(-0 740.88 574.355312)">GeoPandas</text>
+  </g>
+  <g id="text_166">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="586.319375" transform="rotate(-0 740.88 586.319375)">977 ms</text>
+  </g>
+  <g id="text_167">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="1128.96" y="581.693281" transform="rotate(-0 1128.96 581.693281)">123×</text>
+  </g>
+  <g id="text_168">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="597.755312" transform="rotate(-0 740.88 597.755312)">DuckDB</text>
+  </g>
+  <g id="text_169">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="609.719375" transform="rotate(-0 740.88 609.719375)">2.23 s</text>
+  </g>
+  <g id="text_170">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="1128.96" y="605.093281" transform="rotate(-0 1128.96 605.093281)">281×</text>
+  </g>
+  <g id="text_171">
+   <text style="font-size: 12.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="599.04" y="626.969219" transform="rotate(-0 599.04 626.969219)">1M × 1</text>
+  </g>
+  <g id="text_172">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="599.04" y="644.500125" transform="rotate(-0 599.04 644.500125)">150k vertices</text>
+  </g>
+  <g id="text_173">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="599.04" y="662.500125" transform="rotate(-0 599.04 662.500125)">MLX 11.4 ms</text>
+  </g>
+  <g id="text_174">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="623.675312" transform="rotate(-0 740.88 623.675312)">Shapely</text>
+  </g>
+  <g id="text_175">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="635.639375" transform="rotate(-0 740.88 635.639375)">1.70 s</text>
+  </g>
+  <g id="text_176">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="1128.96" y="631.013281" transform="rotate(-0 1128.96 631.013281)">149×</text>
+  </g>
+  <g id="text_177">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="647.075312" transform="rotate(-0 740.88 647.075312)">GeoPandas</text>
+  </g>
+  <g id="text_178">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="659.039375" transform="rotate(-0 740.88 659.039375)">1.73 s</text>
+  </g>
+  <g id="text_179">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="1128.96" y="654.413281" transform="rotate(-0 1128.96 654.413281)">152×</text>
+  </g>
+  <g id="text_180">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="670.475312" transform="rotate(-0 740.88 670.475312)">DuckDB</text>
+  </g>
+  <g id="text_181">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="740.88" y="682.439375" transform="rotate(-0 740.88 682.439375)">22.9 s</text>
+  </g>
+  <g id="text_182">
+   <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="1128.96" y="677.813281" transform="rotate(-0 1128.96 677.813281)">2,005×</text>
+  </g>
+  <g id="text_183">
+   <text style="font-size: 9.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="869.76" y="700.301406" transform="rotate(-0 869.76 700.301406)">0×</text>
+  </g>
+  <g id="text_184">
+   <text style="font-size: 9.5px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #777c81" x="969.84" y="700.301406" transform="rotate(-0 969.84 700.301406)">1,250×</text>
+  </g>
+  <g id="text_185">
+   <text style="font-size: 9.5px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #777c81" x="1069.92" y="700.301406" transform="rotate(-0 1069.92 700.301406)">2,500×</text>
+  </g>
+  <g id="text_186">
+   <text style="font-size: 9.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="599.04" y="724.570687" transform="rotate(-0 599.04 724.570687)">Warm-index all-pairs · host inputs · exact_boundary=False</text>
+  </g>
+  <g id="text_187">
+   <text style="font-size: 9.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="599.04" y="739.818625" transform="rotate(-0 599.04 739.818625)">MLX: pair arrays; GeoPandas: joined frame; DuckDB: count only</text>
+  </g>
+  <g id="text_188">
+   <text style="font-size: 9.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="599.04" y="754.938625" transform="rotate(-0 599.04 754.938625)">Shapely / GeoPandas include point creation and spatial index builds</text>
+  </g>
+  <g id="text_189">
+   <text style="font-size: 9.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="599.04" y="770.058625" transform="rotate(-0 599.04 770.058625)">Shapely / GeoPandas: 1 CPU core; DuckDB: 16 threads</text>
+  </g>
+  <g id="text_190">
+   <text style="font-size: 9.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="599.04" y="785.178625" transform="rotate(-0 599.04 785.178625)">MLX/Shapely: best of 3; DuckDB: best of 2; GeoPandas: best of 3 (10M: 1 run)</text>
+  </g>
+  <g id="text_191">
+   <text style="font-size: 9.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="599.04" y="800.298625" transform="rotate(-0 599.04 800.298625)">Measured 2026-10-19 · source 8805228 · shared linear scale 0–2,500×</text>
+  </g>
+  <g id="text_192">
+   <text style="font-size: 9.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #777c81" x="599.04" y="815.418625" transform="rotate(-0 599.04 815.418625)">Different output and timing contracts; these are component benchmark ratios.</text>
+  </g>
+ </g>
+</svg>
