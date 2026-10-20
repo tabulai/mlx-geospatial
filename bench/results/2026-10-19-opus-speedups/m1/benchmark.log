@@ -1,0 +1,128 @@
+Running exact-boundary correctness fixture: M1 Ultra
+Correctness fixture PASS
+case=0 phase=warmup trial=0 method=mlx start
+case=0 phase=warmup trial=0 method=mlx seconds=0.065676 rows=109,267
+case=0 phase=warmup trial=0 method=geopandas start
+case=0 phase=warmup trial=0 method=geopandas seconds=0.081056 rows=109,267
+case=0 phase=warmup trial=0 equality=PASS rows=109,267
+case=0 phase=measured trial=1 method=geopandas start
+case=0 phase=measured trial=1 method=geopandas seconds=0.116458 rows=109,267
+case=0 phase=measured trial=1 method=mlx start
+case=0 phase=measured trial=1 method=mlx seconds=0.023250 rows=109,267
+case=0 phase=measured trial=1 equality=PASS rows=109,267
+case=0 phase=measured trial=2 method=mlx start
+case=0 phase=measured trial=2 method=mlx seconds=0.022921 rows=109,267
+case=0 phase=measured trial=2 method=geopandas start
+case=0 phase=measured trial=2 method=geopandas seconds=0.086640 rows=109,267
+case=0 phase=measured trial=2 equality=PASS rows=109,267
+case=0 phase=measured trial=3 method=geopandas start
+case=0 phase=measured trial=3 method=geopandas seconds=0.079672 rows=109,267
+case=0 phase=measured trial=3 method=mlx start
+case=0 phase=measured trial=3 method=mlx seconds=0.022186 rows=109,267
+case=0 phase=measured trial=3 equality=PASS rows=109,267
+case=0 complete median_speedup=3.7800x
+case=1 phase=warmup trial=0 method=geopandas start
+case=1 phase=warmup trial=0 method=geopandas seconds=1.689617 rows=1,076,307
+case=1 phase=warmup trial=0 method=mlx start
+case=1 phase=warmup trial=0 method=mlx seconds=0.177986 rows=1,076,307
+case=1 phase=warmup trial=0 equality=PASS rows=1,076,307
+case=1 phase=measured trial=1 method=mlx start
+case=1 phase=measured trial=1 method=mlx seconds=0.151113 rows=1,076,307
+case=1 phase=measured trial=1 method=geopandas start
+case=1 phase=measured trial=1 method=geopandas seconds=1.674637 rows=1,076,307
+case=1 phase=measured trial=1 equality=PASS rows=1,076,307
+case=1 phase=measured trial=2 method=geopandas start
+case=1 phase=measured trial=2 method=geopandas seconds=1.751069 rows=1,076,307
+case=1 phase=measured trial=2 method=mlx start
+case=1 phase=measured trial=2 method=mlx seconds=0.175346 rows=1,076,307
+case=1 phase=measured trial=2 equality=PASS rows=1,076,307
+case=1 phase=measured trial=3 method=mlx start
+case=1 phase=measured trial=3 method=mlx seconds=0.157111 rows=1,076,307
+case=1 phase=measured trial=3 method=geopandas start
+case=1 phase=measured trial=3 method=geopandas seconds=1.501053 rows=1,076,307
+case=1 phase=measured trial=3 equality=PASS rows=1,076,307
+case=1 complete median_speedup=10.6589x
+case=2 phase=warmup trial=0 method=mlx start
+case=2 phase=warmup trial=0 method=mlx seconds=2.598447 rows=10,689,126
+case=2 phase=warmup trial=0 method=geopandas start
+case=2 phase=warmup trial=0 method=geopandas seconds=22.504755 rows=10,689,126
+case=2 phase=warmup trial=0 equality=PASS rows=10,689,126
+case=2 phase=measured trial=1 method=geopandas start
+case=2 phase=measured trial=1 method=geopandas seconds=22.395319 rows=10,689,126
+case=2 phase=measured trial=1 method=mlx start
+case=2 phase=measured trial=1 method=mlx seconds=2.335570 rows=10,689,126
+case=2 phase=measured trial=1 equality=PASS rows=10,689,126
+case=2 phase=measured trial=2 method=mlx start
+case=2 phase=measured trial=2 method=mlx seconds=2.317329 rows=10,689,126
+case=2 phase=measured trial=2 method=geopandas start
+case=2 phase=measured trial=2 method=geopandas seconds=22.102031 rows=10,689,126
+case=2 phase=measured trial=2 equality=PASS rows=10,689,126
+case=2 phase=measured trial=3 method=geopandas start
+case=2 phase=measured trial=3 method=geopandas seconds=22.227567 rows=10,689,126
+case=2 phase=measured trial=3 method=mlx start
+case=2 phase=measured trial=3 method=mlx seconds=2.361268 rows=10,689,126
+case=2 phase=measured trial=3 equality=PASS rows=10,689,126
+case=2 complete median_speedup=9.5170x
+case=3 phase=warmup trial=0 method=geopandas start
+case=3 phase=warmup trial=0 method=geopandas seconds=1.633570 rows=1,121,558
+case=3 phase=warmup trial=0 method=mlx start
+case=3 phase=warmup trial=0 method=mlx seconds=0.320881 rows=1,121,558
+case=3 phase=warmup trial=0 equality=PASS rows=1,121,558
+case=3 phase=measured trial=1 method=mlx start
+case=3 phase=measured trial=1 method=mlx seconds=0.248963 rows=1,121,558
+case=3 phase=measured trial=1 method=geopandas start
+case=3 phase=measured trial=1 method=geopandas seconds=1.598086 rows=1,121,558
+case=3 phase=measured trial=1 equality=PASS rows=1,121,558
+case=3 phase=measured trial=2 method=geopandas start
+case=3 phase=measured trial=2 method=geopandas seconds=1.588134 rows=1,121,558
+case=3 phase=measured trial=2 method=mlx start
+case=3 phase=measured trial=2 method=mlx seconds=0.287746 rows=1,121,558
+case=3 phase=measured trial=2 equality=PASS rows=1,121,558
+case=3 phase=measured trial=3 method=mlx start
+case=3 phase=measured trial=3 method=mlx seconds=0.262630 rows=1,121,558
+case=3 phase=measured trial=3 method=geopandas start
+case=3 phase=measured trial=3 method=geopandas seconds=1.627313 rows=1,121,558
+case=3 phase=measured trial=3 equality=PASS rows=1,121,558
+case=3 complete median_speedup=6.0849x
+case=4 phase=warmup trial=0 method=mlx start
+case=4 phase=warmup trial=0 method=mlx seconds=0.284918 rows=1,076,107
+case=4 phase=warmup trial=0 method=geopandas start
+case=4 phase=warmup trial=0 method=geopandas seconds=1.582069 rows=1,076,107
+case=4 phase=warmup trial=0 equality=PASS rows=1,076,107
+case=4 phase=measured trial=1 method=geopandas start
+case=4 phase=measured trial=1 method=geopandas seconds=1.598438 rows=1,076,107
+case=4 phase=measured trial=1 method=mlx start
+case=4 phase=measured trial=1 method=mlx seconds=0.246430 rows=1,076,107
+case=4 phase=measured trial=1 equality=PASS rows=1,076,107
+case=4 phase=measured trial=2 method=mlx start
+case=4 phase=measured trial=2 method=mlx seconds=0.223345 rows=1,076,107
+case=4 phase=measured trial=2 method=geopandas start
+case=4 phase=measured trial=2 method=geopandas seconds=1.689600 rows=1,076,107
+case=4 phase=measured trial=2 equality=PASS rows=1,076,107
+case=4 phase=measured trial=3 method=geopandas start
+case=4 phase=measured trial=3 method=geopandas seconds=1.585957 rows=1,076,107
+case=4 phase=measured trial=3 method=mlx start
+case=4 phase=measured trial=3 method=mlx seconds=0.251571 rows=1,076,107
+case=4 phase=measured trial=3 equality=PASS rows=1,076,107
+case=4 complete median_speedup=6.4864x
+case=5 phase=warmup trial=0 method=geopandas start
+case=5 phase=warmup trial=0 method=geopandas seconds=2.756639 rows=217,315
+case=5 phase=warmup trial=0 method=mlx start
+case=5 phase=warmup trial=0 method=mlx seconds=0.172532 rows=217,315
+case=5 phase=warmup trial=0 equality=PASS rows=217,315
+case=5 phase=measured trial=1 method=mlx start
+case=5 phase=measured trial=1 method=mlx seconds=0.146267 rows=217,315
+case=5 phase=measured trial=1 method=geopandas start
+case=5 phase=measured trial=1 method=geopandas seconds=2.731515 rows=217,315
+case=5 phase=measured trial=1 equality=PASS rows=217,315
+case=5 phase=measured trial=2 method=geopandas start
+case=5 phase=measured trial=2 method=geopandas seconds=2.725792 rows=217,315
+case=5 phase=measured trial=2 method=mlx start
+case=5 phase=measured trial=2 method=mlx seconds=0.173694 rows=217,315
+case=5 phase=measured trial=2 equality=PASS rows=217,315
+case=5 phase=measured trial=3 method=mlx start
+case=5 phase=measured trial=3 method=mlx seconds=0.145339 rows=217,315
+case=5 phase=measured trial=3 method=geopandas start
+case=5 phase=measured trial=3 method=geopandas seconds=2.729949 rows=217,315
+case=5 phase=measured trial=3 equality=PASS rows=217,315
+case=5 complete median_speedup=18.6642x

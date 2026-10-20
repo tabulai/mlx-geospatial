@@ -1,0 +1,24 @@
+{
+  "hosts": [
+    "m1",
+    "m4"
+  ],
+  "paired_output_checks": 48,
+  "tests": "721 passed on M1 Ultra; 721 passed on M4 Max",
+  "summary": {
+    "m1": {
+      "min": 3.780011295899751,
+      "max": 18.664188851946427,
+      "median": 8.001678113065104,
+      "faster_cases": 6,
+      "case_count": 6
+    },
+    "m4": {
+      "min": 2.554487934306507,
+      "max": 16.51353364190831,
+      "median": 6.352975032775076,
+      "faster_cases": 6,
+      "case_count": 6
+    }
+  }
+}

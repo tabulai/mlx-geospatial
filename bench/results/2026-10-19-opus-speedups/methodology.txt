@@ -1,0 +1,41 @@
+date: 2026-10-19
+
+repetitions: 3
+
+warmups: 1
+
+paired_output_checks: 48
+
+output_equality_checked: True
+
+timing: Median of three alternating paired measured trials after one untimed full warmup per method and workload.
+
+included: Fresh PolygonSet/grid/edge indexes, threaded point extraction, GPU query and materialization, exact float64/GEOS boundary refinement, complete joined GeoDataFrames with attributes, and canonical sorting.
+
+excluded: Ready input GeoDataFrame construction/copies, imports and runtime initialization, cold kernel compilation, I/O, correctness validation.
+
+predicate: within
+
+join: inner
+
+matching: All matching point-polygon pairs.
+
+exact_boundary: True
+
+point_extraction_workers: 8
+
+mlx_adapter: Unchanged all-pairs query plus GeoDataFrame attribute assembly; native ms.sjoin is validated separately, not timed here.
+
+cpu_baseline: Native geopandas.sjoin(left, right, how=inner, predicate=within), without parallel partitioning.
+
+threads: CPU numerical-library thread limits are one. MLX Point coordinate extraction uses up to 8 Python worker threads, independently of those limits; Metal uses the GPU.
+
+verification: 48 paired full-output checks passed across 2 current hosts; 25 reference input fingerprints and every output pair hash verified. All selected current hosts used the same source and runtime versions.
+
+tests: 721 passed on M1 Ultra; 721 passed on M4 Max
+
+tests_passed: {'m1': 721, 'm4': 721}
+
+scope: Six synthetic point-in-polygon joins from ready GeoDataFrames, with fresh indexes and full outputs. Three trials are descriptive measurements, not confidence intervals.
+
+prior_comparison: Prior/current MLX ratios compare the same host, runtime, input fingerprints, output hashes, and timing protocol across different sessions; background conditions may differ. Prior timings never fill current results.

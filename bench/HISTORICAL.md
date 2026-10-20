@@ -1,7 +1,10 @@
 # Historical benchmark measurements
 
-For the current six-workload, two-machine comparison, see the
-[benchmark guide](README.md). The material below preserves earlier measurements
+For the current six-workload spatial-join comparison, see the
+[benchmark guide](README.md). Fresh component measurements, including kNN,
+distances, warm queries and CPU/GPU crossover tables, are in the
+[current component report](results/2026-10-19-opus-speedups/COMPONENTS.md).
+The material below preserves earlier measurements
 and their original timing boundaries; it is not the performance summary for
 the current workspace build.
 
@@ -10,10 +13,10 @@ measurements. They use cached polygon indexes for warm queries, omit exact
 boundary refinement, and produce different outputs from the CPU baselines.
 They must not be quoted as equivalent, fresh-index GeoDataFrame join speedups.
 The distance and kNN measurements also retain their stated float32/float64 and
-index-reuse distinctions. They have not been rerun as part of the current
-spatial-join comparison.
+index-reuse distinctions. Their original values are retained here; the current
+component report contains a separate rerun on the latest measured source.
 
-The three dated optimization studies at the end of this archive describe
+The dated optimization studies in this archive describe
 intermediate workspace builds. Their measurements remain useful for tracing
 those changes, but all six spatial-join rows are superseded by the current
 complete run. Do not combine rows from different revisions into a current table.
@@ -401,3 +404,12 @@ pair hashes agree across versions and hosts. **610 tests passed per host**
 with Metal validation enabled. These are measurements of one synthetic
 workload; they supersede its row in the earlier full-run table, not the other
 workloads' timings.
+
+## Superseded complete E2E run — 2026-10-19, before the latest speedups
+
+The preceding complete six-case comparison measured the build incorporated in
+`fc0bb6e`, before threaded point extraction, the host float64 edge grid,
+polygon-major GEOS refinement, and chord-distance kNN rejection. Its
+[raw results, tables, charts and manifest](results/2026-10-19-full-e2e/) remain
+unchanged. The [current benchmark guide](README.md) points to a new complete
+run of commit `8805228`; do not combine timings from the two source revisions.

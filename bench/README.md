@@ -10,27 +10,34 @@ and an M4 Max, recorded on **2026-10-19**.
 These results describe the optimized **workspace build**, not the previously
 published PyPI distribution. The identical wheel was installed on both hosts;
 its source hashes and build information are preserved in the
-[build manifest](results/2026-10-19-full-e2e/build-manifest.json).
+[build manifest](results/2026-10-19-opus-speedups/build-manifest.json).
 
 ## Current results
 
 MLX completed all six joins faster than GeoPandas on each machine:
-**2.35–9.56× on M1 Ultra** (median ratio **6.73×**) and
-**1.92–8.79× on M4 Max** (median ratio **5.26×**). The M4 Max
-completed the MLX joins **1.25–1.57× faster** than the M1 Ultra.
-These are complete new runs of all six workloads on the same final build;
+**3.78–18.66× on M1 Ultra** (median ratio **8.00×**) and
+**2.55–16.51× on M4 Max** (median ratio **6.35×**). The M4 Max
+completed the MLX joins **1.23–1.69× faster** than the M1 Ultra.
+These are complete new runs of all six workloads on commit `8805228`;
 no rows are carried over from earlier optimization studies.
 
-![Exact spatial joins with fresh indexes and complete GeoDataFrame outputs](results/2026-10-19-full-e2e/full-e2e-overview.png)
+The latest build adds threaded Point extraction, a host float64 edge grid,
+and polygon-major GEOS refinement. Relative to the preceding complete run,
+MLX medians improved **1.16–1.95× on M1 Ultra** and **1.20–1.97× on M4 Max**.
+The [prior/current table](results/2026-10-19-opus-speedups/tables.md)
+compares identical inputs and runtime versions in separate sessions;
+these differences can also reflect background activity.
 
-| Points × polygons | Vertices | M1 Ultra MLX | M1 GeoPandas | Speedup | M4 Max MLX | M4 GeoPandas | Speedup |
+![Exact spatial joins with fresh indexes and complete GeoDataFrame outputs](results/2026-10-19-opus-speedups/full-e2e-overview.png)
+
+| Points × polygons | Vertices | M1 Ultra MLX | M1 Ultra GeoPandas | Speedup | M4 Max MLX | M4 Max GeoPandas | Speedup |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| 100k × 260 | 48 | 35.0 ms | 82.3 ms | **2.35×** | 27.9 ms | 53.6 ms | **1.92×** |
-| 1M × 260 | 48 | 205 ms | 1.81 s | **8.84×** | 156 ms | 791 ms | **5.08×** |
-| 10M × 260 | 48 | 2.71 s | 22.13 s | **8.16×** | 1.85 s | 11.85 s | **6.42×** |
-| 1M × 10k | 48 | 494 ms | 1.59 s | **3.22×** | 376 ms | 931 ms | **2.48×** |
-| 1M × 260 | 2,048 | 297 ms | 1.57 s | **5.30×** | 208 ms | 1.13 s | **5.43×** |
-| 1M × 1 | 150,000 | 285 ms | 2.72 s | **9.56×** | 182 ms | 1.60 s | **8.79×** |
+| 100k × 260 | 48 | 22.9 ms | 86.6 ms | **3.78×** | 18.6 ms | 47.5 ms | **2.55×** |
+| 1M × 260 | 48 | 157 ms | 1.67 s | **10.66×** | 118 ms | 805 ms | **6.81×** |
+| 10M × 260 | 48 | 2.34 s | 22.23 s | **9.52×** | 1.38 s | 11.02 s | **7.96×** |
+| 1M × 10k | 48 | 263 ms | 1.60 s | **6.08×** | 191 ms | 923 ms | **4.84×** |
+| 1M × 260 | 2,048 | 246 ms | 1.60 s | **6.49×** | 172 ms | 1.02 s | **5.90×** |
+| 1M × 1 | 150,000 | 146 ms | 2.73 s | **18.66×** | 98.1 ms | 1.62 s | **16.51×** |
 
 Each speedup is the GeoPandas median divided by the MLX median on the same
 machine. Medians across workloads are descriptive summaries of these six
@@ -38,12 +45,12 @@ ratios, not a prediction for another dataset. Elapsed times use seconds
 or milliseconds; output counts and geometry complexity differ by workload.
 
 The charts and tables come from the same unrounded
-[JSON results](results/2026-10-19-full-e2e/comparison.json) and
-[CSV results](results/2026-10-19-full-e2e/comparison.csv). Trial samples and
-minimum/maximum ranges are retained there. Download the
-[overview SVG](results/2026-10-19-full-e2e/full-e2e-overview.svg),
-[M1 Ultra chart](results/2026-10-19-full-e2e/full-e2e-m1.png), or
-[M4 Max chart](results/2026-10-19-full-e2e/full-e2e-m4.png).
+[JSON results](results/2026-10-19-opus-speedups/comparison.json) and
+[CSV results](results/2026-10-19-opus-speedups/comparison.csv). Individual trial
+samples are retained in JSON; both formats retain minimum/maximum ranges. Download the
+[overview SVG](results/2026-10-19-opus-speedups/full-e2e-overview.svg),
+[M1 Ultra chart](results/2026-10-19-opus-speedups/full-e2e-m1.png), or
+[M4 Max chart](results/2026-10-19-opus-speedups/full-e2e-m4.png).
 
 ## What is measured
 
@@ -120,11 +127,10 @@ geometry name, and CRS. Input fingerprints, output pair hashes, dependency
 versions, and installed package source hashes match across machines. The
 small boundary fixture also passed on both hosts.
 
-The same unchanged wheel previously passed **610 tests on each host with
-Metal validation enabled**. This benchmark rerun validates its outputs afresh;
-it does not claim a new full-test-suite run. Metal validation is disabled for
-timing. Earlier validation evidence and source identity are retained with
-[the result files](results/2026-10-19-full-e2e/).
+A fresh full test suite passed **721 tests on each host with Metal validation
+enabled**, using the identical archived source from which the measured wheel
+was built. Metal validation is disabled for timing. Fresh test logs, benchmark
+logs and source identity are retained with [the result files](results/2026-10-19-opus-speedups/).
 
 ## Machines and runtime
 
@@ -136,21 +142,27 @@ timing. Earlier validation evidence and source identity are retained with
 Both hosts used Python 3.14.2, MLX 0.32.4, NumPy 2.5.4, pandas 3.0.6,
 Shapely 2.2.0, and GeoPandas 1.2.0. The complete pinned environment is in
 [requirements.txt](e2e/requirements.txt). Both ran on AC power with sleep
-inhibited. Relevant CPU library thread limits were set to one; GeoPandas/GEOS
-uses its native spatial join and MLX can use the whole GPU. macOS versions
-and machine background activity differed. Load and memory snapshots are
+inhibited. Numerical-library thread limits were set to one. MLX Point coordinate
+extraction independently uses **up to eight host worker threads** (three
+for the 100k-point case, eight for the larger cases), and MLX can use the
+whole GPU. GeoPandas/GEOS uses its native spatial join without parallel
+partitioning. macOS versions and machine background activity differed. Load and memory snapshots are
 recorded in each raw result file.
 
 ## Reproduce the spatial joins
 
 Use an Apple silicon Mac with Python 3.14.2. From the repository root, create
-an environment with the pinned dependencies and install this checkout:
+an environment with the pinned dependencies and install a clean archive of
+the measured commit. A clean source directory keeps stale build files out
+of the installed wheel:
 
 ```bash
 python3.14 -m venv .venv-e2e
 source .venv-e2e/bin/activate
 python -m pip install -r bench/e2e/requirements.txt
-python -m pip install --no-deps .
+BENCH_SOURCE=$(mktemp -d /tmp/mlx-geospatial-source.XXXXXX)
+git archive 880522855606458869052d6ff069fbd1cbb53d1a | tar -x -C "$BENCH_SOURCE"
+python -m pip install --no-deps "$BENCH_SOURCE"
 ```
 
 The following runs all six workloads. Set a descriptive machine label and
@@ -178,22 +190,54 @@ input sequence so their selected workload matches the full run.
 Run the same command on the second host with the same checkout and pinned
 environment. Compare package module hashes, input fingerprints, protocol,
 dependency versions, and output pair hashes before comparing elapsed times.
-The [raw M1 result](results/2026-10-19-full-e2e/m1/e2e-results.json) and
-[raw M4 result](results/2026-10-19-full-e2e/m4/e2e-results.json) show the recorded
+The [raw M1 result](results/2026-10-19-opus-speedups/m1/e2e-results.json) and
+[raw M4 result](results/2026-10-19-opus-speedups/m4/e2e-results.json) show the recorded
 metadata and individual trials for this report.
 
 The unchanged runner imports the adjacent frozen `bench.py` and
 `run_benchmarks.py`; use the complete [bench/e2e directory](e2e/) to reproduce
 this study. The top-level `bench/bench.py` is a separate array-operation
 harness and is not a substitute for these inputs or timing boundaries.
-[Analysis and chart sources](results/2026-10-19-full-e2e/) are stored alongside
+[Analysis and chart sources](results/2026-10-19-opus-speedups/) are stored alongside
 the measurements so the tables and figures remain inspectable and reproducible.
 
 ## Other benchmarks and earlier results
 
+The [current component report](results/2026-10-19-opus-speedups/COMPONENTS.md)
+refreshes every component table on the same source and both machines:
+all-pair arrays, first-match host/device queries, cold queries, haversine
+matrices, four kNN shapes, dense PIP and CPU/GPU crossover. Its raw samples,
+JSON and CSV are retained alongside the tables. Component timings use the
+frozen best-of protocol, not the paired E2E medians above.
+
+Across the four `k=10` shapes, MLX kNN times improved **1.73–5.98× on M1
+Ultra** and **3.31–8.19× on M4 Max** versus the prior matched component
+runs. These are comparisons between separate sessions. The report retains
+both BallTree build-plus-query and prebuilt-tree timings: the prebuilt tree
+still narrowly wins the 1k-query × 1M-reference case on M4 Max.
+
+To reproduce the recorded component sweep with structured samples and the
+console evidence needed for the crossover tables, use the same installed
+build and pinned environment as above:
+
+```bash
+COMPONENT_OUTPUT=$(mktemp -d /tmp/mlx-geospatial-components.XXXXXX)
+env -u MTL_DEBUG_LAYER -u MTL_SHADER_VALIDATION \
+  -u METAL_DEVICE_WRAPPER_TYPE -u METAL_DEBUG_ERROR_MODE -u MLX_METAL_DEBUG \
+  -u MLX_GEOSPATIAL_BACKEND \
+  OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
+  MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
+  caffeinate -dimsu python bench/e2e/run_benchmarks.py \
+  --output "$COMPONENT_OUTPUT" --machine-label "My Apple silicon Mac" \
+  > "$COMPONENT_OUTPUT/benchmark.log" 2>&1
+```
+
+The full sweep replays the reference input sequence; individual `--op`
+commands below start the random generator at a different position.
+
 [Historical measurements](HISTORICAL.md) preserve the pre-release warm
 point-in-polygon, first-match, CPU/GPU crossover, distance-matrix, and kNN
-results, plus the intermediate optimization studies superseded by this run.
+results, plus earlier optimization studies and the preceding complete E2E run.
 They keep their original runtime, output, precision, and index-reuse caveats.
 In particular, warm NumPy pair arrays are not complete GeoDataFrames, and the
 distance comparison uses float32 MLX results versus float64 CPU results.

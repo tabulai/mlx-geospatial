@@ -180,9 +180,10 @@ k-th best bounds the query's. Latitudes beyond ±90° or coordinates beyond
 without a host sync. These kernels also compute the distances and the final
 stable distance sort in-kernel, with the `_hav` arithmetic. Routing keeps the
 plain selectors for `k > 16` and for small shapes that cannot repay the
-unit-vector pass. Inputs that defeat the filter, such as references packed
-into a cluster much smaller than its distance from the queries, run about 15%
-slower than the plain selectors.
+unit-vector pass. An earlier routing study found that inputs defeating the
+filter, such as references packed into a cluster much smaller than its distance from the
+queries, ran about 15% slower than the plain selectors. The current city-cloud
+benchmark sweep does not remeasure that adverse distribution.
 
 Exact `h` ties use the lower reference index;
 distinct `h` values that round to the same reported fp32 distance retain the
@@ -273,26 +274,18 @@ passes with their syncs). With the shipped constants the model switches at
 (only ~9 candidate edges per point) and under ten for 2048-vertex zones for
 first match, and about four times later for all matches. The constants live
 in `_dispatch.py` and `bench.py --op crossover` re-fits them. The asymmetry
-is bounded on both sides. The fixed GPU cost depends on the GPU's clock
-state: on an M4 Max about 200 us per first-match query in a back-to-back burst
-but 0.8-1.1 ms for a query issued after host-only work has let the GPU idle
-(1.1 ms versus 2.5 ms for all matches), so `GPU_LAUNCH_US` (350) and
-`GPU_ALL_MATCHES_LAUNCH_US` (1500) sit between the two regimes and the sweep
-reports both: picking the CPU while the GPU was warm loses at most the gap to
-the warm launch (~0.2 ms first match, ~0.45 ms all matches, on every layer
-because the index supplies the edge estimate), picking the GPU after it has
-idled loses up to ~0.6 ms / ~1 ms just above the threshold. The fallback is
-the NumPy even-odd
-evaluation described above (bit-identical to the kernels; GEOS is not on the
-query path), so dispatch can never change an answer. It is about 1.5-2x slower
-than GEOS per point on 48-vertex zones (1.5 s per million points), up to ~7x
-on 2048-vertex zones and faster than GEOS on sparse axis-aligned tilings,
-with ~50 us of fixed setup per call; it exists for consistency and for
-Metal-less hosts, where the GPU path is unavailable, and processes points in
-slices bounded by candidate pairs so its memory does not grow with the point
-count (about 250-300 MB peak at 1-2M points on 260 zones). No candidate
-counting is needed to
-dispatch. Device-resident inputs run on the GPU whenever Metal is available,
+is bounded on both sides. Fixed GPU cost depends on the GPU's clock state;
+a query after host-only work can cost more than one in a warm burst. The
+[current component report](../bench/results/2026-10-19-opus-speedups/COMPONENTS.md)
+records fresh warm/idle probes and CPU/GPU crossover tables. The shipped
+`GPU_LAUNCH_US` (350) and `GPU_ALL_MATCHES_LAUNCH_US` (1500) constants are
+unchanged by that measurement run. The original calibration and its timing
+observations remain in the [historical report](../bench/HISTORICAL.md).
+
+The fallback uses the NumPy even-odd evaluation described above, with the
+same arithmetic contract as the GPU; GEOS is not on this query path. It
+exists for consistency and for Metal-less hosts. Candidate-pair budgets
+bound its working slices. No candidate counting is needed to dispatch. Device-resident inputs run on the GPU whenever Metal is available,
 since the fallback would need a host copy; `backend="cpu"` on them copies the
 fp32 local coordinates to the host and runs the same NumPy predicate (a
 parity/debug path). Override per call (`backend=`) or via
@@ -320,7 +313,8 @@ Input fingerprints, output pair hashes, installed module hashes, runtime
 versions and machine metadata accompany the results. Both hosts use the
 same package and dependencies, with CPU thread environment limits stated;
 GeoPandas uses its native join without parallel partitioning, while MLX
-uses Metal.
+uses Metal and up to eight host worker threads for Point coordinate
+extraction. These workers are independent of BLAS/OpenMP thread limits.
 
 The six synthetic workloads cover point and polygon counts, resampled
 2,048-vertex zones and one undulating 150k-vertex polygon. Resampling adds
@@ -329,7 +323,7 @@ not predict speed. Band overlap, candidate counts and result size also
 matter. These are point-in-polygon joins, not polygon overlays or arbitrary
 spatial predicates.
 
-The separate [historical component benchmarks](../bench/HISTORICAL.md)
+The separate [current component benchmarks](../bench/results/2026-10-19-opus-speedups/COMPONENTS.md)
 measure warm/cold array queries, distance matrices, kNN and CPU/GPU
 crossover. Their prepared-polygon orientation, output contracts and timing
 statistics differ. Do not combine those ratios with the current complete

@@ -101,10 +101,10 @@ coordinates and cannot be used for distances.
 
 ## End-to-end spatial join performance
 
-The latest optimized source build was measured on **M1 Ultra** and **M4 Max**
-on 2026-10-19. It was faster than native GeoPandas in all six tested workloads
-on each machine: **2.35–9.56×** on M1 Ultra and **1.92–8.79×** on M4 Max.
-The median of the six per-workload speedup ratios was **6.73×** and **5.26×**,
+Commit `8805228` was measured on **M1 Ultra** and **M4 Max** on
+2026-10-19. It was faster than native GeoPandas in all six tested workloads
+on each machine: **3.78–18.66×** on M1 Ultra and **2.55–16.51×** on M4 Max.
+The median of the six per-workload speedup ratios was **8.00×** and **6.35×**,
 respectively. These are synthetic point-in-polygon results, not a guarantee
 for every dataset or spatial operation.
 
@@ -113,31 +113,31 @@ Both methods start with ready GeoDataFrames and build **fresh indexes** on
 every call. Timers include exact boundary handling, every matching pair,
 complete joined GeoDataFrames with attributes, and the same final sorting.
 
-| Points × polygons | Vertices | M1 Ultra MLX | M1 GeoPandas | Speedup | M4 Max MLX | M4 GeoPandas | Speedup |
+| Points × polygons | Vertices | M1 Ultra MLX | M1 Ultra GeoPandas | Speedup | M4 Max MLX | M4 Max GeoPandas | Speedup |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| 100k × 260 | 48 | 35.0 ms | 82.3 ms | **2.35×** | 27.9 ms | 53.6 ms | **1.92×** |
-| 1M × 260 | 48 | 205 ms | 1.81 s | **8.84×** | 156 ms | 791 ms | **5.08×** |
-| 10M × 260 | 48 | 2.71 s | 22.13 s | **8.16×** | 1.85 s | 11.85 s | **6.42×** |
-| 1M × 10k | 48 | 494 ms | 1.59 s | **3.22×** | 376 ms | 931 ms | **2.48×** |
-| 1M × 260 | 2,048 | 297 ms | 1.57 s | **5.30×** | 208 ms | 1.13 s | **5.43×** |
-| 1M × 1 | 150,000 | 285 ms | 2.72 s | **9.56×** | 182 ms | 1.60 s | **8.79×** |
+| 100k × 260 | 48 | 22.9 ms | 86.6 ms | **3.78×** | 18.6 ms | 47.5 ms | **2.55×** |
+| 1M × 260 | 48 | 157 ms | 1.67 s | **10.66×** | 118 ms | 805 ms | **6.81×** |
+| 10M × 260 | 48 | 2.34 s | 22.23 s | **9.52×** | 1.38 s | 11.02 s | **7.96×** |
+| 1M × 10k | 48 | 263 ms | 1.60 s | **6.08×** | 191 ms | 923 ms | **4.84×** |
+| 1M × 260 | 2,048 | 246 ms | 1.60 s | **6.49×** | 172 ms | 1.02 s | **5.90×** |
+| 1M × 1 | 150,000 | 146 ms | 2.73 s | **18.66×** | 98.1 ms | 1.62 s | **16.51×** |
 
-![End-to-end spatial join speedups on M1 Ultra and M4 Max](bench/results/2026-10-19-full-e2e/full-e2e-overview.png)
+![End-to-end spatial join speedups on M1 Ultra and M4 Max](bench/results/2026-10-19-opus-speedups/full-e2e-overview.png)
 
-The latest change extends the shared edge-band index to **2,048-vertex
-rings** and reuses it for sparse float64 boundary checks. Together with the
-fused containment and boundary kernels and efficient match refinement, this
-avoids scanning irrelevant edges and building a second full edge index.
-In this full rerun, the 2,048-vertex workload took **297 ms on M1 Ultra**
-and **208 ms on M4 Max**, **5.30×** and **5.43×** faster than GeoPandas.
-Unfavorable edge replication or unsafe numerical conditions retain bounded
-fallback paths.
+The latest changes add threaded Point coordinate extraction, a float64 host
+edge grid for exact-boundary checks, and polygon-major GEOS refinement for
+detailed single-ring polygons. MLX uses up to eight host extraction workers
+in addition to the GPU; GeoPandas uses its native join without parallel
+partitioning. Observed MLX join times improved **1.16–1.95× on M1 Ultra**
+and **1.20–1.97× on M4 Max** versus the preceding measured build.
+These comparisons use the same inputs and runtime in separate sessions;
+background activity can also affect the differences.
 
 **All 48 paired full-output checks passed**, including row order, attributes,
-indexes, dtypes, geometry and CRS. The unchanged measured wheel had already
-passed **610 tests on each machine** with Metal validation enabled. Both
-hosts used Python 3.14.2, MLX 0.32.4 and GeoPandas 1.2.0; the benchmark guide
-records the remaining dependencies, hardware and differing macOS versions.
+indexes, dtypes, geometry and CRS. A fresh full suite passed **721 tests on each
+machine** with Metal validation enabled. Both hosts used Python 3.14.2,
+MLX 0.32.4 and GeoPandas 1.2.0; the benchmark guide records the remaining
+dependencies, hardware and differing macOS versions.
 
 The comparison uses native `geopandas.sjoin(..., how="inner",
 predicate="within")` against the unchanged MLX all-pairs query and
@@ -147,14 +147,14 @@ compilation, I/O and validation are excluded. The 2,048-vertex zones
 resample 48-vertex boundaries; extra vertices do not imply equivalent new
 shape complexity. The 150k-vertex case uses an undulating polygon.
 
-These results describe the source snapshot in the [build manifest](bench/results/2026-10-19-full-e2e/build-manifest.json),
+These results describe the source snapshot in the [build manifest](bench/results/2026-10-19-opus-speedups/build-manifest.json),
 not a claim that the same optimizations are already on PyPI. See the
 [benchmark guide](bench/README.md) for full methodology and reproduction,
-[raw measurements](bench/results/2026-10-19-full-e2e/comparison.json) for
-individual trial samples, and the [historical benchmarks](bench/HISTORICAL.md)
-for older warm-array, distance, kNN and crossover measurements. Those use
-different timing and output contracts and are not the end-to-end speedups
-reported here.
+[raw measurements](bench/results/2026-10-19-opus-speedups/comparison.json) for
+individual trial samples, and the [fresh component tables](bench/results/2026-10-19-opus-speedups/COMPONENTS.md)
+for warm-array, distance, kNN and crossover measurements, including the new
+chord-distance kNN filter. These use different timing and output contracts.
+[Historical measurements](bench/HISTORICAL.md) remain archived separately.
 
 ## API at a glance
 
@@ -192,9 +192,9 @@ duplicate labels, and right attributes come from each matched polygon row.
   Use `exact_boundary=True` with host inputs in `point_in_polygon`,
   `GridIndex.query`, or `sjoin` when exact Shapely boundary behavior matters.
   A conservative GPU filter narrows the CPU boundary checks where supported;
-  detailed rings share a cached edge-band index across containment, GPU
-  filtering and sparse float64 host checks to skip irrelevant edges and
-  avoid a second full edge index.
+  detailed rings use cached edge bands for GPU work, while a float64 host
+  edge grid narrows the remaining boundary checks. Suitable detailed
+  single-ring polygons use prepared GEOS refinement.
   Exact handling still adds host work and synchronization.
 - **Input precision:** prefer float64 NumPy coordinates or prepare them with
   `PolygonSet.to_local`. Raw float32 MLX coordinates may already have lost
