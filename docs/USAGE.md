@@ -13,7 +13,7 @@ All examples use `import mlx_geospatial as ms`.
 | `point_in_polygon(points, polygons)` | One polygon position per point: an `(N,)` int32 array; `-1` means no match. |
 | `point_in_polygon(points, polygons, all_matches=True)` | Two int64 arrays, `(point_indices, polygon_indices)`, sorted by point and then polygon. |
 | `contains_matrix(points, polygons)` | An `(N, M)` boolean matrix. Best for small polygon collections. |
-| `sjoin(left, right)` | Left table rows with `index_right` and the right table's non-geometry columns. At most one match per point. |
+| `sjoin(left, right)` | Left table rows with `index_right` and the right table's non-geometry columns. At most one match per point by default; `all_matches=True` returns every matching polygon. |
 | `haversine(a, b)` | Elementwise or broadcast distances. |
 | `haversine_cross(a, b)` | An `(N, M)` distance matrix. |
 | `haversine_knn(query, reference, k)` | `(distances, indices)`, each `(N, k)`, sorted by increasing distance per row. |
@@ -115,17 +115,31 @@ size of the final result.
 DataFrames with a `geometry` column. The left side contains points and the
 right side polygons. Install the `geo` extra for GeoPandas support.
 
-The result preserves the matched left rows and adds the selected right
-index label as `index_right`. Right-side attributes are attached by polygon
-position, so duplicate right index labels are safe. Column collisions add
-`_right` suffixes. An existing left column named `index_right` must be
-renamed before joining.
+The result preserves the matched left rows and adds each matched right
+index label as `index_right`. A GeoDataFrame input retains its active point
+geometry and CRS. Right-side attributes are attached by polygon position,
+preserving extension dtypes such as nullable integers, strings, and
+categoricals. Duplicate index labels do not create additional matches.
+Column collisions add `_right` suffixes. An existing left column named
+`index_right` must be renamed before joining.
 
-`how="left"` retains unmatched points with missing right-side values.
-Only `"inner"` and `"left"` are supported. Each point gets at most one
-polygon, even when polygons overlap; this differs from GeoPandas' usual
-all-pairs join. Use `point_in_polygon(..., all_matches=True)` to obtain every
-matching pair.
+Only `how="inner"` and `how="left"` are supported. The default
+`all_matches=False` keeps the existing first-match behavior: each point gets
+at most one polygon, choosing the lowest right-row position when polygons
+overlap. Set `all_matches=True` to return every matching pair as joined rows:
+
+```python
+joined = ms.sjoin(
+    points_df, polygons_df,
+    how="left", all_matches=True, predicate="within", exact_boundary=True,
+)
+```
+
+Rows follow left-row order, then right-row order for multiple matches.
+With either matching mode, `how="left"` also keeps each unmatched point once
+with missing right-side values. `predicate="intersects"` is the default;
+`predicate="within"` excludes boundary points when `exact_boundary=True`.
+Use `point_in_polygon(..., all_matches=True)` when only pair arrays are needed.
 
 ## Boundaries and precision
 
@@ -184,10 +198,16 @@ GEOS then re-checks points near edges. `"intersects"` includes points on
 the boundary; `"within"` excludes them. This option is unavailable for
 `mx.array` and `LocalPoints` inputs. `contains_matrix` does not expose it.
 
-Finding near-edge points requires a host pass over every point, even if
-few need correction. Reference measurements took about 0.3–0.5 seconds
-per million points, depending on the polygon layer. The fast benchmark
-tables do not include this extra work.
+GPU queries use a conservative filter to narrow the points needing the
+float64 host boundary test. Detailed polygons can share a cached
+edge-band index between containment, boundary filtering and sparse host
+boundary checks, avoiding a second full edge index. Excessive
+candidate work, unfavorable edge-index expansion and unsafe numerical
+scales retain the full host scan. Exact handling still adds synchronization
+and CPU work. The current [end-to-end benchmarks](../bench/README.md) include
+these costs, fresh index construction, complete joined GeoDataFrames and
+sorting. Historical warm-array benchmarks exclude exact refinement and
+measure a different output contract.
 
 Containment otherwise follows the even-odd rule across all rings. It
 agrees with GEOS fill semantics for valid polygons, but can differ for

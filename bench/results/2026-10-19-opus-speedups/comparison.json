@@ -1,0 +1,564 @@
+{
+  "machines": {
+    "m1": {
+      "name": "M1 Ultra",
+      "cpu_cores": 20,
+      "gpu_cores": 64,
+      "macos": "26.5.1",
+      "tests_passed": 721
+    },
+    "m4": {
+      "name": "M4 Max",
+      "cpu_cores": 16,
+      "gpu_cores": 40,
+      "macos": "26.6.2",
+      "tests_passed": 721
+    }
+  },
+  "joins": [
+    {
+      "id": 0,
+      "label": "100k \u00d7 260",
+      "n": 100000,
+      "m": 260,
+      "vertices": 48,
+      "output_rows": 109267,
+      "matched_unique_points": 66815,
+      "multi_hit_points": 29133,
+      "unmatched_points": 33185,
+      "detail": "48 vertices",
+      "m1": {
+        "mlx_seconds": 0.022920500487089157,
+        "geopandas_seconds": 0.08663975074887276,
+        "speedup": 3.780011295899751,
+        "mlx_samples": [
+          0.023249708116054535,
+          0.022920500487089157,
+          0.022185999900102615
+        ],
+        "geopandas_samples": [
+          0.11645787581801414,
+          0.08663975074887276,
+          0.07967166602611542
+        ],
+        "mlx_range": [
+          0.022185999900102615,
+          0.023249708116054535
+        ],
+        "geopandas_range": [
+          0.07967166602611542,
+          0.11645787581801414
+        ]
+      },
+      "m4": {
+        "mlx_seconds": 0.0185901249969902,
+        "geopandas_seconds": 0.04748825000206125,
+        "speedup": 2.554487934306507,
+        "mlx_samples": [
+          0.018100250003044493,
+          0.01900733300135471,
+          0.0185901249969902
+        ],
+        "geopandas_samples": [
+          0.05015274999823305,
+          0.047309624998888467,
+          0.04748825000206125
+        ],
+        "mlx_range": [
+          0.018100250003044493,
+          0.01900733300135471
+        ],
+        "geopandas_range": [
+          0.047309624998888467,
+          0.05015274999823305
+        ]
+      },
+      "m1_over_m4_mlx": 1.2329395574693587
+    },
+    {
+      "id": 1,
+      "label": "1M \u00d7 260",
+      "n": 1000000,
+      "m": 260,
+      "vertices": 48,
+      "output_rows": 1076307,
+      "matched_unique_points": 655462,
+      "multi_hit_points": 290486,
+      "unmatched_points": 344538,
+      "detail": "48 vertices",
+      "m1": {
+        "mlx_seconds": 0.15711108408868313,
+        "geopandas_seconds": 1.6746370401233435,
+        "speedup": 10.65893631780986,
+        "mlx_samples": [
+          0.15111316740512848,
+          0.1753459181636572,
+          0.15711108408868313
+        ],
+        "geopandas_samples": [
+          1.6746370401233435,
+          1.7510686665773392,
+          1.5010529179126024
+        ],
+        "mlx_range": [
+          0.15111316740512848,
+          0.1753459181636572
+        ],
+        "geopandas_range": [
+          1.5010529179126024,
+          1.7510686665773392
+        ]
+      },
+      "m4": {
+        "mlx_seconds": 0.1182425000006333,
+        "geopandas_seconds": 0.8047951250009646,
+        "speedup": 6.8063101253496345,
+        "mlx_samples": [
+          0.11913012500008335,
+          0.1182425000006333,
+          0.11656237499846611
+        ],
+        "geopandas_samples": [
+          0.8286684170016088,
+          0.8047951250009646,
+          0.774899166997784
+        ],
+        "mlx_range": [
+          0.11656237499846611,
+          0.11913012500008335
+        ],
+        "geopandas_range": [
+          0.774899166997784,
+          0.8286684170016088
+        ]
+      },
+      "m1_over_m4_mlx": 1.3287192345209349
+    },
+    {
+      "id": 2,
+      "label": "10M \u00d7 260",
+      "n": 10000000,
+      "m": 260,
+      "vertices": 48,
+      "output_rows": 10689126,
+      "matched_unique_points": 6501488,
+      "multi_hit_points": 2849585,
+      "unmatched_points": 3498512,
+      "detail": "48 vertices",
+      "m1": {
+        "mlx_seconds": 2.3355695456266403,
+        "geopandas_seconds": 22.22756654024124,
+        "speedup": 9.516979094826105,
+        "mlx_samples": [
+          2.3355695456266403,
+          2.317328792065382,
+          2.361268252134323
+        ],
+        "geopandas_samples": [
+          22.395319040864706,
+          22.102031292393804,
+          22.22756654024124
+        ],
+        "mlx_range": [
+          2.317328792065382,
+          2.361268252134323
+        ],
+        "geopandas_range": [
+          22.102031292393804,
+          22.395319040864706
+        ]
+      },
+      "m4": {
+        "mlx_seconds": 1.384922834000463,
+        "geopandas_seconds": 11.019358417001058,
+        "speedup": 7.956658772944583,
+        "mlx_samples": [
+          1.4365624580022995,
+          1.384922834000463,
+          1.3730925000018033
+        ],
+        "geopandas_samples": [
+          11.019358417001058,
+          11.253679624998767,
+          10.7827213749988
+        ],
+        "mlx_range": [
+          1.3730925000018033,
+          1.4365624580022995
+        ],
+        "geopandas_range": [
+          10.7827213749988,
+          11.253679624998767
+        ]
+      },
+      "m1_over_m4_mlx": 1.686425761990043
+    },
+    {
+      "id": 3,
+      "label": "1M \u00d7 10k",
+      "n": 1000000,
+      "m": 10000,
+      "vertices": 48,
+      "output_rows": 1121558,
+      "matched_unique_points": 673587,
+      "multi_hit_points": 308179,
+      "unmatched_points": 326413,
+      "detail": "48 vertices",
+      "m1": {
+        "mlx_seconds": 0.26263049989938736,
+        "geopandas_seconds": 1.5980864148586988,
+        "speedup": 6.084923173321145,
+        "mlx_samples": [
+          0.24896341934800148,
+          0.2877460829913616,
+          0.26263049989938736
+        ],
+        "geopandas_samples": [
+          1.5980864148586988,
+          1.588134041056037,
+          1.6273127105087042
+        ],
+        "mlx_range": [
+          0.24896341934800148,
+          0.2877460829913616
+        ],
+        "geopandas_range": [
+          1.588134041056037,
+          1.6273127105087042
+        ]
+      },
+      "m4": {
+        "mlx_seconds": 0.19053579200044624,
+        "geopandas_seconds": 0.9231283329972939,
+        "speedup": 4.844907737834013,
+        "mlx_samples": [
+          0.1898545420008304,
+          0.19623520800087135,
+          0.19053579200044624
+        ],
+        "geopandas_samples": [
+          0.9231283329972939,
+          0.9096391669991135,
+          0.9364809580001747
+        ],
+        "mlx_range": [
+          0.1898545420008304,
+          0.19623520800087135
+        ],
+        "geopandas_range": [
+          0.9096391669991135,
+          0.9364809580001747
+        ]
+      },
+      "m1_over_m4_mlx": 1.37837881870915
+    },
+    {
+      "id": 4,
+      "label": "1M \u00d7 260",
+      "n": 1000000,
+      "m": 260,
+      "vertices": 2048,
+      "output_rows": 1076107,
+      "matched_unique_points": 673014,
+      "multi_hit_points": 287223,
+      "unmatched_points": 326986,
+      "detail": "2,048 vertices",
+      "m1": {
+        "mlx_seconds": 0.24643000029027462,
+        "geopandas_seconds": 1.5984379183501005,
+        "speedup": 6.486377131304102,
+        "mlx_samples": [
+          0.24643000029027462,
+          0.2233453318476677,
+          0.2515707481652498
+        ],
+        "geopandas_samples": [
+          1.5984379183501005,
+          1.6896002925932407,
+          1.5859572496265173
+        ],
+        "mlx_range": [
+          0.2233453318476677,
+          0.2515707481652498
+        ],
+        "geopandas_range": [
+          1.5859572496265173,
+          1.6896002925932407
+        ]
+      },
+      "m4": {
+        "mlx_seconds": 0.1724997080018511,
+        "geopandas_seconds": 1.0176861670006474,
+        "speedup": 5.899639940200516,
+        "mlx_samples": [
+          0.17973466699913843,
+          0.17249812499721884,
+          0.1724997080018511
+        ],
+        "geopandas_samples": [
+          1.0176861670006474,
+          1.0144558749998396,
+          1.0480109589989297
+        ],
+        "mlx_range": [
+          0.17249812499721884,
+          0.17973466699913843
+        ],
+        "geopandas_range": [
+          1.0144558749998396,
+          1.0480109589989297
+        ]
+      },
+      "m1_over_m4_mlx": 1.4285821300499255
+    },
+    {
+      "id": 5,
+      "label": "1M \u00d7 1",
+      "n": 1000000,
+      "m": 1,
+      "vertices": 150000,
+      "output_rows": 217315,
+      "matched_unique_points": 217315,
+      "multi_hit_points": 0,
+      "unmatched_points": 782685,
+      "detail": "150,000 vertices",
+      "m1": {
+        "mlx_seconds": 0.1462666653096676,
+        "geopandas_seconds": 2.729948664084077,
+        "speedup": 18.664188851946427,
+        "mlx_samples": [
+          0.1462666653096676,
+          0.1736937090754509,
+          0.1453394554555416
+        ],
+        "geopandas_samples": [
+          2.7315152511000633,
+          2.725791623815894,
+          2.729948664084077
+        ],
+        "mlx_range": [
+          0.1453394554555416,
+          0.1736937090754509
+        ],
+        "geopandas_range": [
+          2.725791623815894,
+          2.7315152511000633
+        ]
+      },
+      "m4": {
+        "mlx_seconds": 0.09808808399975533,
+        "geopandas_seconds": 1.6197808750002878,
+        "speedup": 16.51353364190831,
+        "mlx_samples": [
+          0.09808808399975533,
+          0.11235016600039671,
+          0.0963638749999518
+        ],
+        "geopandas_samples": [
+          1.6103302909978083,
+          1.6197808750002878,
+          1.6214846249968105
+        ],
+        "mlx_range": [
+          0.0963638749999518,
+          0.11235016600039671
+        ],
+        "geopandas_range": [
+          1.6103302909978083,
+          1.6214846249968105
+        ]
+      },
+      "m1_over_m4_mlx": 1.4911766989967143
+    }
+  ],
+  "summary": {
+    "m1": {
+      "min": 3.780011295899751,
+      "max": 18.664188851946427,
+      "median": 8.001678113065104,
+      "faster_cases": 6,
+      "case_count": 6
+    },
+    "m4": {
+      "min": 2.554487934306507,
+      "max": 16.51353364190831,
+      "median": 6.352975032775076,
+      "faster_cases": 6,
+      "case_count": 6
+    }
+  },
+  "methodology": {
+    "date": "2026-10-19",
+    "repetitions": 3,
+    "warmups": 1,
+    "paired_output_checks": 48,
+    "output_equality_checked": true,
+    "timing": "Median of three alternating paired measured trials after one untimed full warmup per method and workload.",
+    "included": "Fresh PolygonSet/grid/edge indexes, threaded point extraction, GPU query and materialization, exact float64/GEOS boundary refinement, complete joined GeoDataFrames with attributes, and canonical sorting.",
+    "excluded": "Ready input GeoDataFrame construction/copies, imports and runtime initialization, cold kernel compilation, I/O, correctness validation.",
+    "predicate": "within",
+    "join": "inner",
+    "matching": "All matching point-polygon pairs.",
+    "exact_boundary": true,
+    "point_extraction_workers": 8,
+    "mlx_adapter": "Unchanged all-pairs query plus GeoDataFrame attribute assembly; native ms.sjoin is validated separately, not timed here.",
+    "cpu_baseline": "Native geopandas.sjoin(left, right, how=inner, predicate=within), without parallel partitioning.",
+    "threads": "CPU numerical-library thread limits are one. MLX Point coordinate extraction uses up to 8 Python worker threads, independently of those limits; Metal uses the GPU.",
+    "verification": "48 paired full-output checks passed across 2 current hosts; 25 reference input fingerprints and every output pair hash verified. All selected current hosts used the same source and runtime versions.",
+    "tests": "721 passed on M1 Ultra; 721 passed on M4 Max",
+    "tests_passed": {
+      "m1": 721,
+      "m4": 721
+    },
+    "scope": "Six synthetic point-in-polygon joins from ready GeoDataFrames, with fresh indexes and full outputs. Three trials are descriptive measurements, not confidence intervals.",
+    "prior_comparison": "Prior/current MLX ratios compare the same host, runtime, input fingerprints, output hashes, and timing protocol across different sessions; background conditions may differ. Prior timings never fill current results."
+  },
+  "wheel_sha256": "e4e5a252f455dd024db9ad7973ee00e6c65fdd7ca5678756bb155cc7c77c9748",
+  "source_git_sha": "880522855606458869052d6ff069fbd1cbb53d1a",
+  "prior_comparison": {
+    "result_directory": "2026-10-19-full-e2e",
+    "wheel_sha256": "923cacf8770e9334c52dfdf0dcce6b557130310abdcc7811706d7643ee8f1273",
+    "sessions": {
+      "m1": {
+        "prior_started_at": "2026-10-19T15:37:04.412033+00:00",
+        "prior_finished_at": "2026-10-19T15:40:06.644709+00:00",
+        "current_started_at": "2026-10-19T23:42:28.299364+00:00",
+        "current_finished_at": "2026-10-19T23:45:29.129657+00:00"
+      },
+      "m4": {
+        "prior_started_at": "2026-10-19T15:37:04.205705+00:00",
+        "prior_finished_at": "2026-10-19T15:38:53.565742+00:00",
+        "current_started_at": "2026-10-19T23:35:01.432863+00:00",
+        "current_finished_at": "2026-10-19T23:36:44.160241+00:00"
+      }
+    },
+    "joins": [
+      {
+        "id": 0,
+        "label": "100k \u00d7 260",
+        "n": 100000,
+        "m": 260,
+        "vertices": 48,
+        "m1": {
+          "prior_mlx_seconds": 0.03500991687178612,
+          "current_mlx_seconds": 0.022920500487089157,
+          "prior_over_current_mlx": 1.527449930314863,
+          "prior_geopandas_seconds": 0.08234933391213417,
+          "current_geopandas_seconds": 0.08663975074887276
+        },
+        "m4": {
+          "prior_mlx_seconds": 0.027916958031710237,
+          "current_mlx_seconds": 0.0185901249969902,
+          "prior_over_current_mlx": 1.5017090006780527,
+          "prior_geopandas_seconds": 0.0535764999804087,
+          "current_geopandas_seconds": 0.04748825000206125
+        }
+      },
+      {
+        "id": 1,
+        "label": "1M \u00d7 260",
+        "n": 1000000,
+        "m": 260,
+        "vertices": 48,
+        "m1": {
+          "prior_mlx_seconds": 0.20478720776736736,
+          "current_mlx_seconds": 0.15711108408868313,
+          "prior_over_current_mlx": 1.3034548705155196,
+          "prior_geopandas_seconds": 1.8099518343806267,
+          "current_geopandas_seconds": 1.6746370401233435
+        },
+        "m4": {
+          "prior_mlx_seconds": 0.15581208298681304,
+          "current_mlx_seconds": 0.1182425000006333,
+          "prior_over_current_mlx": 1.3177333275766203,
+          "prior_geopandas_seconds": 0.7913340000086464,
+          "current_geopandas_seconds": 0.8047951250009646
+        }
+      },
+      {
+        "id": 2,
+        "label": "10M \u00d7 260",
+        "n": 10000000,
+        "m": 260,
+        "vertices": 48,
+        "m1": {
+          "prior_mlx_seconds": 2.7116158735007048,
+          "current_mlx_seconds": 2.3355695456266403,
+          "prior_over_current_mlx": 1.161008405242401,
+          "prior_geopandas_seconds": 22.13469349965453,
+          "current_geopandas_seconds": 22.22756654024124
+        },
+        "m4": {
+          "prior_mlx_seconds": 1.8458491250057705,
+          "current_mlx_seconds": 1.384922834000463,
+          "prior_over_current_mlx": 1.3328173091593012,
+          "prior_geopandas_seconds": 11.85341724997852,
+          "current_geopandas_seconds": 11.019358417001058
+        }
+      },
+      {
+        "id": 3,
+        "label": "1M \u00d7 10k",
+        "n": 1000000,
+        "m": 10000,
+        "vertices": 48,
+        "m1": {
+          "prior_mlx_seconds": 0.4941119570285082,
+          "current_mlx_seconds": 0.26263049989938736,
+          "prior_over_current_mlx": 1.8813959430370821,
+          "prior_geopandas_seconds": 1.588620500639081,
+          "current_geopandas_seconds": 1.5980864148586988
+        },
+        "m4": {
+          "prior_mlx_seconds": 0.375985957973171,
+          "current_mlx_seconds": 0.19053579200044624,
+          "prior_over_current_mlx": 1.973308815239766,
+          "prior_geopandas_seconds": 0.9311667089932598,
+          "current_geopandas_seconds": 0.9231283329972939
+        }
+      },
+      {
+        "id": 4,
+        "label": "1M \u00d7 260",
+        "n": 1000000,
+        "m": 260,
+        "vertices": 2048,
+        "m1": {
+          "prior_mlx_seconds": 0.2965577933937311,
+          "current_mlx_seconds": 0.24643000029027462,
+          "prior_over_current_mlx": 1.2034159519717973,
+          "prior_geopandas_seconds": 1.5729832500219345,
+          "current_geopandas_seconds": 1.5984379183501005
+        },
+        "m4": {
+          "prior_mlx_seconds": 0.20768970798235387,
+          "current_mlx_seconds": 0.1724997080018511,
+          "prior_over_current_mlx": 1.2040003452071069,
+          "prior_geopandas_seconds": 1.128256457974203,
+          "current_geopandas_seconds": 1.0176861670006474
+        }
+      },
+      {
+        "id": 5,
+        "label": "1M \u00d7 1",
+        "n": 1000000,
+        "m": 1,
+        "vertices": 150000,
+        "m1": {
+          "prior_mlx_seconds": 0.2848432082682848,
+          "current_mlx_seconds": 0.1462666653096676,
+          "prior_over_current_mlx": 1.947423957914339,
+          "prior_geopandas_seconds": 2.723114585503936,
+          "current_geopandas_seconds": 2.729948664084077
+        },
+        "m4": {
+          "prior_mlx_seconds": 0.18163754203123972,
+          "current_mlx_seconds": 0.09808808399975533,
+          "prior_over_current_mlx": 1.8517798964417818,
+          "prior_geopandas_seconds": 1.5957565840217285,
+          "current_geopandas_seconds": 1.6197808750002878
+        }
+      }
+    ]
+  }
+}

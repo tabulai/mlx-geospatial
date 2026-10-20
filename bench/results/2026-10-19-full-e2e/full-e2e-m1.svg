@@ -1,0 +1,346 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="576pt" height="806.4pt" viewBox="0 0 576 806.4" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-10-19T11:40:57.570991</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.10.3, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 806.4
+L 576 806.4
+L 576 0
+L 0 0
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="patch_2">
+   <path d="M 33.408 198.3744
+L 182.2464 198.3744
+Q 192.6144 198.3744 192.6144 183.8592
+L 192.6144 120.96
+Q 192.6144 106.4448 182.2464 106.4448
+L 33.408 106.4448
+Q 23.04 106.4448 23.04 120.96
+L 23.04 183.8592
+Q 23.04 198.3744 33.408 198.3744
+z
+" style="fill: #f4f4f4"/>
+  </g>
+  <g id="patch_3">
+   <path d="M 213.5808 198.3744
+L 362.4192 198.3744
+Q 372.7872 198.3744 372.7872 183.8592
+L 372.7872 120.96
+Q 372.7872 106.4448 362.4192 106.4448
+L 213.5808 106.4448
+Q 203.2128 106.4448 203.2128 120.96
+L 203.2128 183.8592
+Q 203.2128 198.3744 213.5808 198.3744
+z
+" style="fill: #f4f4f4"/>
+  </g>
+  <g id="patch_4">
+   <path d="M 393.7536 198.3744
+L 542.592 198.3744
+Q 552.96 198.3744 552.96 183.8592
+L 552.96 120.96
+Q 552.96 106.4448 542.592 106.4448
+L 393.7536 106.4448
+Q 383.3856 106.4448 383.3856 120.96
+L 383.3856 183.8592
+Q 383.3856 198.3744 393.7536 198.3744
+z
+" style="fill: #f4f4f4"/>
+  </g>
+  <g id="patch_5">
+   <path d="M 330.3936 298.368
+L 499.968 298.368
+L 499.968 290.304
+L 330.3936 290.304
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_6">
+   <path d="M 330.3936 298.368
+L 370.28041 298.368
+L 370.28041 290.304
+L 330.3936 290.304
+z
+" style="fill: #2e6bd4"/>
+  </g>
+  <g id="patch_7">
+   <path d="M 330.3936 364.97664
+L 499.968 364.97664
+L 499.968 356.91264
+L 330.3936 356.91264
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_8">
+   <path d="M 330.3936 364.97664
+L 480.266973 364.97664
+L 480.266973 356.91264
+L 330.3936 356.91264
+z
+" style="fill: #2e6bd4"/>
+  </g>
+  <g id="patch_9">
+   <path d="M 330.3936 431.58528
+L 499.968 431.58528
+L 499.968 423.52128
+L 330.3936 423.52128
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_10">
+   <path d="M 330.3936 431.58528
+L 468.815764 431.58528
+L 468.815764 423.52128
+L 330.3936 423.52128
+z
+" style="fill: #2e6bd4"/>
+  </g>
+  <g id="patch_11">
+   <path d="M 330.3936 498.19392
+L 499.968 498.19392
+L 499.968 490.12992
+L 330.3936 490.12992
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_12">
+   <path d="M 330.3936 498.19392
+L 384.913505 498.19392
+L 384.913505 490.12992
+L 330.3936 490.12992
+z
+" style="fill: #2e6bd4"/>
+  </g>
+  <g id="patch_13">
+   <path d="M 330.3936 564.80256
+L 499.968 564.80256
+L 499.968 556.73856
+L 330.3936 556.73856
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_14">
+   <path d="M 330.3936 564.80256
+L 420.33819 564.80256
+L 420.33819 556.73856
+L 330.3936 556.73856
+z
+" style="fill: #2e6bd4"/>
+  </g>
+  <g id="patch_15">
+   <path d="M 330.3936 631.4112
+L 499.968 631.4112
+L 499.968 623.3472
+L 330.3936 623.3472
+z
+" style="fill: #edefef"/>
+  </g>
+  <g id="patch_16">
+   <path d="M 330.3936 631.4112
+L 492.507531 631.4112
+L 492.507531 623.3472
+L 330.3936 623.3472
+z
+" style="fill: #2e6bd4"/>
+  </g>
+  <g id="text_1">
+   <text style="font-weight: 700; font-size: 21px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="34.743056" transform="rotate(-0 23.04 34.743056)">Complete spatial joins</text>
+  </g>
+  <g id="text_2">
+   <text style="font-weight: 700; font-size: 16.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="66.645769" transform="rotate(-0 23.04 66.645769)">M1 Ultra · MLX vs GeoPandas</text>
+  </g>
+  <g id="text_3">
+   <text style="font-size: 11.1px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="23.04" y="87.734906" transform="rotate(-0 23.04 87.734906)">20 CPU cores · 64 GPU cores</text>
+  </g>
+  <g id="text_4">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="30.9888" y="129.649437" transform="rotate(-0 30.9888 129.649437)">Compared output</text>
+  </g>
+  <g id="text_5">
+   <text style="font-size: 18px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="30.9888" y="158.295771" transform="rotate(-0 30.9888 158.295771)">Full join</text>
+  </g>
+  <g id="text_6">
+   <text style="font-size: 10.1px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="30.9888" y="182.775449" transform="rotate(-0 30.9888 182.775449)">Attributes + geometry</text>
+  </g>
+  <g id="text_7">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="211.1616" y="129.649437" transform="rotate(-0 211.1616 129.649437)">Observed time ratio</text>
+  </g>
+  <g id="text_8">
+   <text style="font-size: 18px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="211.1616" y="158.295771" transform="rotate(-0 211.1616 158.295771)">2.35–9.56×</text>
+  </g>
+  <g id="text_9">
+   <text style="font-size: 10.1px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="211.1616" y="182.775449" transform="rotate(-0 211.1616 182.775449)">GeoPandas / MLX</text>
+  </g>
+  <g id="text_10">
+   <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="391.3344" y="129.649437" transform="rotate(-0 391.3344 129.649437)">Median time ratio</text>
+  </g>
+  <g id="text_11">
+   <text style="font-size: 18px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="391.3344" y="158.295771" transform="rotate(-0 391.3344 158.295771)">6.73×</text>
+  </g>
+  <g id="text_12">
+   <text style="font-size: 10.1px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="391.3344" y="182.775449" transform="rotate(-0 391.3344 182.775449)">Across six workloads</text>
+  </g>
+  <g id="text_13">
+   <text style="font-size: 10.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="23.04" y="229.412962" transform="rotate(-0 23.04 229.412962)">GeoPandas / MLX · above 1×: MLX faster · below 1×: GeoPandas faster</text>
+  </g>
+  <g id="text_14">
+   <text style="font-size: 9.8px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #898d91" x="347.35104" y="261.558587" transform="rotate(-0 347.35104 261.558587)">1×</text>
+  </g>
+  <g id="text_15">
+   <text style="font-size: 12.6px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="284.104013" transform="rotate(-0 23.04 284.104013)">100k × 260</text>
+  </g>
+  <g id="text_16">
+   <text style="font-size: 10.6px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="23.04" y="302.099337" transform="rotate(-0 23.04 302.099337)">48 vertices</text>
+  </g>
+  <g id="text_17">
+   <text style="font-size: 10.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="23.04" y="320.536163" transform="rotate(-0 23.04 320.536163)">109,267 rows</text>
+  </g>
+  <g id="text_18">
+   <text style="font-size: 11.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="182.016" y="285.3305" transform="rotate(-0 182.016 285.3305)">MLX  35.0 ms</text>
+  </g>
+  <g id="text_19">
+   <text style="font-size: 10.6px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="182.016" y="309.356938" transform="rotate(-0 182.016 309.356938)">GeoPandas  82.3 ms</text>
+  </g>
+  <g id="text_20">
+   <text style="font-size: 11.8px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="297.592062" transform="rotate(-0 552.96 297.592062)">2.35×</text>
+  </g>
+  <g id="text_21">
+   <text style="font-size: 12.6px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="350.712652" transform="rotate(-0 23.04 350.712652)">1M × 260</text>
+  </g>
+  <g id="text_22">
+   <text style="font-size: 10.6px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="23.04" y="368.707977" transform="rotate(-0 23.04 368.707977)">48 vertices</text>
+  </g>
+  <g id="text_23">
+   <text style="font-size: 10.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="23.04" y="387.144803" transform="rotate(-0 23.04 387.144803)">1,076,307 rows</text>
+  </g>
+  <g id="text_24">
+   <text style="font-size: 11.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="182.016" y="351.93914" transform="rotate(-0 182.016 351.93914)">MLX  205 ms</text>
+  </g>
+  <g id="text_25">
+   <text style="font-size: 10.6px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="182.016" y="375.965577" transform="rotate(-0 182.016 375.965577)">GeoPandas  1.81 s</text>
+  </g>
+  <g id="text_26">
+   <text style="font-size: 11.8px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="364.200702" transform="rotate(-0 552.96 364.200702)">8.84×</text>
+  </g>
+  <g id="text_27">
+   <text style="font-size: 12.6px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="417.321292" transform="rotate(-0 23.04 417.321292)">10M × 260</text>
+  </g>
+  <g id="text_28">
+   <text style="font-size: 10.6px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="23.04" y="435.316618" transform="rotate(-0 23.04 435.316618)">48 vertices</text>
+  </g>
+  <g id="text_29">
+   <text style="font-size: 10.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="23.04" y="453.753443" transform="rotate(-0 23.04 453.753443)">10,689,126 rows</text>
+  </g>
+  <g id="text_30">
+   <text style="font-size: 11.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="182.016" y="418.54778" transform="rotate(-0 182.016 418.54778)">MLX  2.71 s</text>
+  </g>
+  <g id="text_31">
+   <text style="font-size: 10.6px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="182.016" y="442.574217" transform="rotate(-0 182.016 442.574217)">GeoPandas  22.1 s</text>
+  </g>
+  <g id="text_32">
+   <text style="font-size: 11.8px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="430.809342" transform="rotate(-0 552.96 430.809342)">8.16×</text>
+  </g>
+  <g id="text_33">
+   <text style="font-size: 12.6px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="483.929932" transform="rotate(-0 23.04 483.929932)">1M × 10k</text>
+  </g>
+  <g id="text_34">
+   <text style="font-size: 10.6px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="23.04" y="501.925257" transform="rotate(-0 23.04 501.925257)">48 vertices</text>
+  </g>
+  <g id="text_35">
+   <text style="font-size: 10.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="23.04" y="520.362083" transform="rotate(-0 23.04 520.362083)">1,121,558 rows</text>
+  </g>
+  <g id="text_36">
+   <text style="font-size: 11.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="182.016" y="485.15642" transform="rotate(-0 182.016 485.15642)">MLX  494 ms</text>
+  </g>
+  <g id="text_37">
+   <text style="font-size: 10.6px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="182.016" y="509.182858" transform="rotate(-0 182.016 509.182858)">GeoPandas  1.59 s</text>
+  </g>
+  <g id="text_38">
+   <text style="font-size: 11.8px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="497.417982" transform="rotate(-0 552.96 497.417982)">3.22×</text>
+  </g>
+  <g id="text_39">
+   <text style="font-size: 12.6px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="550.538572" transform="rotate(-0 23.04 550.538572)">1M × 260</text>
+  </g>
+  <g id="text_40">
+   <text style="font-size: 10.6px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="23.04" y="568.533897" transform="rotate(-0 23.04 568.533897)">2,048 vertices</text>
+  </g>
+  <g id="text_41">
+   <text style="font-size: 10.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="23.04" y="586.970722" transform="rotate(-0 23.04 586.970722)">1,076,107 rows</text>
+  </g>
+  <g id="text_42">
+   <text style="font-size: 11.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="182.016" y="551.76506" transform="rotate(-0 182.016 551.76506)">MLX  297 ms</text>
+  </g>
+  <g id="text_43">
+   <text style="font-size: 10.6px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="182.016" y="575.791497" transform="rotate(-0 182.016 575.791497)">GeoPandas  1.57 s</text>
+  </g>
+  <g id="text_44">
+   <text style="font-size: 11.8px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="564.026623" transform="rotate(-0 552.96 564.026623)">5.30×</text>
+  </g>
+  <g id="text_45">
+   <text style="font-size: 12.6px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="23.04" y="617.147213" transform="rotate(-0 23.04 617.147213)">1M × 1</text>
+  </g>
+  <g id="text_46">
+   <text style="font-size: 10.6px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="23.04" y="635.142538" transform="rotate(-0 23.04 635.142538)">150,000 vertices</text>
+  </g>
+  <g id="text_47">
+   <text style="font-size: 10.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="23.04" y="653.579363" transform="rotate(-0 23.04 653.579363)">217,315 rows</text>
+  </g>
+  <g id="text_48">
+   <text style="font-size: 11.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #25282b" x="182.016" y="618.3737" transform="rotate(-0 182.016 618.3737)">MLX  285 ms</text>
+  </g>
+  <g id="text_49">
+   <text style="font-size: 10.6px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="182.016" y="642.400138" transform="rotate(-0 182.016 642.400138)">GeoPandas  2.72 s</text>
+  </g>
+  <g id="text_50">
+   <text style="font-size: 11.8px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #25282b" x="552.96" y="630.635262" transform="rotate(-0 552.96 630.635262)">9.56×</text>
+  </g>
+  <g id="text_51">
+   <text style="font-size: 10.2px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="330.3936" y="680.996962" transform="rotate(-0 330.3936 680.996962)">0×</text>
+  </g>
+  <g id="text_52">
+   <text style="font-size: 10.2px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #898d91" x="415.1808" y="680.996962" transform="rotate(-0 415.1808 680.996962)">5×</text>
+  </g>
+  <g id="text_53">
+   <text style="font-size: 10.2px; font-family: 'DejaVu Sans'; text-anchor: end; fill: #898d91" x="499.968" y="680.996962" transform="rotate(-0 499.968 680.996962)">10×</text>
+  </g>
+  <g id="text_54">
+   <text style="font-size: 9.1px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="23.04" y="712.822884" transform="rotate(-0 23.04 712.822884)">Latest optimized build · median of 3 trials · cold index construction · exact_boundary=True</text>
+  </g>
+  <g id="text_55">
+   <text style="font-size: 9.1px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="23.04" y="729.883831" transform="rotate(-0 23.04 729.883831)">All matching pairs; complete point-left GeoDataFrames with attributes and canonical sorting.</text>
+  </g>
+  <g id="text_56">
+   <text style="font-size: 9.1px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="23.04" y="746.818231" transform="rotate(-0 23.04 746.818231)">Ready input GeoDataFrame creation excluded equally; complete output materialization included.</text>
+  </g>
+  <g id="text_57">
+   <text style="font-size: 9.1px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="23.04" y="763.752631" transform="rotate(-0 23.04 763.752631)">Full output equality checked for every workload on both hosts.</text>
+  </g>
+  <g id="text_58">
+   <text style="font-size: 9.1px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #898d91" x="23.04" y="780.687031" transform="rotate(-0 23.04 780.687031)">Measured 2026-10-19 · Same ratio scale on every chart; operating systems differ across hosts.</text>
+  </g>
+  <g id="line2d_1">
+   <path d="M 347.35104 643.5072
+L 347.35104 276.5952
+" style="fill: none; stroke-dasharray: 3,3; stroke-dashoffset: 0; stroke: #747a80"/>
+  </g>
+ </g>
+</svg>

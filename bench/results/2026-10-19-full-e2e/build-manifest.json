@@ -1,0 +1,24 @@
+{
+  "base_git_sha": "9b6c5b0daf8eda09f41ed0865d2b4f77a8d4da38",
+  "branch": "codex/spatial-join-performance",
+  "wheel_sha256": "923cacf8770e9334c52dfdf0dcce6b557130310abdcc7811706d7643ee8f1273",
+  "python_modules": {
+    "__init__.py": "9f29e4f5feb2d02b731d15f4cdff7cb4da1958fbfc0526bcb7aa778cecd3b8c5",
+    "_boundary.py": "9986b0139a0ab428ed104a80f1ab67dc6c7718a354d393b2e53c6e1fe0a860b3",
+    "_boundary_indexed.py": "e8cc788e1a463e82f8f9efa3b24cba7d91ae017050e457e5989772adc283a57d",
+    "_dispatch.py": "6cdb7e9da028c0c93bdf3cba01d0d4b193af4a31775b6cf09c05cc8cd71dde13",
+    "_edge_index.py": "90e945eb1eec5f5bdd800732c82f46e5d260155ddd79825f72fb9c8823cdf603",
+    "_ingest.py": "0b39811f6859b0aa4f6323d2632f0a83a74aefeabc3fde971cea6730ebec55d1",
+    "_pip.py": "664910d8b94ddcde1103f798dd590cf758a5145cffecee8fe03d746de1a48a29",
+    "_pip_indexed.py": "f5570e4614ec97679e58125818e071fe030d32fc8f1f32df803ca5508da72b25",
+    "_precision.py": "083907d35b497d10d7d24a8f5a227cab19c2d1111350c40d54956740236eea5c",
+    "_validation.py": "310b4b7b097b33f95be4a79c11e67c5ffc54e7d84198dd162d8ceedf5d21f046",
+    "_version.py": "91447944015cec709e8aa7655f7e9d64e1e4508e7023a57fe3746911c0fc6fed",
+    "haversine.py": "fb4f2c86a1a658871892946a9fd65c3527dddabe7b0f3bb5f467bf73b5bfaf26",
+    "join.py": "05a5b999c3fcab48887daee8c146618d4824ea66a33335b7d5da1a192847a210"
+  },
+  "package_python_manifest_sha256": "0f50eb9f97d215e63fc17e29086ebb18ac5b7912467839f878856fc36022dc02",
+  "measurement_date": "2026-10-19",
+  "documentation_updated_after_measurement": true,
+  "verification": "Fresh complete six-case run on each host, same frozen optimized wheel; 48 paired full-output checks passed. All 25 input fingerprints and output hashes match. The unchanged wheel previously passed 610 tests per host; logs are retained. Workspace Python source equals measured installed modules. Documentation was revised after measurement; source changes were uncommitted when measured."
+}

@@ -100,14 +100,39 @@ boundary point — results are undefined, so a shared-edge point may match eithe
 adjacent polygon, both, or neither; `predicate` (`intersects`/`within`, kept
 for GeoPandas compatibility) therefore changes nothing by default, and
 `exact_boundary=True` re-checks the points within the band with GEOS so the
-predicate is honored exactly. The band is found without GEOS distances: an
-STRtree over every edge's envelope widened by the tolerance (cached on the
-polygon set) returns candidate (point, edge) pairs by envelope alone and a
-float64 point-to-segment test in NumPy settles them, 3-5x cheaper than
-`dwithin` against whole boundaries (about 0.3 s per million points on
-48-vertex zones, 0.5 s on 10k zones; still two orders of magnitude slower
-than the GPU query itself, so the opt-in is for boundary-sensitive work). The
-work is bounded by candidate pairs: the distance test runs over pair chunks and
+predicate is honored exactly. GPU queries first run a conservative Metal
+filter using the existing grid CSR and polygon buffers. Expanded edge boxes
+and a generously padded line strip reject points far from every boundary;
+uncertain arithmetic, tiny edges and cell-border points remain candidates.
+The filter uses bounded batches that respect `max_pairs_per_batch` and an
+additional edge-work budget. Detailed rings reuse the y-band edge index
+described below. Excessive per-point work, unfavorable edge-index expansion
+and unsafe numerical scales retain the full host route.
+
+Only rows retained by the GPU filter need the exact host band test (CPU
+queries test every row). A float64 uniform grid over the tolerance-widened
+edge envelopes, built once per polygon set, finds exactly the rows of an
+STRtree over those envelopes: the envelopes use the same float64 box
+arithmetic, envelope corners and points map to cells through one monotone
+float64 formula (so a point inside an envelope lands in a cell listing that
+edge), each candidate pair re-applies the inclusive envelope test, and the
+float64 point-to-segment arithmetic settles the result. Building it costs a
+few float64 passes and a uint16 radix sort instead of one shapely box per
+edge. A query whose candidate pairs far exceed its rows (a layer too
+clustered for a uniform grid) falls back to that STRtree. GEOS then
+evaluates the predicate for the near rows per (point, polygon) pair, except
+that a single-ring polygon with at least 512 edges and enough near points to
+amortize preparing it (16, or 48 from 10,000 edges) is evaluated
+polygon-major, as `contains`/`covers(polygon, points)` with the polygon
+prepared only for that query: its indexed locator replaces a full walk of
+the ring per pair. On one ring the prepared locator and GEOS relate apply the
+same ray-crossing test, so answers are unchanged even for invalid rings;
+multi-ring geometry, where they can differ on invalid input, keeps the
+per-pair route. All-match
+refinement sorts only the GEOS replacement pairs and merges them into the
+already sorted output; unchanged groups leave the original arrays intact.
+This avoids sorting the complete join after correcting a few boundary rows.
+Host work is bounded by candidate pairs: the distance test runs over pair chunks and
 a point slice whose widened envelopes return too many pairs (a few large
 polygons with extent-spanning edges) is retried shorter. Non-finite rows are
 skipped. One
@@ -138,7 +163,29 @@ haversine `h` term inline (no asin/sqrt in the scan) and avoid both the
 
 Selected survivors get their distances recomputed through the exact `_hav`
 graph, so reported distances are bit-identical to `haversine_cross`, followed
-by a k-element distance sort. Exact `h` ties use the lower reference index;
+by a k-element distance sort.
+
+For `k <= 16` on large inputs, chord-filtered variants of both selectors
+skip most of that exact work. On the unit sphere the squared chord between
+two points is exactly `4h`, so each reference first costs a 16-byte read of its
+precomputed unit vector and three multiply-adds; the two precise sines of the
+exact `h` run only when the chord passes a conservative threshold derived
+from the current k-th best `h` and recomputed on insertion. The threshold's
+slack covers the fp32 error of both quantities with a margin of more than 40x
+on adversarial pairs, so a skipped reference could never have been inserted
+and the output is bit-identical to the plain selectors. The SIMDgroup variant
+shares the tightest lane threshold across its 32 lanes, since any lane's
+k-th best bounds the query's. Latitudes beyond ±90° or coordinates beyond
+1e3 rad void the error budget; a device-side flag then runs the plain scan
+without a host sync. These kernels also compute the distances and the final
+stable distance sort in-kernel, with the `_hav` arithmetic. Routing keeps the
+plain selectors for `k > 16` and for small shapes that cannot repay the
+unit-vector pass. An earlier routing study found that inputs defeating the
+filter, such as references packed into a cluster much smaller than its distance from the
+queries, ran about 15% slower than the plain selectors. The current city-cloud
+benchmark sweep does not remeasure that adverse distribution.
+
+Exact `h` ties use the lower reference index;
 distinct `h` values that round to the same reported fp32 distance retain the
 documented near-tie ambiguity. Shape-aware dispatch retains the scalar kernel
 once query parallelism is sufficient or SIMDgroup merge/register pressure
@@ -194,6 +241,25 @@ change scheduling only: sorted CSR traversal, stable scan/compaction, and
 first-hit early return preserve the public minimum-index and output-order
 contracts.
 
+For rings with at least 2,048 vertices (2,047 edges), sufficiently large first-match,
+explicit-pair and all-match GPU queries can build a shared y-band edge
+index. Each geometry has at most 512 bands. Stored fp32 cutoffs are compared
+directly with binary search, so lookup introduces no coordinate arithmetic
+rounding. Each original ring edge appears once in every band intersecting
+its y interval, padded by four boundary tolerances. Closing-vertex jumps
+between rings are excluded. The fused predicate visits just the chosen
+band, retaining the exact crossing expression and disabled FMA contraction.
+The boundary filter reuses these lists, including horizontal edges, and
+still sends uncertain points through the original float64/GEOS oracle.
+
+Construction is lazy and cached, including rejected builds. Expansion is
+checked before allocating repeated references: at most 16 references per
+original edge on average and 8 million total. Highly folded geometry with
+poor pruning retains the existing traversal. Cold queries below 32,768
+candidate pairs (65,536 points for first-match or boundary filtering) avoid
+the build; warm queries reuse it regardless of size. The index changes the visited edge subset, not containment,
+first-match selection, pair limits, or output ordering.
+
 ## Dispatch
 
 For host-resident inputs, `auto` compares a two-term cost model: the NumPy
@@ -208,49 +274,61 @@ passes with their syncs). With the shipped constants the model switches at
 (only ~9 candidate edges per point) and under ten for 2048-vertex zones for
 first match, and about four times later for all matches. The constants live
 in `_dispatch.py` and `bench.py --op crossover` re-fits them. The asymmetry
-is bounded on both sides. The fixed GPU cost depends on the GPU's clock
-state: on an M4 Max about 200 us per first-match query in a back-to-back burst
-but 0.8-1.1 ms for a query issued after host-only work has let the GPU idle
-(1.1 ms versus 2.5 ms for all matches), so `GPU_LAUNCH_US` (350) and
-`GPU_ALL_MATCHES_LAUNCH_US` (1500) sit between the two regimes and the sweep
-reports both: picking the CPU while the GPU was warm loses at most the gap to
-the warm launch (~0.2 ms first match, ~0.45 ms all matches, on every layer
-because the index supplies the edge estimate), picking the GPU after it has
-idled loses up to ~0.6 ms / ~1 ms just above the threshold. The fallback is
-the NumPy even-odd
-evaluation described above (bit-identical to the kernels; GEOS is not on the
-query path), so dispatch can never change an answer. It is about 1.5-2x slower
-than GEOS per point on 48-vertex zones (1.5 s per million points), up to ~7x
-on 2048-vertex zones and faster than GEOS on sparse axis-aligned tilings,
-with ~50 us of fixed setup per call; it exists for consistency and for
-Metal-less hosts, where the GPU path is unavailable, and processes points in
-slices bounded by candidate pairs so its memory does not grow with the point
-count (about 250-300 MB peak at 1-2M points on 260 zones). No candidate
-counting is needed to
-dispatch. Device-resident inputs run on the GPU whenever Metal is available,
+is bounded on both sides. Fixed GPU cost depends on the GPU's clock state;
+a query after host-only work can cost more than one in a warm burst. The
+[current component report](../bench/results/2026-10-19-opus-speedups/COMPONENTS.md)
+records fresh warm/idle probes and CPU/GPU crossover tables. The shipped
+`GPU_LAUNCH_US` (350) and `GPU_ALL_MATCHES_LAUNCH_US` (1500) constants are
+unchanged by that measurement run. The original calibration and its timing
+observations remain in the [historical report](../bench/HISTORICAL.md).
+
+The fallback uses the NumPy even-odd evaluation described above, with the
+same arithmetic contract as the GPU; GEOS is not on this query path. It
+exists for consistency and for Metal-less hosts. Candidate-pair budgets
+bound its working slices. No candidate counting is needed to dispatch. Device-resident inputs run on the GPU whenever Metal is available,
 since the fallback would need a host copy; `backend="cpu"` on them copies the
 fp32 local coordinates to the host and runs the same NumPy predicate (a
 parity/debug path). Override per call (`backend=`) or via
 `MLX_GEOSPATIAL_BACKEND`.
 
-## Benchmark honesty rules
+## Benchmark contracts
 
-End-to-end timings from host-resident inputs including ingestion; cold vs
-warm-index reported separately; sweep N and M; show the CPU/GPU crossover
-rather than a single headline multiple. Like against like: join baselines
-return all pairs, so speedups are quoted against our `all_matches=True` row,
-with first match shown beside it; the BallTree baseline is quoted with the
-tree built in the timed region and query-only on a prebuilt tree. Baselines
-get their best configuration (polygons as the prepared query side of the
-STRtree and the left frame of `sjoin`: 8-60x faster on detailed polygons
-than the unprepared orientation). Thread counts are stated (GEOS, GeoPandas
-and scikit-learn use one core, DuckDB its full default pool, the GPU rows the
-whole GPU). Synthetic zones are described as what they are (overlapping
-star-shaped polygons with measured coverage, not a convex tiling), and
-detailed geometry (2,048-vertex zones, a 150k-vertex polygon) is benchmarked
-because that is where baseline configuration and our per-candidate ring walk
-matter most. Baselines: shapely STRtree, geopandas sjoin, DuckDB spatial,
-sklearn (haversine/BallTree), numpy float64.
+The current [end-to-end comparison](../bench/README.md) starts from ready
+point and polygon GeoDataFrames, with fresh spatial indexes for every timed
+call. MLX constructs the PolygonSet, grid and any edge index, extracts point
+coordinates, returns all matching pairs with `predicate="within"` and
+`exact_boundary=True`, and assembles a complete point-left GeoDataFrame.
+GeoPandas uses its native `sjoin(left, right, how="inner", predicate="within")`
+with default indexing. Both results preserve attributes, geometry, CRS and
+index labels, and both perform the same canonical sort inside the timer.
+The frozen MLX adapter calls `GridIndex.query` and assembles attributes;
+it does not time the public `ms.sjoin` wrapper.
+
+Every workload receives one untimed full warmup and three measured paired
+trials, alternating method order. Report medians and retain individual
+samples; three trials do not establish a latency distribution. Input frame
+creation/copies, imports, cold kernel compilation, I/O and validation are
+excluded. Full output equality is checked outside every paired timer.
+Input fingerprints, output pair hashes, installed module hashes, runtime
+versions and machine metadata accompany the results. Both hosts use the
+same package and dependencies, with CPU thread environment limits stated;
+GeoPandas uses its native join without parallel partitioning, while MLX
+uses Metal and up to eight host worker threads for Point coordinate
+extraction. These workers are independent of BLAS/OpenMP thread limits.
+
+The six synthetic workloads cover point and polygon counts, resampled
+2,048-vertex zones and one undulating 150k-vertex polygon. Resampling adds
+edges without adding independent shape detail, so vertex count alone does
+not predict speed. Band overlap, candidate counts and result size also
+matter. These are point-in-polygon joins, not polygon overlays or arbitrary
+spatial predicates.
+
+The separate [current component benchmarks](../bench/results/2026-10-19-opus-speedups/COMPONENTS.md)
+measure warm/cold array queries, distance matrices, kNN and CPU/GPU
+crossover. Their prepared-polygon orientation, output contracts and timing
+statistics differ. Do not combine those ratios with the current complete
+GeoDataFrame timings. The frozen end-to-end harness and reference input
+fingerprints are retained under `bench/e2e/` for reproducibility.
 
 ## The differentiated story
 
@@ -258,6 +336,8 @@ Array-native in unified memory: `PolygonSet.to_local` re-centers a point
 table once; `GridIndex.query(LocalPoints)` returns zone ids as a lazy MLX
 array computed entirely on the GPU, `haversine*` return MLX distance features,
 and both feed an `mlx.nn` model directly (`examples/mlx_feature_pipeline.py`).
-Zero copies and zero serialization, something neither GeoPandas nor DuckDB can
-offer; GeoPandas users still get NumPy back because the output container
-follows the input container.
+Prepared device inputs and MLX query results can stay in the MLX pipeline
+without conversion to host arrays. Host-input queries return NumPy arrays;
+exact boundary refinement and DataFrame joins also perform host work.
+This distinction separates the device workflow from the complete
+GeoDataFrame benchmark.

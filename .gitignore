@@ -5,8 +5,11 @@ build/
 dist/
 .pytest_cache/
 .venv/
+.venv-e2e/
 venv/
 .DS_Store
-bench/results/
+bench/results/*
+!bench/results/2026-10-19-full-e2e/
+!bench/results/2026-10-19-opus-speedups/
 bench/data/
 docs/site/

@@ -1,0 +1,17 @@
+{
+  "source_git_sha": "880522855606458869052d6ff069fbd1cbb53d1a",
+  "tests_passed_per_host": {
+    "m1": 721,
+    "m4": 721
+  },
+  "paired_full_output_checks": 48,
+  "current_component_measurements": 406,
+  "current_component_reports": 24,
+  "current_crossover_timers": 288,
+  "documentation_links": "passed",
+  "duplicated_timing_tables": "identical to generated table",
+  "source_identity": "all current raw runs match measured wheel and checkout",
+  "historical_evidence": "unchanged",
+  "lint_scope": "mlx_geospatial tests bench docs examples",
+  "unrelated_lint_note": "A broader ruff check . also examined the pre-existing untracked launch-video tree and found 48 issues there; those files were not changed."
+}

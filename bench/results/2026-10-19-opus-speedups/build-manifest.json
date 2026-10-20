@@ -1,0 +1,29 @@
+{
+  "git_sha": "880522855606458869052d6ff069fbd1cbb53d1a",
+  "prior_git_sha": "fc0bb6e656d34093f41f79928586cfa88e4697cc",
+  "measurement_date": "2026-10-19",
+  "wheel_sha256": "e4e5a252f455dd024db9ad7973ee00e6c65fdd7ca5678756bb155cc7c77c9748",
+  "python_modules": {
+    "__init__.py": "9f29e4f5feb2d02b731d15f4cdff7cb4da1958fbfc0526bcb7aa778cecd3b8c5",
+    "_boundary.py": "9986b0139a0ab428ed104a80f1ab67dc6c7718a354d393b2e53c6e1fe0a860b3",
+    "_dispatch.py": "6cdb7e9da028c0c93bdf3cba01d0d4b193af4a31775b6cf09c05cc8cd71dde13",
+    "_edge_grid.py": "eedecdeab17f5e4a932948fdf2ac777ebc25ff1abaeb15d18cfaa585e9efe9ee",
+    "_edge_index.py": "90e945eb1eec5f5bdd800732c82f46e5d260155ddd79825f72fb9c8823cdf603",
+    "_ingest.py": "1ae8e107ae0529d5ba44bfa0ed802f92cf058c7ef347157ce88581d3a55bd3aa",
+    "_pip.py": "664910d8b94ddcde1103f798dd590cf758a5145cffecee8fe03d746de1a48a29",
+    "_pip_indexed.py": "f5570e4614ec97679e58125818e071fe030d32fc8f1f32df803ca5508da72b25",
+    "_precision.py": "083907d35b497d10d7d24a8f5a227cab19c2d1111350c40d54956740236eea5c",
+    "_validation.py": "310b4b7b097b33f95be4a79c11e67c5ffc54e7d84198dd162d8ceedf5d21f046",
+    "_version.py": "91447944015cec709e8aa7655f7e9d64e1e4508e7023a57fe3746911c0fc6fed",
+    "haversine.py": "5ec1ebb60f12aa499b268718bf7ce2cb2e5a28b67159a0dece3c13189a0995ce",
+    "join.py": "c308922ce7b4423ff6a4aff766a5dbde2950b1bfe3246d58a95e0d02a582fd0e"
+  },
+  "package_python_manifest_sha256": "0ed9d53716a35ef5d85ca2b4794113f860d535f3a839f2ad1314bac3dd4c7d3c",
+  "point_extraction_workers": 8,
+  "source_snapshot": "Clean git archive of git_sha; wheel built from this snapshot. Test suite runs against that identical source snapshot with Metal validation enabled. Benchmarks import the installed wheel.",
+  "harness_sha256": {
+    "bench.py": "5c2c9da30d83a13f65232ed592a9cced96dc19b28215d580596944a91c19f74a",
+    "run_benchmarks.py": "cf1849904ea3fabd262ef7a2d3c4041475fe4f058c460c027bbf7f4f6b169669",
+    "run_e2e.py": "6724340a7834ddfada7c5421084013b45fcb69ad423dd5678816e11615274b25"
+  }
+}

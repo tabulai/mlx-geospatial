@@ -16,6 +16,10 @@ Four GPU paths share identical semantics:
   long-ring kernels, selected by shape. Used for dense ``(N, M)`` containment
   matrices.
 
+Very long rings can use a cached y-band edge index in the pair, first-match
+and all-match paths. Its fused predicates keep the same arithmetic while
+visiting only edges whose y intervals can affect the point.
+
 The former composed-MLX dense implementation remains as a private fallback
 for non-Metal systems and as an independent correctness oracle in tests.
 
@@ -29,8 +33,9 @@ or neither; there is no general uniqueness guarantee inside the band.
 Operation order is part of the contract: every kernel string that evaluates
 the x-intersection carries ``#pragma clang fp contract(off)`` (Metal's default
 fast-math would fuse the multiply-add into an FMA and move the intersection
-by a rounding), so all 14 predicate kernels agree bit for bit with the NumPy
-host fallback; the composed mx.compile oracle is verified against the same
+by a rounding), so the 14 traversal kernels and three indexed predicates
+agree bit for bit with the NumPy host fallback; the composed mx.compile oracle
+is verified against the same
 reference in tests. The one hazard the pragma cannot switch off is the GPU's
 flush of fp32 subnormals, reachable only when a coordinate or an edge delta is
 itself subnormal (~1e-38; local coordinates far below anything re-centered
@@ -46,6 +51,7 @@ import numpy as np
 
 from ._dispatch import metal_available
 from ._ingest import PolygonSet
+from ._pip_indexed import indexed_pip
 from ._validation import check_chunk_bytes
 
 __all__ = [
@@ -1286,6 +1292,10 @@ def pip_pairs(
     n_pairs = int(pair_point.shape[0])
     if n_pairs == 0:
         return mx.zeros((0,), dtype=mx.uint8)
+    indexed = indexed_pip("pairs", points_local, polygons,
+                          [pair_point, pair_poly], [n_pairs], threadgroup=threadgroup)
+    if indexed is not None:
+        return indexed
     if max_ring_edges is None:
         max_ring_edges = polygons.max_edges_per_ring
     strategy = _pip_long_polygon_strategy(n_pairs, max_ring_edges)
@@ -1339,6 +1349,11 @@ def pip_first_match(
     n_points = int(points_local.shape[0])
     if n_points == 0:
         return mx.zeros((0,), dtype=mx.int32)
+    indexed = indexed_pip("first", points_local, polygons,
+                          [point_cell, cell_offsets, cell_poly], [n_points],
+                          threadgroup=threadgroup)
+    if indexed is not None:
+        return indexed
     if max_ring_edges is None:
         max_ring_edges = polygons.max_edges_per_ring
     strategy = _pip_long_polygon_strategy(
@@ -1489,14 +1504,20 @@ def pip_all_matches(
             count_kernel = _get_all_matches_pair_count_kernel()
             count_grid = (n_pairs, 1, 1)
             count_threadgroup = (pair_threadgroup, 1, 1)
-        (match_flag,) = count_kernel(
-            inputs=[*common_inputs, shape],
-            grid=count_grid,
-            threadgroup=count_threadgroup,
-            output_shapes=[(n_pairs,)],
-            output_dtypes=[mx.int32],
-            stream=mx.gpu,
+        match_flag = indexed_pip(
+            "all", points_local, polygons,
+            [point_id, point_cell, candidate_offsets, cell_offsets, cell_poly, limits],
+            [n_pairs, n_active], threadgroup=threadgroup,
         )
+        if match_flag is None:
+            (match_flag,) = count_kernel(
+                inputs=[*common_inputs, shape],
+                grid=count_grid,
+                threadgroup=count_threadgroup,
+                output_shapes=[(n_pairs,)],
+                output_dtypes=[mx.int32],
+                stream=mx.gpu,
+            )
         inclusive = mx.cumsum(match_flag, stream=mx.gpu)
         n_matches = int(inclusive[-1].item())
         if n_matches == 0:

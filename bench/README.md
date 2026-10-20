@@ -1,289 +1,258 @@
-# Benchmark results and methodology
+# Spatial-join benchmarks
 
-These measurements show where mlx-geospatial is fast and where a CPU library
-can be a better choice. The largest gains come from large point-in-polygon
-queries and distance matrices. Small queries pay for GPU launch overhead,
-and a prebuilt BallTree can beat brute-force GPU nearest-neighbor search.
+The primary comparison measures **exact point-in-polygon joins from ready
+GeoDataFrames to complete joined GeoDataFrames**, including fresh index
+construction. Both implementations return every matching point–polygon pair,
+with the same attributes, point geometry, index labels, dtypes, CRS, and row
+order. The measurements below cover six synthetic workloads on an M1 Ultra
+and an M4 Max, recorded on **2026-10-19**.
 
-## Test machine and runtime
+These results describe the optimized **workspace build**, not the previously
+published PyPI distribution. The identical wheel was installed on both hosts;
+its source hashes and build information are preserved in the
+[build manifest](results/2026-10-19-opus-speedups/build-manifest.json).
 
-Apple M4 Max, 16 CPU cores (12 performance + 4 efficiency), macOS 26.2,
-Python 3.13, MLX 0.31.2.
+## Current results
 
-These are pre-release reference measurements. The v0.1.0 release requires
-MLX ≥ 0.32.0 for an upstream custom-kernel cache correctness fix. Reproduce
-the measurements on your supported runtime before making capacity decisions.
-The tables describe these workloads on one machine, not every dataset or
-geospatial operation.
+MLX completed all six joins faster than GeoPandas on each machine:
+**3.78–18.66× on M1 Ultra** (median ratio **8.00×**) and
+**2.55–16.51× on M4 Max** (median ratio **6.35×**). The M4 Max
+completed the MLX joins **1.23–1.69× faster** than the M1 Ultra.
+These are complete new runs of all six workloads on commit `8805228`;
+no rows are carried over from earlier optimization studies.
 
-## What the timings include
+The latest build adds threaded Point extraction, a host float64 edge grid,
+and polygon-major GEOS refinement. Relative to the preceding complete run,
+MLX medians improved **1.16–1.95× on M1 Ultra** and **1.20–1.97× on M4 Max**.
+The [prior/current table](results/2026-10-19-opus-speedups/tables.md)
+compares identical inputs and runtime versions in separate sessions;
+these differences can also reflect background activity.
 
-- **Host inputs:** unless stated otherwise, MLX timings start from NumPy
-  points and include conversion, re-centering where needed, input transfer,
-  execution, and result evaluation/synchronization. Host-input joins return
-  fully materialized NumPy results, using a zero-copy view of the MLX result.
-  Distance functions return MLX arrays. “NumPy” in a join label describes
-  the input/output container; the timed query runs on the GPU.
-- **Warm and cold joins:** warm queries reuse a `PolygonSet` and `GridIndex`;
-  cold queries build them inside the timer. Warm rows also warm the GPU clocks
-  before measurement, so they represent repeated queries in a burst. An
-  isolated query after the GPU has idled has a larger launch cost.
-- **Prepared points:** the `LocalPoints` rows exclude the one-time
-  re-centering/upload with `PolygonSet.to_local`. They return MLX arrays and
-  include `mx.eval` inside the timer.
-- **CPU baselines:** Shapely/GEOS, GeoPandas and scikit-learn use one core.
-  DuckDB uses its default 16 threads. MLX uses the whole GPU.
-- **Repeated measurements:** the default is best of 3 after one warmup.
-  DuckDB uses best of 2 after one warmup. GeoPandas has no warmup and uses
-  3 runs, except at 10M points, where it uses one run. The crossover tables
-  use best of 7 after warmup. These are minimum wall times, not latency
-  distributions or error bars.
-- **Unavailable baselines:** the harness reports `n/a` rather than silently
-  omitting them. DuckDB queries are interrupted after 300 seconds.
+![Exact spatial joins with fresh indexes and complete GeoDataFrame outputs](results/2026-10-19-opus-speedups/full-e2e-overview.png)
 
-The benchmark does not time `exact_boundary=True`. That option adds a host
-pass and GEOS refinement, so these GPU timings should not be used to estimate
-its cost.
+| Points × polygons | Vertices | M1 Ultra MLX | M1 Ultra GeoPandas | Speedup | M4 Max MLX | M4 Max GeoPandas | Speedup |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 100k × 260 | 48 | 22.9 ms | 86.6 ms | **3.78×** | 18.6 ms | 47.5 ms | **2.55×** |
+| 1M × 260 | 48 | 157 ms | 1.67 s | **10.66×** | 118 ms | 805 ms | **6.81×** |
+| 10M × 260 | 48 | 2.34 s | 22.23 s | **9.52×** | 1.38 s | 11.02 s | **7.96×** |
+| 1M × 10k | 48 | 263 ms | 1.60 s | **6.08×** | 191 ms | 923 ms | **4.84×** |
+| 1M × 260 | 2,048 | 246 ms | 1.60 s | **6.49×** | 172 ms | 1.02 s | **5.90×** |
+| 1M × 1 | 150,000 | 146 ms | 2.73 s | **18.66×** | 98.1 ms | 1.62 s | **16.51×** |
 
-## Point-in-polygon joins
+Each speedup is the GeoPandas median divided by the MLX median on the same
+machine. Medians across workloads are descriptive summaries of these six
+ratios, not a prediction for another dataset. Elapsed times use seconds
+or milliseconds; output counts and geometry complexity differ by workload.
 
-### All matching pairs
+The charts and tables come from the same unrounded
+[JSON results](results/2026-10-19-opus-speedups/comparison.json) and
+[CSV results](results/2026-10-19-opus-speedups/comparison.csv). Individual trial
+samples are retained in JSON; both formats retain minimum/maximum ranges. Download the
+[overview SVG](results/2026-10-19-opus-speedups/full-e2e-overview.svg),
+[M1 Ultra chart](results/2026-10-19-opus-speedups/full-e2e-m1.png), or
+[M4 Max chart](results/2026-10-19-opus-speedups/full-e2e-m4.png).
 
-Every system evaluates all matching `(point, polygon)` pairs. MLX, Shapely
-and GeoPandas materialize the matches. DuckDB returns only `count(*)`, which
-gives it a lighter output contract. All ratios below use MLX
-`all_matches=True` as the denominator.
+## What is measured
 
-Each baseline cell shows elapsed time and how many times longer it took than
-MLX. For example, `771 / 7.7 ≈ 100`, so 771 ms is **100× slower** than 7.7 ms.
+Both methods start with equivalent, already constructed point and polygon
+GeoDataFrames, with no cached spatial indexes or prepared polygon state.
+The operation is an **inner join with `predicate="within"`**: boundary points
+are excluded and overlaps produce multiple rows.
 
-| Workload | mlx-geospatial all pairs (NumPy) | Shapely STRtree, prepared, 1 core | GeoPandas sjoin, prepared, 1 core | DuckDB spatial `count(*)`, 16 threads |
-| :--- | ---: | ---: | ---: | ---: |
-| 100k points × 260 zones, 48 vertices | **1.9 ms** | 49 ms · **26× slower** | 56 ms · **30× slower** | 127 ms · **67× slower** |
-| 1M points × 260 zones, 48 vertices | **7.7 ms** | 771 ms · **100× slower** | 805 ms · **105× slower** | 557 ms · **72× slower** |
-| 10M points × 260 zones, 48 vertices | **69 ms** | 8.5 s · **124× slower** | 9.0 s · **131× slower** | 6.4 s · **93× slower** |
-| 1M points × 10k zones, 48 vertices | **8.1 ms** | 884 ms · **109× slower** | 930 ms · **115× slower** | 566 ms · **70× slower** |
-| 1M points × 260 zones, 2,048 vertices | **48 ms** | 1.07 s · **22× slower** | 1.11 s · **23× slower** | 2.9 s · **60× slower** |
-| 1M points × one 150k-vertex polygon | **233 ms** | 1.79 s · **7.7× slower** | 1.79 s · **7.7× slower** | 25 s · **107× slower** |
+- **MLX:** construct a fresh `PolygonSet` and `GridIndex`; extract the host
+  point coordinates; perform `query(..., backend="gpu", all_matches=True,
+  predicate="within", exact_boundary=True)`; materialize every matching pair;
+  attach all left and right nongeometry attributes to a point GeoDataFrame.
+  Index construction includes the shared edge-band index where the query uses
+  it. Exact float64 boundary checks and GEOS refinement are included.
+- **GeoPandas:** call native `geopandas.sjoin(left, right, how="inner",
+  predicate="within")`. GeoPandas implements this as polygon `contains`
+  queries against a newly built point index, allowing GEOS to use its prepared
+  polygon path. There is no Python partitioning or multiprocessing.
+- **Both:** fully materialize the result and sort by point ID, then right
+  index label, inside the timer. Each timed call uses fresh input copies and
+  indexes; native prepared polygon state is cleared before every call.
 
-MLX is fastest in all 18 displayed comparisons: **7.7–131× faster**, with a
-**71× median of the displayed ratios**. The ratios are retained from the
-reference measurements; rounding the displayed times may give slightly
-different ratios.
+The MLX measurement uses the frozen **query-plus-attribute-assembly adapter**
+in [the harness](e2e/run_e2e.py). It does not time native `ms.sjoin`.
+`ms.sjoin(..., all_matches=True)` is a supported public API tested separately;
+keeping the adapter unchanged preserves comparability across the optimization
+studies.
 
-### First match per point
+Input GeoDataFrame construction and copying, synthetic data generation,
+imports, runtime initialization, cold kernel compilation, validation, metadata
+collection, and disk I/O are outside both timers. This is end to end **from
+ready input frames**, not from CSV/Parquet or process startup. A full untimed
+warmup runs for each method and workload, followed by **three measured paired
+trials with alternating method order**. The reported statistic is the median
+for each method, not its fastest observation.
 
-First-match mode returns the lowest-index containing polygon for each point,
-or `-1` if none contains it. Its output differs from finding every match, so
-these times are not the denominator for the CPU comparisons above. This mode
-usually runs faster, with the huge-polygon exception explained below.
+These timings include host work as well as GPU work. They should not be read
+as isolated GPU-kernel timings or compared directly with the historical warm
+pair-array measurements.
 
-| Workload | NumPy input → NumPy output | Prepared `LocalPoints` → MLX output |
-| :--- | ---: | ---: |
-| 100k points × 260 zones, 48 vertices | 0.48 ms | 0.33 ms |
-| 1M points × 260 zones, 48 vertices | 2.5 ms | 1.5 ms |
-| 10M points × 260 zones, 48 vertices | 26 ms | 14 ms |
-| 1M points × 10k zones, 48 vertices | 2.6 ms | 1.5 ms |
-| 1M points × 260 zones, 2,048 vertices | 39 ms | 38 ms |
-| 1M points × one 150k-vertex polygon | 548 ms | 547 ms |
+## Inputs and correctness
 
-### Cold first-match queries
+The harness replays the original seed-0 generation sequence and verifies all
+25 input fingerprints. Inputs use float64 coordinates near New York City in
+EPSG:4326; the point-in-polygon operation is planar. The 48-vertex zones are
+random star-shaped polygons that overlap and leave gaps.
 
-These timings include polygon ingestion and index construction, as well as
-the NumPy-input first-match query. The preceding two tables reuse the index.
+The **2,048-vertex zones resample the exteriors of 48-vertex polygons** using
+linear interpolation. They increase edge count without introducing thousands
+of independent boundary features. The 150,000-vertex case is one synthetic
+ring with low- and high-frequency radial undulations and noise. These are
+controlled synthetic cases, not a representative sample of administrative
+boundaries or real coastline datasets.
 
-| Workload | Cold first match |
-| :--- | ---: |
-| 100k points × 260 zones, 48 vertices | 1.8 ms |
-| 1M points × 260 zones, 48 vertices | 4.0 ms |
-| 1M points × 10k zones, 48 vertices | 22 ms |
-| 1M points × 260 zones, 2,048 vertices | 45 ms |
-| 1M points × one 150k-vertex polygon | 0.55 s |
+| Points × polygons | Vertices | Joined rows | Matched points | Unmatched points | Points with multiple matches |
+|---|---:|---:|---:|---:|---:|
+| 100k × 260 | 48 | 109,267 | 66,815 | 33,185 | 29,133 |
+| 1M × 260 | 48 | 1,076,307 | 655,462 | 344,538 | 290,486 |
+| 10M × 260 | 48 | 10,689,126 | 6,501,488 | 3,498,512 | 2,849,585 |
+| 1M × 10k | 48 | 1,121,558 | 673,587 | 326,413 | 308,179 |
+| 1M × 260 | 2,048 | 1,076,107 | 673,014 | 326,986 | 287,223 |
+| 1M × 1 | 150,000 | 217,315 | 217,315 | 782,685 | 0 |
 
-### Data and baseline setup
+Each output contains the point ID, a float point value, point geometry, the
+right index label, a zone ID, a string zone name, and a float zone weight.
+Indexes are unique unnamed integer labels deliberately different from row
+positions, and attribute names do not collide. This benchmark does not certify
+all possible DataFrame schemas or join modes.
 
-The zones are synthetic, random star-shaped polygons with varying radii.
-They overlap and leave gaps; they are neither convex nor a tiling. About two
-thirds of points fall in a zone, with 1.6 zones per matched point on average,
-producing roughly 1.1 output pairs per input point. The coastline case uses
-one 150,000-vertex polygon covering 22% of the extent. The harness prints
-coverage for each generated dataset.
+**All 48 paired full-output comparisons passed**: one warmup pair and three
+measured pairs for each of six workloads on each host. Validation covers
+every row, attribute, dtype, index label and order, geometry coordinate, active
+geometry name, and CRS. Input fingerprints, output pair hashes, dependency
+versions, and installed package source hashes match across machines. The
+small boundary fixture also passed on both hosts.
 
-Shapely uses `STRtree(points).query(polygons, predicate="intersects")`.
-GeoPandas places polygons on the left of `sjoin`. Both orientations let GEOS
-prepare the polygons and use its indexed point-in-area locator. On detailed
-polygons this is 8–60× faster than querying a polygon tree with points, with
-the same matching pairs. Earlier versions of this harness used the slower
-orientation and reported detailed-geometry speedups in the hundreds; those
-figures are not the comparison reported here.
+A fresh full test suite passed **721 tests on each host with Metal validation
+enabled**, using the identical archived source from which the measured wheel
+was built. Metal validation is disabled for timing. Fresh test logs, benchmark
+logs and source identity are retained with [the result files](results/2026-10-19-opus-speedups/).
 
-Shapely point geometries and the point STRtree are built inside the timer.
-GeoPandas likewise builds the point GeoDataFrame and its index inside the
-timer; its polygon GeoDataFrame is prebuilt. DuckDB prebuilds its polygon
-table, including WKB conversion, and registers the point DataFrame before
-timing. Its timed query scans the registered points, constructs point
-geometries and counts the matches. These setup boundaries matter when
-comparing a one-off query with repeated queries.
+## Machines and runtime
 
-### Why the speedup changes
+| Machine | CPU cores | GPU cores | macOS |
+|---|---:|---:|---|
+| M1 Ultra | 20 | 64 | 26.5.1 |
+| M4 Max | 16 | 40 | 26.6.2 |
 
-On 48-vertex zones, MLX is 26–131× faster than the single-core GEOS baselines.
-The advantage falls to 22–23× on 2,048-vertex zones and 7.7× on the
-150,000-vertex polygon. GEOS can use its indexed locator; the GPU kernels
-walk every edge of each candidate ring. More detailed geometry therefore
-reduces MLX's advantage. DuckDB, which uses 16 threads but has no prepared
-geometries in this comparison, takes 60–107× longer.
+Both hosts used Python 3.14.2, MLX 0.32.4, NumPy 2.5.4, pandas 3.0.6,
+Shapely 2.2.0, and GeoPandas 1.2.0. The complete pinned environment is in
+[requirements.txt](e2e/requirements.txt). Both ran on AC power with sleep
+inhibited. Numerical-library thread limits were set to one. MLX Point coordinate
+extraction independently uses **up to eight host worker threads** (three
+for the 100k-point case, eight for the larger cases), and MLX can use the
+whole GPU. GeoPandas/GEOS uses its native spatial join without parallel
+partitioning. macOS versions and machine background activity differed. Load and memory snapshots are
+recorded in each raw result file.
 
-For simple zones, much of MLX's time goes to cell assignment and
-count/scan/compaction, rather than edge tests. The all-pairs route has about
-1.1 ms of fixed launch cost: over half the 100k-point time and about 14% of
-the 1M-point time. The CPU baselines are within about 2.5× of one another
-(1.4–1.6× from 1M points upward).
+## Reproduce the spatial joins
 
-First match is slower than all pairs on the huge polygon. About 61% of
-points lie outside its bounding box and exit immediately; their GPU lanes
-then sit idle while neighboring lanes walk the 150,000 edges. The all-pairs
-route first compacts candidate pairs. Reordering the same points so the 39%
-with candidates are contiguous makes first match as fast as all pairs.
-Candidate compaction for first match and edge indexing for long rings remain
-possible improvements.
-
-## When CPU queries beat GPU queries
-
-These crossover measurements use a warm index and host-resident NumPy
-points. “CPU” is mlx-geospatial's NumPy implementation of the same fp32
-even-odd predicate, not Shapely. `auto` shows the backend selected by the
-dispatch cost model. GPU times are measured in a burst after warming its
-clocks; isolated queries cost more, as explained below.
-
-### First match: 260 zones
-
-| Points | 48-vertex zones: CPU / GPU | auto | 2,048-vertex zones: CPU / GPU | auto |
-| ---: | --- | --- | --- | --- |
-| 100 | **188 µs** / 419 µs | cpu | 4.9 ms / **343 µs** | gpu |
-| 200 | 311 µs / **277 µs** | cpu | 10.3 ms / **334 µs** | gpu |
-| 500 | 705 µs / **196 µs** | gpu | 26.0 ms / **344 µs** | gpu |
-| 1,000 | 1.4 ms / **190 µs** | gpu | 52.6 ms / **329 µs** | gpu |
-| 2,000 | 2.7 ms / **200 µs** | gpu | 108 ms / **358 µs** | gpu |
-| 10,000 | 13.5 ms / **216 µs** | gpu | 540 ms / **1.8 ms** | gpu |
-| 50,000 | 68.9 ms / **289 µs** | gpu | 2.74 s / **3.2 ms** | gpu |
-
-### Square tiling: 256 tiles
-
-This axis-aligned tiling has only about 9 candidate edges per point, so the
-CPU fallback stays competitive for longer.
-
-| Points | First match: CPU / GPU | auto | All matches: CPU / GPU | auto |
-| ---: | --- | --- | --- | --- |
-| 500 | **99 µs** / 145 µs | cpu | **94 µs** / 1.1 ms | cpu |
-| 1,000 | **154 µs** / 156 µs | cpu | **148 µs** / 1.0 ms | cpu |
-| 2,000 | 276 µs / **148 µs** | cpu | **265 µs** / 1.0 ms | cpu |
-| 5,000 | 607 µs / **148 µs** | gpu | **588 µs** / 1.0 ms | cpu |
-| 10,000 | 1.2 ms / **145 µs** | gpu | 1.1 ms / **1.1 ms** | gpu |
-| 50,000 | 6.5 ms / **193 µs** | gpu | 6.3 ms / **1.3 ms** | gpu |
-
-### All matches: 260 zones
-
-Finding all matches adds count, scan and compaction passes on the GPU, so
-the crossover occurs at larger point counts.
-
-| Points | 48-vertex zones: CPU / GPU | auto | 2,048-vertex zones: CPU / GPU | auto |
-| ---: | --- | --- | --- | --- |
-| 100 | **198 µs** / 1.5 ms | cpu | 4.8 ms / **1.3 ms** | gpu |
-| 500 | **701 µs** / 1.2 ms | cpu | 26.1 ms / **1.3 ms** | gpu |
-| 1,000 | 1.3 ms / **1.1 ms** | cpu | 52.5 ms / **1.4 ms** | gpu |
-| 2,000 | 2.6 ms / **1.2 ms** | gpu | 108 ms / **1.3 ms** | gpu |
-| 50,000 | 68.0 ms / **1.5 ms** | gpu | 2.77 s / **4.1 ms** | gpu |
-
-### Dispatch and GPU idle time
-
-`auto` chose the faster backend in every displayed row except three near a
-threshold: first match at 200 simple points and 2,000 tiling points, and all
-matches at 1,000 simple points. Each difference was within about 0.2 ms.
-
-Inside a burst, fixed GPU costs are about 0.2 ms for first match and 1.1 ms
-for all matches. After tens of milliseconds of host-only work let the GPU
-idle, these rise to roughly 0.8–1.1 ms and 2.5 ms. The harness reports both
-regimes. Dispatch uses intermediate constants, `GPU_LAUNCH_US = 350` and
-`GPU_ALL_MATCHES_LAUNCH_US = 1500`.
-
-Near a threshold, choosing CPU while the GPU is warm can cost about 0.2 ms
-extra (0.45 ms for all matches); choosing GPU after it has idled can cost
-about 0.6 ms extra (1 ms for all matches). A loop of small queries interleaved
-with heavy host work may benefit from `backend="cpu"` for a few hundred
-points beyond the normal threshold.
-
-The model switches first-match queries at about 250 points for 48-vertex
-zones, 2,100 for the square tiling, and under ten for 2,048-vertex zones.
-All-match thresholds are roughly four times later. GPU time remains near its
-launch cost until workloads reach tens of thousands of points for simple
-polygons, or a few thousand for detailed polygons. CPU work grows with both
-point count and candidate edge count. Device-resident inputs bypass this
-comparison and use the GPU whenever Metal is available.
-
-The fallback prioritizes consistency with the GPU predicate, not beating
-GEOS: it is about 1.5–2× slower per point on 48-vertex zones and up to 7×
-slower on 2,048-vertex zones, though faster on sparse tilings. It also has
-about 50 µs of fixed setup, giving roughly 0.05–0.2 ms per tiny query.
-
-## Haversine distance matrices
-
-MLX uses compiled, fused distance operations. All rows start from host points;
-the MLX result is an evaluated MLX array. NumPy computes in float64.
-
-| Workload | mlx-geospatial | NumPy float64, 1 core | scikit-learn, 1 core |
-| :--- | ---: | ---: | ---: |
-| All pairs, 20k × 20k points | **10.2 ms** | 2.69 s · **263× slower** | 3.98 s · **389× slower** |
-
-## Haversine nearest neighbors
-
-MLX performs exact brute-force selection under its computed distance metric;
-it has no search index to build. The BallTree columns show two different
-uses: building a tree for a one-off query, and querying an existing tree.
-BallTree input conversion to radians occurs before both timers. The MLX
-timer includes input conversion, execution and evaluation of both returned
-arrays. Every row uses `k=10`.
-
-| Queries × references | mlx-geospatial | BallTree build + query | BallTree query only |
-| :--- | ---: | ---: | ---: |
-| 1k × 1M | 26 ms | 305 ms · 11.7× slower | **9.1 ms · 0.35× MLX time** |
-| 1M × 10k | **147 ms** | 4.53 s · 31× slower | 4.52 s · 31× slower |
-| 200k × 200k | **548 ms** | 1.19 s · 2.2× slower | 1.14 s · 2.1× slower |
-| 1M × 200k | **2.62 s** | 5.77 s · 2.2× slower | 5.70 s · 2.2× slower |
-
-The prebuilt BallTree wins the first row: 9.1 ms versus 26 ms. A larger query
-batch does not necessarily reverse that result. For 1M references, the tree
-costs about 10 µs per query here, versus 20–25 µs for brute force; at 100k
-queries, even build + query beats brute force. With 200k references, the
-measured costs are about 6 µs per query for the tree and 3 µs for MLX, giving
-MLX roughly a 2× advantage. With 10k references its advantage is about 30×.
-
-For `k <= 32`, fused Metal selectors avoid storing a full query × reference
-matrix or sorting the entire reference set. A 32-lane group cooperates on a
-query when query parallelism is scarce; larger batches use one thread per
-query. For `k > 32`, or without an active Metal device, kNN uses chunked
-distance matrices and `argpartition`. That path can be limited by selection
-cost, and BallTree can also win on large reference sets.
-
-## Reproduce the results
-
-Run from the repository root with the benchmark dependencies installed:
+Use an Apple silicon Mac with Python 3.14.2. From the repository root, create
+an environment with the pinned dependencies and install a clean archive of
+the measured commit. A clean source directory keeps stale build files out
+of the installed wheel:
 
 ```bash
-python -m pip install -e ".[bench]"
+python3.14 -m venv .venv-e2e
+source .venv-e2e/bin/activate
+python -m pip install -r bench/e2e/requirements.txt
+BENCH_SOURCE=$(mktemp -d /tmp/mlx-geospatial-source.XXXXXX)
+git archive 880522855606458869052d6ff069fbd1cbb53d1a | tar -x -C "$BENCH_SOURCE"
+python -m pip install --no-deps "$BENCH_SOURCE"
+```
+
+The following runs all six workloads. Set a descriptive machine label and
+use a **new output directory for every run**; the harness refuses to overwrite
+an existing `e2e-results.json`.
+
+```bash
+E2E_OUTPUT=$(mktemp -d /tmp/mlx-geospatial-e2e.XXXXXX)
+env -u MTL_DEBUG_LAYER -u MTL_SHADER_VALIDATION \
+  -u METAL_DEVICE_WRAPPER_TYPE -u METAL_DEBUG_ERROR_MODE -u MLX_METAL_DEBUG \
+  -u MLX_GEOSPATIAL_BACKEND \
+  OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
+  MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
+  caffeinate -dimsu python bench/e2e/run_e2e.py \
+  --output "$E2E_OUTPUT" --machine-label "My Apple silicon Mac" \
+  --reference-json bench/e2e/reference-benchmark-results.json
+```
+
+Add `--smoke-only` for the small correctness fixture or `--cases 4` for the
+2,048-vertex workload, each with its own fresh output directory. The small
+fixture covers overlaps, holes, unmatched points, exact boundary points, and
+points immediately on either side of an edge. Partial runs still replay the
+input sequence so their selected workload matches the full run.
+
+Run the same command on the second host with the same checkout and pinned
+environment. Compare package module hashes, input fingerprints, protocol,
+dependency versions, and output pair hashes before comparing elapsed times.
+The [raw M1 result](results/2026-10-19-opus-speedups/m1/e2e-results.json) and
+[raw M4 result](results/2026-10-19-opus-speedups/m4/e2e-results.json) show the recorded
+metadata and individual trials for this report.
+
+The unchanged runner imports the adjacent frozen `bench.py` and
+`run_benchmarks.py`; use the complete [bench/e2e directory](e2e/) to reproduce
+this study. The top-level `bench/bench.py` is a separate array-operation
+harness and is not a substitute for these inputs or timing boundaries.
+[Analysis and chart sources](results/2026-10-19-opus-speedups/) are stored alongside
+the measurements so the tables and figures remain inspectable and reproducible.
+
+## Other benchmarks and earlier results
+
+The [current component report](results/2026-10-19-opus-speedups/COMPONENTS.md)
+refreshes every component table on the same source and both machines:
+all-pair arrays, first-match host/device queries, cold queries, haversine
+matrices, four kNN shapes, dense PIP and CPU/GPU crossover. Its raw samples,
+JSON and CSV are retained alongside the tables. Component timings use the
+frozen best-of protocol, not the paired E2E medians above.
+
+Across the four `k=10` shapes, MLX kNN times improved **1.73–5.98× on M1
+Ultra** and **3.31–8.19× on M4 Max** versus the prior matched component
+runs. These are comparisons between separate sessions. The report retains
+both BallTree build-plus-query and prebuilt-tree timings: the prebuilt tree
+still narrowly wins the 1k-query × 1M-reference case on M4 Max.
+
+To reproduce the recorded component sweep with structured samples and the
+console evidence needed for the crossover tables, use the same installed
+build and pinned environment as above:
+
+```bash
+COMPONENT_OUTPUT=$(mktemp -d /tmp/mlx-geospatial-components.XXXXXX)
+env -u MTL_DEBUG_LAYER -u MTL_SHADER_VALIDATION \
+  -u METAL_DEVICE_WRAPPER_TYPE -u METAL_DEBUG_ERROR_MODE -u MLX_METAL_DEBUG \
+  -u MLX_GEOSPATIAL_BACKEND \
+  OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
+  MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
+  caffeinate -dimsu python bench/e2e/run_benchmarks.py \
+  --output "$COMPONENT_OUTPUT" --machine-label "My Apple silicon Mac" \
+  > "$COMPONENT_OUTPUT/benchmark.log" 2>&1
+```
+
+The full sweep replays the reference input sequence; individual `--op`
+commands below start the random generator at a different position.
+
+[Historical measurements](HISTORICAL.md) preserve the pre-release warm
+point-in-polygon, first-match, CPU/GPU crossover, distance-matrix, and kNN
+results, plus earlier optimization studies and the preceding complete E2E run.
+They keep their original runtime, output, precision, and index-reuse caveats.
+In particular, warm NumPy pair arrays are not complete GeoDataFrames, and the
+distance comparison uses float32 MLX results versus float64 CPU results.
+
+Use the separate array harness for new component measurements:
+
+```bash
 python bench/bench.py --all
-python bench/bench.py --op join --n 10000000 --m 260
-python bench/bench.py --op join --n 1000000 --m 260 --vertices 2048
-python bench/bench.py --op join --n 1000000 --coastline 150000
 python bench/bench.py --op haversine --n 20000 --m 20000
 python bench/bench.py --op knn --n 1000 --m 1000000 --k 10
-python bench/bench.py --op knn --n 200000 --m 200000 --k 10
 python bench/bench.py --op dense-pip --n 100000 --m 32 --vertices 48
 python bench/bench.py --op crossover --m 260
 ```
 
-`--op crossover` also fits the dispatch cost model for the current machine.
-`--op dense-pip` is a separate kernel microbenchmark: it starts with a
-pre-ingested `PolygonSet` and GPU-resident points, comparing the direct 2-D
-Metal kernel with its retained composed implementation. It checks matching
-outputs outside the timer and does not measure end-to-end ingestion.
+The dense-PIP mode is a kernel microbenchmark with pre-ingested polygons and
+device-resident points. Crossover measurements concern the library's own
+float32 NumPy fallback versus its GPU route, not GeoPandas. BallTree results
+must distinguish tree construction plus query from querying an existing tree.

@@ -99,52 +99,62 @@ distances, indices = ms.haversine_knn(points, landmarks, k=1)  # shape (3, 1) ea
 Keep the original coordinates for these functions: `LocalPoints` are shifted
 coordinates and cannot be used for distances.
 
-## Performance
+## End-to-end spatial join performance
 
-On the tested **M4 Max**, the large point-in-polygon workloads below ran
-**7.7–131× faster** than the listed alternatives. These are repeated queries
-with the polygon index already built and the GPU warmed up.
+Commit `8805228` was measured on **M1 Ultra** and **M4 Max** on
+2026-10-19. It was faster than native GeoPandas in all six tested workloads
+on each machine: **3.78–18.66×** on M1 Ultra and **2.55–16.51×** on M4 Max.
+The median of the six per-workload speedup ratios was **8.00×** and **6.35×**,
+respectively. These are synthetic point-in-polygon results, not a guarantee
+for every dataset or spatial operation.
 
-Every comparison uses MLX's **all-matches** mode. Each competitor cell shows
-its time and how many times longer it took than MLX. For example, 771 ms
-versus 7.7 ms means Shapely took about **100× as long**.
+Each time below is the **median of three trials** after one full warmup.
+Both methods start with ready GeoDataFrames and build **fresh indexes** on
+every call. Timers include exact boundary handling, every matching pair,
+complete joined GeoDataFrames with attributes, and the same final sorting.
 
-| Workload | mlx-geospatial | Shapely | GeoPandas | DuckDB Spatial |
-| :--- | ---: | ---: | ---: | ---: |
-| 100k points × 260 zones, 48 vertices | **1.9 ms** | 49 ms · **26× slower** | 56 ms · **30× slower** | 127 ms · **67× slower** |
-| 1M points × 260 zones, 48 vertices | **7.7 ms** | 771 ms · **100× slower** | 805 ms · **105× slower** | 557 ms · **72× slower** |
-| 10M points × 260 zones, 48 vertices | **69 ms** | 8.5 s · **124× slower** | 9.0 s · **131× slower** | 6.4 s · **93× slower** |
-| 1M points × 10k zones, 48 vertices | **8.1 ms** | 884 ms · **109× slower** | 930 ms · **115× slower** | 566 ms · **70× slower** |
-| 1M points × 260 zones, 2,048 vertices | **48 ms** | 1.07 s · **22× slower** | 1.11 s · **23× slower** | 2.9 s · **60× slower** |
-| 1M points × one 150k-vertex polygon | **233 ms** | 1.79 s · **7.7× slower** | 1.79 s · **7.7× slower** | 25 s · **107× slower** |
+| Points × polygons | Vertices | M1 Ultra MLX | M1 Ultra GeoPandas | Speedup | M4 Max MLX | M4 Max GeoPandas | Speedup |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 100k × 260 | 48 | 22.9 ms | 86.6 ms | **3.78×** | 18.6 ms | 47.5 ms | **2.55×** |
+| 1M × 260 | 48 | 157 ms | 1.67 s | **10.66×** | 118 ms | 805 ms | **6.81×** |
+| 10M × 260 | 48 | 2.34 s | 22.23 s | **9.52×** | 1.38 s | 11.02 s | **7.96×** |
+| 1M × 10k | 48 | 263 ms | 1.60 s | **6.08×** | 191 ms | 923 ms | **4.84×** |
+| 1M × 260 | 2,048 | 246 ms | 1.60 s | **6.49×** | 172 ms | 1.02 s | **5.90×** |
+| 1M × 1 | 150,000 | 146 ms | 2.73 s | **18.66×** | 98.1 ms | 1.62 s | **16.51×** |
 
-Shapely and GeoPandas use prepared polygons on one CPU core; DuckDB uses
-16 threads and returns only a count, which gives it less output work.
-MLX uses the GPU and returns all matching pairs as NumPy arrays. Its timings
-include point preparation and result evaluation, but exclude polygon and
-index setup. The polygons are synthetic; exact boundary refinement is off.
+![End-to-end spatial join speedups on M1 Ultra and M4 Max](bench/results/2026-10-19-opus-speedups/full-e2e-overview.png)
 
-First-match queries return one polygon index per point: the 1M-point, 260-zone
-case takes **2.5 ms** from NumPy inputs, or **1.5 ms** with points already
-prepared as `LocalPoints`.
-Those timings are separate from the all-matches comparison above.
+The latest changes add threaded Point coordinate extraction, a float64 host
+edge grid for exact-boundary checks, and polygon-major GEOS refinement for
+detailed single-ring polygons. MLX uses up to eight host extraction workers
+in addition to the GPU; GeoPandas uses its native join without parallel
+partitioning. Observed MLX join times improved **1.16–1.95× on M1 Ultra**
+and **1.20–1.97× on M4 Max** versus the preceding measured build.
+These comparisons use the same inputs and runtime in separate sessions;
+background activity can also affect the differences.
 
-Distance benchmarks also show substantial gains:
+**All 48 paired full-output checks passed**, including row order, attributes,
+indexes, dtypes, geometry and CRS. A fresh full suite passed **721 tests on each
+machine** with Metal validation enabled. Both hosts used Python 3.14.2,
+MLX 0.32.4 and GeoPandas 1.2.0; the benchmark guide records the remaining
+dependencies, hardware and differing macOS versions.
 
-- **20k × 20k distance matrix:** 10.2 ms, versus 2.69 s for NumPy (**263×**)
-  and 3.98 s for scikit-learn (**389×**). MLX computes in float32; these CPU
-  baselines use float64.
-- **10 nearest neighbors for 1M queries against 10k references:** 147 ms,
-  versus 4.52 s for a prebuilt scikit-learn BallTree (**31×**).
-- **A case where BallTree wins:** 1k queries against 1M references take
-  26 ms in MLX and 9.1 ms with a prebuilt BallTree—about **2.9× faster**
-  for BallTree. Including tree construction raises its time to 305 ms.
+The comparison uses native `geopandas.sjoin(..., how="inner",
+predicate="within")` against the unchanged MLX all-pairs query and
+GeoDataFrame assembly adapter. It does **not** time the public `ms.sjoin`
+wrapper. Input frame construction/copies, process startup, cold kernel
+compilation, I/O and validation are excluded. The 2,048-vertex zones
+resample 48-vertex boundaries; extra vertices do not imply equivalent new
+shape complexity. The 150k-vertex case uses an undulating polygon.
 
-Measurements used macOS 26.2, Python 3.13, and MLX 0.31.2. The released
-package requires MLX 0.32.0+ for a correctness fix, so these are reference
-results from before release. Most timings are best of three.
-See [full results and methodology](https://github.com/tabulai/mlx-geospatial/blob/main/bench/README.md)
-for timing details, CPU/GPU crossover measurements, and reproduction commands.
+These results describe the source snapshot in the [build manifest](bench/results/2026-10-19-opus-speedups/build-manifest.json),
+not a claim that the same optimizations are already on PyPI. See the
+[benchmark guide](bench/README.md) for full methodology and reproduction,
+[raw measurements](bench/results/2026-10-19-opus-speedups/comparison.json) for
+individual trial samples, and the [fresh component tables](bench/results/2026-10-19-opus-speedups/COMPONENTS.md)
+for warm-array, distance, kNN and crossover measurements, including the new
+chord-distance kNN filter. These use different timing and output contracts.
+[Historical measurements](bench/HISTORICAL.md) remain archived separately.
 
 ## API at a glance
 
@@ -152,16 +162,28 @@ for timing details, CPU/GPU crossover measurements, and reproduction commands.
 | :--- | :--- |
 | `point_in_polygon(points, polygons)` | One polygon index per point; `all_matches=True` returns every pair |
 | `contains_matrix(points, polygons)` | Dense boolean matrix of shape `(points, polygons)` |
-| `sjoin(points_df, polygons_df)` | DataFrame with polygon attributes; at most one match per point |
+| `sjoin(points_df, polygons_df)` | Joined DataFrame; `all_matches=True` returns every matching polygon |
 | `haversine(a, b)` | Elementwise or broadcast great-circle distances |
 | `haversine_cross(a, b)` | All-pairs distance matrix |
 | `haversine_knn(queries, references, k)` | Nearest distances and reference indices |
 | `PolygonSet(geometries)` | Polygons prepared for reuse; `to_local(points)` prepares query points |
 | `GridIndex(polygons)` | Reusable spatial index; call `query(points)` |
 
-`sjoin` supports `how="inner"` and `how="left"` and returns a pandas
-DataFrame. For overlapping polygons, use `point_in_polygon(..., all_matches=True)`
-when you need multiple matches per point.
+`sjoin` supports `how="inner"` and `how="left"` and preserves a GeoDataFrame
+input's geometry and CRS. By default, each point gets at most one match (the
+first polygon in right-row order). For overlapping polygons, request every
+match directly, with the right table's attributes and their original dtypes:
+
+```python
+joined = ms.sjoin(
+    points_df, polygons_df,
+    how="left", all_matches=True, predicate="within", exact_boundary=True,
+)
+```
+
+An inner join returns matching pairs; a left join also keeps each unmatched
+point once. The left index and right index labels are retained, including
+duplicate labels, and right attributes come from each matched polygon row.
 
 ## Accuracy and limits
 
@@ -169,7 +191,11 @@ when you need multiple matches per point.
   inside a narrow tolerance band around an edge may fall on either side.
   Use `exact_boundary=True` with host inputs in `point_in_polygon`,
   `GridIndex.query`, or `sjoin` when exact Shapely boundary behavior matters.
-  This adds a CPU scan and can substantially increase query time.
+  A conservative GPU filter narrows the CPU boundary checks where supported;
+  detailed rings use cached edge bands for GPU work, while a float64 host
+  edge grid narrows the remaining boundary checks. Suitable detailed
+  single-ring polygons use prepared GEOS refinement.
+  Exact handling still adds host work and synchronization.
 - **Input precision:** prefer float64 NumPy coordinates or prepare them with
   `PolygonSet.to_local`. Raw float32 MLX coordinates may already have lost
   precision; queries emit `PrecisionWarning`.
@@ -181,8 +207,9 @@ when you need multiple matches per point.
   multipolygons. It does not provide polygon overlays or polygon-to-polygon
   predicates. Use `PolygonSet(zones, validate=True)` to reject invalid geometry.
 - **Workload matters:** small host queries can use the CPU automatically.
-  Very detailed polygons reduce the GPU advantage, and a prebuilt BallTree
-  can be faster for nearest-neighbor queries against large reference sets.
+  Join performance depends on candidate counts, edge-band overlap and output
+  size, as well as vertex count. A prebuilt BallTree can be faster for
+  nearest-neighbor queries against large reference sets.
   Dense distance matrices and all-match outputs still need memory for their
   results.
 
