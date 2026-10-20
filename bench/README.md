@@ -7,8 +7,8 @@ with the same attributes, point geometry, index labels, dtypes, CRS, and row
 order. The measurements below cover six synthetic workloads on an M1 Ultra
 and an M4 Max, recorded on **2026-10-19**.
 
-These results describe the optimized **workspace build**, not the previously
-published PyPI distribution. The identical wheel was installed on both hosts;
+These results describe the source build of commit `8805228`; version **0.1.1**
+includes its optimizations. The identical measured wheel was installed on both hosts;
 its source hashes and build information are preserved in the
 [build manifest](results/2026-10-19-opus-speedups/build-manifest.json).
 

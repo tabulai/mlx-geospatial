@@ -147,8 +147,8 @@ compilation, I/O and validation are excluded. The 2,048-vertex zones
 resample 48-vertex boundaries; extra vertices do not imply equivalent new
 shape complexity. The 150k-vertex case uses an undulating polygon.
 
-These results describe the source snapshot in the [build manifest](bench/results/2026-10-19-opus-speedups/build-manifest.json),
-not a claim that the same optimizations are already on PyPI. See the
+These results describe the source snapshot in the [build manifest](bench/results/2026-10-19-opus-speedups/build-manifest.json).
+Version **0.1.1** includes the measured optimizations. See the
 [benchmark guide](bench/README.md) for full methodology and reproduction,
 [raw measurements](bench/results/2026-10-19-opus-speedups/comparison.json) for
 individual trial samples, and the [fresh component tables](bench/results/2026-10-19-opus-speedups/COMPONENTS.md)
