@@ -704,6 +704,11 @@ _ALL_MATCHES_EDGE_WORK_THRESHOLD = 8192
 _PIP_LONG_RING_THRESHOLD = 1024
 _PIP_LONG_SIMDGROUP_MAX_WORK = 16_384
 _PIP_LONG_THREADGROUP_MAX_WORK = 4096
+# First-match evaluates a point's candidate list sequentially, so cooperative
+# edge traversal avoids intra-SIMD divergence across grid cells and stays
+# faster than the scalar kernel all the way to the cold edge-index threshold.
+_PIP_FIRST_MATCH_SIMDGROUP_MAX_WORK = 65_536
+_PIP_FIRST_MATCH_THREADGROUP_MAX_WORK = 16_384
 
 
 def _pip_long_polygon_strategy(
@@ -711,6 +716,8 @@ def _pip_long_polygon_strategy(
     max_ring_edges: int,
     *,
     max_work: int = _PIP_LONG_SIMDGROUP_MAX_WORK,
+    threadgroup_max_work: int = _PIP_LONG_THREADGROUP_MAX_WORK,
+    edge_scale: int = 4,
 ) -> str:
     """Choose scalar, SIMDgroup, or threadgroup traversal for long rings."""
     n_work = int(n_work)
@@ -721,7 +728,7 @@ def _pip_long_polygon_strategy(
     # Four SIMDgroups amortize their barriers only while each work item has
     # enough edges and the launch does not create excessive lane pressure.
     threadgroup_limit = min(
-        _PIP_LONG_THREADGROUP_MAX_WORK,
+        threadgroup_max_work,
         max_ring_edges,
     )
     if n_work <= min(threadgroup_limit, max_work):
@@ -730,9 +737,8 @@ def _pip_long_polygon_strategy(
     # SIMD32 remains profitable at a much wider launch. Scale the crossover
     # with ring length, capped before 32x lane expansion hurts saturated work.
     simdgroup_limit = min(
-        _PIP_LONG_SIMDGROUP_MAX_WORK,
-        max(4096, max_ring_edges * 4),
         max_work,
+        max(4096, max_ring_edges * edge_scale),
     )
     if n_work <= simdgroup_limit:
         return "simdgroup"
@@ -1274,6 +1280,7 @@ def pip_pairs(
     pair_poly: mx.array,
     *,
     max_ring_edges: int | None = None,
+    candidate_edge_work: int | None = None,
     threadgroup: int = 256,
 ) -> mx.array:
     """Containment flags for explicit (point, polygon) candidate pairs.
@@ -1292,8 +1299,10 @@ def pip_pairs(
     n_pairs = int(pair_point.shape[0])
     if n_pairs == 0:
         return mx.zeros((0,), dtype=mx.uint8)
-    indexed = indexed_pip("pairs", points_local, polygons,
-                          [pair_point, pair_poly], [n_pairs], threadgroup=threadgroup)
+    indexed = indexed_pip(
+        "pairs", points_local, polygons, [pair_point, pair_poly], [n_pairs],
+        threadgroup=threadgroup, candidate_edge_work=candidate_edge_work,
+    )
     if indexed is not None:
         return indexed
     if max_ring_edges is None:
@@ -1337,6 +1346,7 @@ def pip_first_match(
     cell_poly: mx.array,
     *,
     max_ring_edges: int | None = None,
+    candidate_edge_work: int | None = None,
     threadgroup: int = 256,
 ) -> mx.array:
     """First containing polygon for each point from grid-cell CSR candidates.
@@ -1349,16 +1359,22 @@ def pip_first_match(
     n_points = int(points_local.shape[0])
     if n_points == 0:
         return mx.zeros((0,), dtype=mx.int32)
-    indexed = indexed_pip("first", points_local, polygons,
-                          [point_cell, cell_offsets, cell_poly], [n_points],
-                          threadgroup=threadgroup)
-    if indexed is not None:
-        return indexed
     if max_ring_edges is None:
         max_ring_edges = polygons.max_edges_per_ring
     strategy = _pip_long_polygon_strategy(
-        n_points, max_ring_edges, max_work=4096
+        n_points,
+        max_ring_edges,
+        max_work=_PIP_FIRST_MATCH_SIMDGROUP_MAX_WORK,
+        threadgroup_max_work=_PIP_FIRST_MATCH_THREADGROUP_MAX_WORK,
+        edge_scale=64,
     )
+    indexed = indexed_pip(
+        "first", points_local, polygons, [point_cell, cell_offsets, cell_poly],
+        [n_points], threadgroup=threadgroup, candidate_edge_work=candidate_edge_work,
+        cooperative=strategy != "scalar",
+    )
+    if indexed is not None:
+        return indexed
     if strategy == "threadgroup":
         return _pip_first_match_threadgroup(
             points_local, polygons, point_cell, cell_offsets, cell_poly
@@ -1404,6 +1420,7 @@ def pip_all_matches(
     max_point_pairs: int | None = None,
     max_ring_edges: int | None = None,
     max_candidate_edges: int | None = None,
+    candidate_edge_work: int | None = None,
     threadgroup: int = 256,
 ) -> tuple[mx.array, mx.array]:
     """Compact every CSR containment hit for one bounded candidate range.
@@ -1508,6 +1525,7 @@ def pip_all_matches(
             "all", points_local, polygons,
             [point_id, point_cell, candidate_offsets, cell_offsets, cell_poly, limits],
             [n_pairs, n_active], threadgroup=threadgroup,
+            candidate_edge_work=candidate_edge_work,
         )
         if match_flag is None:
             (match_flag,) = count_kernel(

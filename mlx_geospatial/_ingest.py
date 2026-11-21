@@ -573,6 +573,7 @@ class PolygonSet:
         )
         self._geom_edge_offsets = edge_cumulative[geom_ring_offsets]
         self._geom_edge_counts = np.diff(self._geom_edge_offsets)
+        self._total_edges = int(self._geom_edge_offsets[-1])
         self.max_edges_per_polygon = int(self._geom_edge_counts.max(initial=0))
 
         # Lazy caches.
@@ -587,6 +588,7 @@ class PolygonSet:
         self._origin_f64_mx = None
         self._origin_hi_lo_mx = None
         self._y_edge_index = False  # False: unbuilt; None: traversal is preferable.
+        self._y_edge_index_work = 0
 
     def __len__(self) -> int:
         return self.n_polygons

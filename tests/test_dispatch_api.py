@@ -671,10 +671,12 @@ def test_all_covers_expected_surface():
         "from_shapely",
         "contains_matrix",
         "R_EARTH_M",
+        "HaversineReference",
         "haversine",
         "haversine_cross",
         "haversine_knn",
         "GridIndex",
+        "PreparedJoin",
         "point_in_polygon",
         "sjoin",
     }

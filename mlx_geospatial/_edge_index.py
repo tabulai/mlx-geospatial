@@ -63,6 +63,16 @@ def get_edge_index(polygons) -> EdgeIndex | None:
     return polygons._y_edge_index
 
 
+def cold_edge_index_eligible(polygons) -> bool:
+    """Whether estimate work is worthwhile for a cold, buildable layer."""
+    return (
+        polygons._y_edge_index is False
+        and polygons.max_edges_per_ring >= _MIN_RING_EDGES
+        and polygons.n_polygons <= 1024
+        and polygons._total_edges <= _MAX_REFERENCES
+    )
+
+
 def _build_edge_index(polygons) -> EdgeIndex | None:
     # No need to duplicate all the geometry metadata for unusually large
     # layers with just one long ring. Existing traversal remains bounded.
@@ -70,7 +80,7 @@ def _build_edge_index(polygons) -> EdgeIndex | None:
         return None
     # Every original edge needs at least one reference. Reject impossible
     # builds before reading coordinates or allocating per-vertex masks.
-    if int(polygons._geom_edge_counts.sum()) > _MAX_REFERENCES:
+    if polygons._total_edges > _MAX_REFERENCES:
         return None
     coords = np.asarray(polygons.coords)
     keep = np.ones(polygons.n_vertices, dtype=bool)

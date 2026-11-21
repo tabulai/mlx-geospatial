@@ -232,3 +232,105 @@ def test_48_edge_layers_keep_existing_predicate_and_boundary_routes(monkeypatch)
         else:
             np.testing.assert_array_equal(gpu, cpu)
     assert not calls and sizes and polyset._y_edge_index is False
+
+
+def test_medium_first_match_extends_cooperative_traversal_past_4096(monkeypatch):
+    """4,097..65,535 points stay on cooperative SIMD32 without cold index build."""
+    import mlx_geospatial._pip_indexed as pip_indexed
+
+    polyset = ms.PolygonSet([Polygon(_ring(vertices=2047))], origin=(0, 0))
+    index = ms.GridIndex(polyset)
+    rng = np.random.default_rng(4097)
+    pts = rng.uniform(-1.2, 1.2, (4097, 2))
+    simd_calls = []
+    orig_simd = pip._pip_first_match_simdgroup
+
+    def spy_simd(*args, **kwargs):
+        simd_calls.append(int(args[0].shape[0]))
+        return orig_simd(*args, **kwargs)
+
+    monkeypatch.setattr(pip, "_pip_first_match_simdgroup", spy_simd)
+    calls = _indexed_spy(monkeypatch)
+    got = index.query(pts, backend="gpu")
+    expected = index.query(pts, backend="cpu")
+    np.testing.assert_array_equal(got, expected)
+    assert simd_calls == [4097]
+    assert not calls and polyset._y_edge_index is False
+    # Repeated 4,097-point batches stay below the per-batch indexed crossover
+    # (4097 * 2047 < _REPEAT_MIN_EDGE_WORK), so they never trigger an index build.
+    assert 4097 * polyset.max_edges_per_ring < pip_indexed._REPEAT_MIN_EDGE_WORK
+    for _ in range(3):
+        np.testing.assert_array_equal(index.query(pts, backend="gpu"), expected)
+    assert polyset._y_edge_index is False and polyset._y_edge_index_work == 0
+
+
+def test_repeated_medium_batches_amortize_edge_index_build(monkeypatch):
+    """Repeated medium batches build and reuse the edge index once amortized."""
+    import mlx_geospatial._pip_indexed as pip_indexed
+
+    polyset = ms.PolygonSet([Polygon(_ring(vertices=2047))], origin=(0, 0))
+    index = ms.GridIndex(polyset)
+    rng = np.random.default_rng(202611)
+    # 16,384 * 2047 = 33.5M >= _REPEAT_MIN_EDGE_WORK (32M).
+    pts = rng.uniform(-0.95, 0.95, (16_384, 2))
+    expected = index.query(pts, backend="cpu")
+    # Lower the cumulative threshold so the test exercises amortization in 3 calls.
+    per_batch = len(pts) * polyset.max_edges_per_ring
+    monkeypatch.setattr(pip_indexed, "_REPEAT_BUILD_MIN_EDGE_WORK", 3 * per_batch)
+    monkeypatch.setattr(pip_indexed, "_REPEAT_BUILD_EDGES_MULTIPLIER", 1)
+    calls = _indexed_spy(monkeypatch)
+
+    for call_num in range(1, 3):
+        got = index.query(pts, backend="gpu")
+        np.testing.assert_array_equal(got, expected)
+        assert polyset._y_edge_index is False, f"built too early on call {call_num}"
+        assert not calls
+
+    # Third batch crosses cumulative threshold -> builds and uses edge index.
+    got = index.query(pts, backend="gpu")
+    np.testing.assert_array_equal(got, expected)
+    assert polyset._y_edge_index is not False and polyset._y_edge_index is not None
+    assert calls == ["first"]
+
+    # Fourth call (even a tiny batch) reuses the now-warm edge index.
+    tiny = pts[:16]
+    np.testing.assert_array_equal(index.query(tiny, backend="gpu"), expected[:16])
+    assert calls == ["first", "first"]
+
+
+@pytest.mark.parametrize("all_matches", [False, True])
+def test_cold_build_follows_used_cell_work(all_matches):
+    ring = _ring(vertices=2048)
+    annulus = Polygon(ring, holes=[ring * 0.8])
+    index = ms.GridIndex([annulus] * 32)
+    points = np.full((65_536, 2), 5.0)
+    points[0] = [0.9, 0.0]
+
+    sparse = index.query(points, backend="gpu", all_matches=all_matches)
+    assert index.polygons._y_edge_index is False
+    assert index.polygons._y_edge_index_work == 0
+
+    # The same number of rows now walks all the long candidate rings, but
+    # points in the hole still produce exactly the same matches.
+    points[1:] = 0.0
+    dense = index.query(points, backend="gpu", all_matches=all_matches)
+    assert index.polygons._y_edge_index
+    if all_matches:
+        for actual, expected in zip(dense, sparse, strict=True):
+            np.testing.assert_array_equal(actual, expected)
+        np.testing.assert_array_equal(dense[1], np.arange(32))
+    else:
+        np.testing.assert_array_equal(dense, sparse)
+        assert dense[0] == 0
+
+
+def test_cold_exact_query_reuses_boundary_index_for_containment(monkeypatch):
+    index = ms.GridIndex([Polygon(_ring(vertices=2047))])
+    points = np.array([[0.9, 0.0], [1.0, 0.0], [1.1, 0.0]])
+    monkeypatch.setattr(boundary, "_COLD_LINEAR_BOUNDARY_POINTS", len(points))
+    calls = _indexed_spy(monkeypatch)
+
+    actual = index.query(points, backend="gpu", exact_boundary=True, predicate="within")
+    np.testing.assert_array_equal(actual, [0, -1, -1])
+    assert index.polygons._y_edge_index
+    assert calls == ["first"]

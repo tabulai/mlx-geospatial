@@ -13,6 +13,8 @@ import numpy as np
 
 
 _MAX_RING_EDGES = 4096
+_COLD_LINEAR_BOUNDARY_POINTS = 98_304
+_COLD_LONG_BOUNDARY_POINTS = 65_536
 _MAX_POINT_EDGE_WORK = 32_768
 # The maximum per-cell work is a conservative bound, often much higher than
 # the average. Small budgets turn detailed layers into hundreds of launches
@@ -176,6 +178,19 @@ def _get_long_candidate_kernel():
     return _long_candidate_kernel
 
 
+def cold_boundary_prefers_index(polygons, n: int) -> bool:
+    """Whether the cold boundary pass should build bands before containment."""
+    from ._edge_index import cold_edge_index_eligible
+
+    # For the longest rings, the fallback is a host search rather than linear
+    # Metal traversal, so building bands pays off at a smaller point count.
+    minimum = (
+        _COLD_LINEAR_BOUNDARY_POINTS if polygons.max_edges_per_ring <= _MAX_RING_EDGES
+        else _COLD_LONG_BOUNDARY_POINTS
+    )
+    return n >= minimum and cold_edge_index_eligible(polygons)
+
+
 def _long_boundary_candidate_rows(index, local, cell, *, max_pairs_per_batch, tol):
     """Reuse the containment edge bands for a detailed polygon's boundary.
 
@@ -186,9 +201,12 @@ def _long_boundary_candidate_rows(index, local, cell, *, max_pairs_per_batch, to
     """
     from ._edge_index import get_edge_index
 
-    if int(local.shape[0]) < 65_536 and index.polygons._y_edge_index is False:
+    polygons = index.polygons
+    if polygons._y_edge_index is False and not cold_boundary_prefers_index(
+        polygons, int(local.shape[0])
+    ):
         return None
-    edge_index = get_edge_index(index.polygons)
+    edge_index = get_edge_index(polygons)
     if edge_index is None:
         return None
     max_edges = index._max_cell_count * edge_index.max_bin_edges
@@ -213,7 +231,6 @@ def _long_boundary_candidate_rows(index, local, cell, *, max_pairs_per_batch, to
         _MAX_BATCH_EDGE_WORK // max(1, max_edges),
     )
     kernel = _get_long_candidate_kernel()
-    polygons = index.polygons
     n = int(local.shape[0])
     rows = []
     for start in range(0, n, step):

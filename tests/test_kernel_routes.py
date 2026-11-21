@@ -33,7 +33,11 @@ import mlx_geospatial as ms
 import mlx_geospatial._pip as pip
 from mlx_geospatial._dispatch import metal_available
 from mlx_geospatial._ingest import LocalPoints
-from mlx_geospatial._pip import _pip_long_polygon_strategy
+from mlx_geospatial._pip import (
+    _PIP_FIRST_MATCH_SIMDGROUP_MAX_WORK,
+    _PIP_FIRST_MATCH_THREADGROUP_MAX_WORK,
+    _pip_long_polygon_strategy,
+)
 
 pytestmark = pytest.mark.skipif(not metal_available(), reason="Metal not available")
 
@@ -111,30 +115,49 @@ def _with_outside(rng, pts: np.ndarray, n_outside: int = 50) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# first match: TG128 for n <= longest ring, SIMD32 up to 4096, scalar above
+# first match: TG128 for n <= min(16384, longest ring), SIMD32 up to 65536,
+# scalar above
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     ("n_points", "expected"),
-    [(1000, "threadgroup"), (1100, "threadgroup"), (1101, "simdgroup"), (4096, "simdgroup"),
-     (4097, "scalar")],
+    [
+        (1000, "threadgroup"),
+        (1100, "threadgroup"),
+        (1101, "simdgroup"),
+        (4096, "simdgroup"),
+        (4097, "simdgroup"),
+        (65_536, "simdgroup"),
+        (65_537, "scalar"),
+    ],
 )
 def test_first_match_routes_by_point_count(n_points, expected, rng, monkeypatch):
     """The bound is the longest ring among the cell's candidates (1100 here),
-    not their number: eight rings keep the NumPy oracle fast (the 64-candidate
-    cooperative loop is covered by tests/test_pip_adversarial.py section 9).
-    Fifty points lie outside the grid and must come back -1 on every launch."""
-    polys, polyset, index = _long_layer(rng, n_rings=8)
+    not their number: two rings keep the NumPy oracle fast up to 65,537 points
+    (the 64-candidate cooperative loop is covered by tests/test_pip_adversarial.py
+    section 9). Fifty points lie outside the grid and must come back -1 on every
+    launch."""
+    polys, polyset, index = _long_layer(rng, n_rings=1 if n_points > 8192 else 8)
     bound = int(index._cell_max_ring_edges.max())
     assert bound == 1100
-    assert _pip_long_polygon_strategy(n_points, bound, max_work=4096) == expected
+    assert (
+        _pip_long_polygon_strategy(
+            n_points,
+            bound,
+            max_work=_PIP_FIRST_MATCH_SIMDGROUP_MAX_WORK,
+            threadgroup_max_work=_PIP_FIRST_MATCH_THREADGROUP_MAX_WORK,
+            edge_scale=64,
+        )
+        == expected
+    )
     counts = _spy_getters(monkeypatch)
     pts = _with_outside(rng, _bbox_points(rng, polys, n_points))
-    cpu = _assert_same_join(index, pts, launches=3)
+    launches = 1 if n_points > 8192 else 3
+    cpu = _assert_same_join(index, pts, launches=launches)
     assert (cpu[-50:] == -1).all()
     name = "first_match" if expected == "scalar" else f"first_match_{expected}"
-    assert counts == {name: 3}, counts
+    assert counts == {name: launches}, counts
 
 
 def test_first_match_cooperation_needs_every_candidate_long(rng, monkeypatch):

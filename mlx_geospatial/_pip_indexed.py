@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import mlx.core as mx
 
-from ._edge_index import EDGE_BIN_HEADER, get_edge_index
+from ._edge_index import EDGE_BIN_HEADER, cold_edge_index_eligible, get_edge_index
 
 _CONTAINS_HEADER = EDGE_BIN_HEADER + """
     #pragma clang fp contract(off)
@@ -91,20 +91,68 @@ _INPUTS = {
 }
 
 
-def indexed_pip(kind, points, polygons, extra_inputs, shape, *, threadgroup=256):
+# The index covers the whole layer. Estimate the work avoided in the current
+# query from its candidate edges, using a higher break-even when cooperative
+# traversal is available. These ratios cover the M1 Ultra and M4 Max sweeps
+# across dispersed zones, overlap, out-of-grid points and a long coastline.
+_COLD_MIN_EDGE_WORK = 64_000_000
+_COLD_FIRST_EDGES_MULTIPLIER = 6_000
+_COLD_COOPERATIVE_EDGES_MULTIPLIER = 14_000
+_COLD_PAIR_EDGES_MULTIPLIER = 4_800
+# Repeated medium batches amortize the one-time edge-index build only when each
+# batch is large enough for indexed traversal to beat cooperative SIMD32/TG128
+# (~16k points on 2,048-vertex zones, ~8k on 4,096-vertex zones, ~256 on 150k).
+_REPEAT_MIN_EDGE_WORK = 32_000_000
+# Break-even cumulative point-edge work to repay edge-index construction (~40 ns
+# per total edge vs ~2-4 ps saved per point-edge on Apple silicon).
+_REPEAT_BUILD_EDGES_MULTIPLIER = 10_000
+_REPEAT_BUILD_MIN_EDGE_WORK = 5_000_000_000
+
+
+def indexed_pip(
+    kind, points, polygons, extra_inputs, shape, *,
+    threadgroup=256, candidate_edge_work=None, cooperative=False,
+):
     """Return flags/first matches, or None to use ordinary edge traversal.
 
     Candidate batching stays with the caller. The all-matches flags feed the
     existing ordered scan/write path; no point/polygon pairs are added here.
-    Small cold queries keep cooperative traversal to avoid index build cost.
+    Small cold queries keep cooperative traversal to avoid index build cost;
+    repeated medium batches accumulate work and build once amortized.
     """
     n = int(shape[0])
-    # Cold index construction can dominate small detailed-polygon queries.
-    # First-match sees every point, including rows outside the grid; pair
-    # routes have already compacted away zero-candidate rows.
-    cold_minimum = 65_536 if kind == "first" else 32_768
-    if n < cold_minimum and polygons._y_edge_index is False:
-        return None
+    if polygons._y_edge_index is False:
+        if not cold_edge_index_eligible(polygons):
+            return None
+        # A pair-range batch may include only part of the first and last cell's
+        # candidates. Cap the cell estimate by the number of pairs evaluated.
+        work_cap = n * polygons.max_edges_per_polygon
+        edge_work = work_cap if candidate_edge_work is None else candidate_edge_work
+        if kind == "first":
+            min_size = 16_384
+            multiplier = (
+                _COLD_COOPERATIVE_EDGES_MULTIPLIER if cooperative else _COLD_FIRST_EDGES_MULTIPLIER
+            )
+        else:
+            min_size = 32_768
+            multiplier = _COLD_PAIR_EDGES_MULTIPLIER
+            edge_work = min(edge_work, work_cap)
+        build_now = n >= min_size and edge_work >= max(
+            _COLD_MIN_EDGE_WORK, multiplier * polygons._total_edges
+        )
+        if not build_now:
+            # First-match can stop early. Preserve the per-batch work limit
+            # while removing credit for points that never reach any polygon.
+            repeat_work = min(edge_work, n * polygons.max_edges_per_ring)
+            if repeat_work < _REPEAT_MIN_EDGE_WORK:
+                return None
+            polygons._y_edge_index_work += repeat_work
+            threshold = max(
+                _REPEAT_BUILD_MIN_EDGE_WORK,
+                _REPEAT_BUILD_EDGES_MULTIPLIER * polygons._total_edges,
+            )
+            if polygons._y_edge_index_work < threshold:
+                return None
     index = get_edge_index(polygons)
     if index is None:
         return None

@@ -2,11 +2,13 @@
 
 Coordinate convention: ``(x, y)`` == ``(lon, lat)``, degrees, everywhere.
 
-- :func:`haversine`, :func:`haversine_cross`, :func:`haversine_knn` —
-  great-circle distances (spherical model).
+- :func:`haversine`, :func:`haversine_cross`, :func:`haversine_knn`,
+  :class:`HaversineReference` — great-circle distances (spherical model) and
+  reusable GPU reference sets for repeated kNN queries.
 - :func:`point_in_polygon`, :func:`contains_matrix`, :class:`GridIndex` —
   planar even-odd containment with a grid-indexed candidate filter.
-- :func:`sjoin` — GeoPandas-flavored point-in-polygon join wrapper.
+- :func:`sjoin`, :class:`PreparedJoin` — GeoPandas-flavored point-in-polygon
+  join wrapper and reusable prepared right-hand layer.
 - :class:`PolygonSet` — ingested, re-centered, GPU-resident polygons; build
   once and reuse across queries.
 - :class:`LocalPoints` — query points re-centered once with
@@ -25,8 +27,14 @@ from ._version import __version__
 from ._ingest import LocalPoints, PolygonSet, as_point_array, from_shapely
 from ._pip import contains_matrix
 from ._precision import PrecisionWarning
-from .haversine import R_EARTH_M, haversine, haversine_cross, haversine_knn
-from .join import GridIndex, point_in_polygon, sjoin
+from .haversine import (
+    HaversineReference,
+    R_EARTH_M,
+    haversine,
+    haversine_cross,
+    haversine_knn,
+)
+from .join import GridIndex, PreparedJoin, point_in_polygon, sjoin
 
 __all__ = [
     "__version__",
@@ -37,10 +45,12 @@ __all__ = [
     "from_shapely",
     "contains_matrix",
     "R_EARTH_M",
+    "HaversineReference",
     "haversine",
     "haversine_cross",
     "haversine_knn",
     "GridIndex",
+    "PreparedJoin",
     "point_in_polygon",
     "sjoin",
 ]

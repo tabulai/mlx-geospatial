@@ -1593,3 +1593,136 @@ class TestOneContainmentContract:
         # explicit within on the boundary points excludes them
         within = ms.sjoin(left, right, predicate="within", exact_boundary=True)
         assert set(ours.index) - set(within.index) == {300, 301, 302}
+
+
+@pytest.mark.skipif(not metal_available(), reason="Metal GPU required")
+class TestAllMatchesBatchPlanner:
+    """Single-batch shortcut and batched binary-search planner for all_matches."""
+
+    def test_single_batch_shortcut_skips_binary_search_and_reuses_max_count(
+        self, rng, monkeypatch
+    ):
+        import mlx_geospatial.join as join
+
+        polys = make_grid_polygons(6, 6)
+        index = GridIndex(polys)
+        pts = np.vstack([rng.uniform(-0.5, 6.5, size=(500, 2)), [[100.0, 100.0]]])
+        local = index.polygons._local_from_f64(pts)
+        _, _, total_pairs, max_count = index._device_candidates(local)
+        assert total_pairs > 0 and max_count > 0
+
+        def search_must_not_run(*args, **kwargs):
+            raise AssertionError("single-batch all_matches ran batched binary search")
+
+        seen = []
+
+        def spy_pip(*args, pair_begin, pair_end, max_point_pairs, **kwargs):
+            seen.append((pair_begin, pair_end, max_point_pairs))
+            return pip_all_matches(
+                *args,
+                pair_begin=pair_begin,
+                pair_end=pair_end,
+                max_point_pairs=max_point_pairs,
+                **kwargs,
+            )
+
+        monkeypatch.setattr(join, "_batch_boundaries", search_must_not_run)
+        monkeypatch.setattr(join, "pip_all_matches", spy_pip)
+
+        expected = index.query(pts, backend="cpu", all_matches=True)
+        # Both generous cap and exact boundary total_pairs == max_pairs_per_batch.
+        for cap in (None, total_pairs):
+            seen.clear()
+            got = index.query(
+                pts, backend="gpu", all_matches=True, max_pairs_per_batch=cap
+            )
+            np.testing.assert_array_equal(got[0], expected[0])
+            np.testing.assert_array_equal(got[1], expected[1])
+            assert seen == [(0, total_pairs, max_count)]
+
+        # Calling _query_gpu_all_matches directly without max_count still works.
+        cell, counts, tp, _ = index._device_candidates(local)
+        got_direct = index._query_gpu_all_matches(
+            local, cell, counts, total_pairs=tp, max_pairs_per_batch=tp
+        )
+        np.testing.assert_array_equal(np.asarray(got_direct[0]), expected[0])
+        np.testing.assert_array_equal(np.asarray(got_direct[1]), expected[1])
+
+    @pytest.mark.parametrize("cap", [1, 2, 3, 5, 7, 17, 64])
+    def test_multi_batch_binary_search_splits_points_and_preserves_order(
+        self, cap, rng, monkeypatch
+    ):
+        import mlx_geospatial.join as join
+
+        polys = np.array(
+            [shapely.box(0.0, 0.0, 2.0, 2.0) for _ in range(11)]
+            + [shapely.box(1.0, 0.0, 3.0, 2.0) for _ in range(7)]
+            + [shapely.box(5.0, 5.0, 6.0, 6.0)],
+            dtype=object,
+        )
+        index = GridIndex(polys, cell_size=1.0)
+        pts = np.array(
+            [
+                [0.5, 0.5],    # 11 hits
+                [9.0, 9.0],    # outside
+                [1.5, 1.0],    # 18 hits (split across many batches)
+                [3.5, 3.5],    # outside
+                [2.5, 1.0],    # 7 hits
+                [5.5, 5.5],    # 1 hit
+                [1.2, 1.8],    # 18 hits
+            ],
+            dtype=np.float64,
+        )
+        expected = index.query(pts, backend="cpu", all_matches=True)
+        search_calls = []
+        orig_search = join._batch_boundaries
+
+        def spy_search(offsets, targets, n_active):
+            search_calls.append(len(targets))
+            return orig_search(offsets, targets, n_active)
+
+        monkeypatch.setattr(join, "_batch_boundaries", spy_search)
+        got = index.query(
+            pts, backend="gpu", all_matches=True, max_pairs_per_batch=cap
+        )
+        np.testing.assert_array_equal(got[0], expected[0])
+        np.testing.assert_array_equal(got[1], expected[1])
+        # Lexicographic point-then-polygon order.
+        if len(got[0]) > 1:
+            order = np.lexsort((got[1], got[0]))
+            np.testing.assert_array_equal(order, np.arange(len(got[0])))
+        # Exactly one batched binary-search launch when multi-batch.
+        local = index.polygons._local_from_f64(pts)
+        _, _, total_pairs, _ = index._device_candidates(local)
+        if total_pairs > cap:
+            assert search_calls == [(total_pairs - 1) // cap]
+        else:
+            assert search_calls == []
+
+    def test_multi_batch_skewed_cell_and_cpu_default_device(self, monkeypatch):
+        """One skewed cell (>256 candidates) split alongside light cells."""
+        polys = np.array(
+            [shapely.box(0.0, 0.0, 1.0, 1.0) for _ in range(300)]
+            + [shapely.box(10.0 + i * 2.0, 0.0, 11.0 + i * 2.0, 1.0) for i in range(40)],
+            dtype=object,
+        )
+        index = GridIndex(polys, cell_size=1.0)
+        pts = np.vstack(
+            [
+                [[0.5, 0.5]],  # 300 candidates
+                np.column_stack([10.5 + np.arange(40) * 2.0, np.full(40, 0.5)]),
+                [[99.0, 99.0]],
+            ]
+        )
+        expected = index.query(pts, backend="cpu", all_matches=True)
+        old_device = mx.default_device()
+        try:
+            mx.set_default_device(mx.cpu)
+            for cap in (50, 128, 310):
+                got = index.query(
+                    pts, backend="gpu", all_matches=True, max_pairs_per_batch=cap
+                )
+                np.testing.assert_array_equal(got[0], expected[0])
+                np.testing.assert_array_equal(got[1], expected[1])
+        finally:
+            mx.set_default_device(old_device)

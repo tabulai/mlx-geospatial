@@ -34,12 +34,15 @@ on the GPU whenever Metal is available.
 
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 import mlx.core as mx
 import shapely
 
 from ._dispatch import resolve_backend
-from ._boundary import boundary_candidate_rows
+from ._boundary import boundary_candidate_rows, cold_boundary_prefers_index
+from ._edge_index import _MIN_RING_EDGES, cold_edge_index_eligible
 from ._ingest import (
     LocalPoints,
     PolygonSet,
@@ -50,17 +53,75 @@ from ._ingest import (
 from ._precision import recenter
 from ._pip import (
     _ALL_MATCHES_EDGE_WORK_THRESHOLD,
+    _ALL_MATCHES_PAIR_POINT_THRESHOLD,
     _PIP_LONG_RING_THRESHOLD,
     pip_all_matches,
     pip_first_match,
     pip_pairs,
 )
+from ._pip_indexed import _REPEAT_MIN_EDGE_WORK
 from ._validation import check_positive_int
 
-__all__ = ["GridIndex", "point_in_polygon", "sjoin"]
+__all__ = ["GridIndex", "PreparedJoin", "point_in_polygon", "sjoin"]
 
 _INT32_MAX = np.iinfo(np.int32).max
 _UINT32_MASK = np.uint64(np.iinfo(np.uint32).max)
+
+# One binary search per split over strictly increasing candidate_offsets.
+# A split through a candidate list includes that point in both batches.
+_BATCH_BOUNDARIES_SOURCE = """
+    uint i = thread_position_in_grid.x;
+    int n_targets = shape[0];
+    if (i >= (uint)n_targets) return;
+    uint lo = 0;
+    uint hi = (uint)shape[1];
+    long target = targets[i];
+    while (lo < hi) {
+        uint mid = lo + (hi - lo) / 2u;
+        if (offsets[mid] < target) {
+            lo = mid + 1u;
+        } else {
+            hi = mid;
+        }
+    }
+    previous_end[i] = (int)lo;
+    next_start[i] = (int)lo - (int)(offsets[lo] != target);
+"""
+
+_batch_boundaries_kernel = None
+
+
+def _get_batch_boundaries_kernel():
+    global _batch_boundaries_kernel
+    if _batch_boundaries_kernel is None:
+        _batch_boundaries_kernel = mx.fast.metal_kernel(
+            name="mlx_geospatial_batch_boundaries",
+            input_names=["offsets", "targets", "shape"],
+            output_names=["previous_end", "next_start"],
+            source=_BATCH_BOUNDARIES_SOURCE,
+        )
+    return _batch_boundaries_kernel
+
+
+def _batch_boundaries(
+    offsets: mx.array, targets: np.ndarray, n_active: int
+) -> tuple[mx.array, mx.array]:
+    """Return the exclusive previous end and inclusive next start at each split."""
+    n_targets = len(targets)
+    kernel = _get_batch_boundaries_kernel()
+    previous_end, next_start = kernel(
+        inputs=[
+            offsets,
+            mx.array(targets, dtype=mx.int64),
+            mx.array([n_targets, n_active], dtype=mx.int32),
+        ],
+        grid=(n_targets, 1, 1),
+        threadgroup=(min(64, n_targets), 1, 1),
+        output_shapes=[(n_targets,), (n_targets,)],
+        output_dtypes=[mx.int32, mx.int32],
+        stream=mx.gpu,
+    )
+    return previous_end, next_start
 
 # Direct polygon-order filling avoids sorting entirely, but its Python loop and
 # two grid-wide cumulative sums are worthwhile only for material, dense
@@ -828,39 +889,58 @@ class GridIndex:
             return 0
         return int(self._cell_max_ring_edges[cells].max(initial=0))
 
-    def _device_first_match_bound(self, cell: mx.array, counts: mx.array) -> int:
-        """Device twin of :meth:`_first_match_ring_bound` (one sync if needed)."""
+    def _measure_cold_edge_work(self, n: int) -> bool:
+        return (
+            n * self._max_cell_edge_work >= _REPEAT_MIN_EDGE_WORK
+            and cold_edge_index_eligible(self.polygons)
+        )
+
+    def _device_first_match_bound(self, cell: mx.array, counts: mx.array) -> tuple[int, int]:
+        """Cooperative traversal bound and cold index work for the used cells."""
         if self._max_cell_ring_edges < _PIP_LONG_RING_THRESHOLD:
-            return 0
-        max_ring_mx, all_long_mx, _ = self._device_tables()
+            return 0, 0
+        max_ring_mx, all_long_mx, edges_mx = self._device_tables()
         with mx.stream(mx.gpu):
             used = counts > 0
             safe = mx.maximum(cell, 0)
             all_long = mx.where(used, mx.take(all_long_mx, safe), True).all()
             max_ring = mx.where(used, mx.take(max_ring_mx, safe), 0).max()
-            mx.eval(all_long, max_ring)
-        if not bool(all_long.item()):
-            return 0
-        return int(max_ring.item())
+            work = None
+            if self._measure_cold_edge_work(int(cell.shape[0])):
+                work = mx.where(used, mx.take(edges_mx, safe), 0).astype(mx.int64).sum()
+                mx.eval(all_long, max_ring, work)
+            else:
+                mx.eval(all_long, max_ring)
+        longest = int(max_ring.item())
+        candidate_work = int(work.item()) if work is not None and longest >= _MIN_RING_EDGES else 0
+        return (longest if bool(all_long.item()) else 0), candidate_work
 
-    def _device_edge_bounds(self, cells: mx.array) -> tuple[int, int]:
-        """Device twin of :meth:`_candidate_edge_bounds` for candidate-bearing cells."""
+    def _device_edge_bounds(self, cells: mx.array) -> tuple[int, int, int]:
+        """Edge bounds and cold index work for candidate-bearing cells."""
         if (
             self._max_cell_ring_edges < _PIP_LONG_RING_THRESHOLD
             and self._max_cell_edge_work < _ALL_MATCHES_EDGE_WORK_THRESHOLD
         ):
-            return self._max_cell_ring_edges, self._max_cell_edge_work
+            return self._max_cell_ring_edges, self._max_cell_edge_work, 0
         if int(cells.shape[0]) == 0:
-            return 0, 0
+            return 0, 0, 0
         max_ring_mx, _, edge_work_mx = self._device_tables()
         with mx.stream(mx.gpu):
-            edge_work = mx.take(edge_work_mx, cells).max()
+            cell_work = mx.take(edge_work_mx, cells)
+            largest_cell = cell_work.max()
             if max_ring_mx is None:
-                mx.eval(edge_work)
-                return 0, int(edge_work.item())
+                mx.eval(largest_cell)
+                return 0, int(largest_cell.item()), 0
             max_ring = mx.take(max_ring_mx, cells).max()
-            mx.eval(max_ring, edge_work)
-        return int(max_ring.item()), int(edge_work.item())
+            work = None
+            if self._measure_cold_edge_work(int(cells.shape[0])):
+                work = cell_work.astype(mx.int64).sum()
+                mx.eval(max_ring, largest_cell, work)
+            else:
+                mx.eval(max_ring, largest_cell)
+        longest = int(max_ring.item())
+        candidate_work = int(work.item()) if work is not None and longest >= _MIN_RING_EDGES else 0
+        return longest, int(largest_cell.item()), candidate_work
 
     def query(
         self,
@@ -987,13 +1067,19 @@ class GridIndex:
             # Point and backend validation above still applies on this path.
             return _empty_result(all_matches, on_device, n)
 
+        prefilter_first = False
+        boundary_rows = None
+
+        def exact_candidates():
+            return boundary_candidate_rows(
+                self, local, cell, max_pairs_per_batch=max_pairs_per_batch
+            )
+
         def finish(out):
             if exact_boundary:
-                candidates = (
-                    boundary_candidate_rows(
-                        self, local, cell, max_pairs_per_batch=max_pairs_per_batch
-                    ) if chosen == "gpu" else None
-                )
+                candidates = boundary_rows
+                if chosen == "gpu" and not prefilter_first:
+                    candidates = exact_candidates()
                 out = self._refine_boundary(
                     pts64, out, all_matches=all_matches, predicate=predicate,
                     candidate_rows=candidates,
@@ -1010,6 +1096,15 @@ class GridIndex:
         if local is None:
             local = polyset._local_from_f64(pts64)
 
+        # If boundary filtering can build cold bands, run it first so
+        # containment reuses them. Otherwise containment can still warm bands
+        # for the boundary pass, for example on a dense candidate batch.
+        prefilter_first = (
+            exact_boundary
+            and self._max_cell_count <= max_pairs_per_batch
+            and cold_boundary_prefers_index(polyset, n)
+        )
+
         bound = n * self._max_cell_count  # >= the candidate-pair total
         if not all_matches and bound <= max_pairs_per_batch:
             # Settled GPU first match that fits one launch: assign cells lazily
@@ -1017,6 +1112,8 @@ class GridIndex:
             # An empty candidate list simply yields -1 inside the kernel.
             with mx.stream(mx.gpu):
                 cell, counts = _device_cells(local[:, 0], local[:, 1], *self._device_grid())
+            if prefilter_first:
+                boundary_rows = exact_candidates()
             out = self._query_gpu_first_match(
                 local,
                 cell,
@@ -1027,6 +1124,8 @@ class GridIndex:
             return finish(out)
 
         cell, counts, total_pairs, max_count = self._device_candidates(local)
+        if prefilter_first:
+            boundary_rows = exact_candidates()
         if total_pairs == 0:
             return finish(_empty_result(all_matches, False, n))
         if all_matches:
@@ -1036,6 +1135,7 @@ class GridIndex:
                 counts,
                 total_pairs=total_pairs,
                 max_pairs_per_batch=max_pairs_per_batch,
+                max_count=max_count,
             )
         elif max_count <= max_pairs_per_batch:
             out = self._query_gpu_first_match(
@@ -1065,6 +1165,7 @@ class GridIndex:
         *,
         total_pairs: int,
         max_pairs_per_batch: int,
+        max_count: int | None = None,
     ) -> tuple[mx.array, mx.array]:
         """GPU count/scan/write compaction, batched by candidate rank."""
         cell_offsets_mx, cell_poly_mx = self._device_csr()
@@ -1073,43 +1174,93 @@ class GridIndex:
             mx.zeros((0,), dtype=mx.int64),
             mx.zeros((0,), dtype=mx.int64),
         )
+        if n == 0:
+            return empty
+        single_batch = total_pairs <= max_pairs_per_batch
         with mx.stream(mx.gpu):
             # Zero-candidate points cannot contribute output. Compact the
             # candidate-bearing points on device (their ascending order is the
             # output order) so millions of outside rows cost no host work.
             active = counts > 0
-            n_active = int(active.sum().item())
+            active_prefix = mx.cumsum(active.astype(mx.int32))
+            n_active = int(active_prefix[-1].item())
             if n_active == 0:
                 return empty
-            dest = mx.cumsum(active.astype(mx.int32)) - 1
-            active_point = mx.zeros((n_active + 1,), dtype=mx.int32)
-            # Inactive rows all scatter into the spare last slot, dropped below.
-            active_point[mx.where(active, dest, n_active)] = mx.arange(n, dtype=mx.int32)
-            active_point = active_point[:n_active]
-            active_cell = mx.take(cell, active_point)
-            active_count = mx.take(counts, active_point)
+            point_id = mx.arange(n, dtype=mx.int32)
+            if n_active == n:
+                active_point, active_cell, active_count = point_id, cell, counts
+            else:
+                active_point = mx.zeros((n_active + 1,), dtype=mx.int32)
+                # Inactive rows scatter into the spare last slot, dropped below.
+                active_point[mx.where(active, active_prefix - 1, n_active)] = point_id
+                active_point = active_point[:n_active]
+                active_cell = mx.take(cell, active_point)
+                active_count = mx.take(counts, active_point)
             candidate_offsets = mx.concatenate(
                 [mx.zeros((1,), dtype=mx.int64), mx.cumsum(active_count)]
             )
-            mx.eval(active_point, active_cell, candidate_offsets)
+            eval_list = [active_point, active_cell, candidate_offsets]
+            if max_count is None:
+                max_count_mx = active_count.max()
+                eval_list.append(max_count_mx)
+            else:
+                max_count_mx = None
+            if not single_batch:
+                targets = np.arange(
+                    max_pairs_per_batch, total_pairs, max_pairs_per_batch, dtype=np.int64
+                )
+                previous_ends, next_starts = _batch_boundaries(
+                    candidate_offsets, targets, n_active
+                )
+                eval_list.extend((previous_ends, next_starts))
+            mx.eval(*eval_list)
         if int(candidate_offsets[-1].item()) != total_pairs:
             raise RuntimeError("active candidate offsets do not cover all pairs")
+        if max_count_mx is not None:
+            max_count = int(max_count_mx.item())
+
+        if single_batch:
+            max_ring_edges, max_candidate_edges, candidate_edge_work = self._device_edge_bounds(
+                active_cell
+            )
+            return pip_all_matches(
+                local,
+                self.polygons,
+                active_point,
+                active_cell,
+                candidate_offsets,
+                cell_offsets_mx,
+                cell_poly_mx,
+                pair_begin=0,
+                pair_end=total_pairs,
+                max_point_pairs=max_count,
+                max_ring_edges=max_ring_edges,
+                max_candidate_edges=max_candidate_edges,
+                candidate_edge_work=candidate_edge_work,
+            )
+
+        active0s = [0, *np.asarray(next_starts).tolist()]
+        active1s = [*np.asarray(previous_ends).tolist(), n_active]
 
         matches_pt: list[mx.array] = []
         matches_pg: list[mx.array] = []
-        pair0 = 0
-        while pair0 < total_pairs:
+        for batch, (active0, active1) in enumerate(zip(active0s, active1s, strict=True)):
+            pair0 = batch * max_pairs_per_batch
             pair1 = min(pair0 + max_pairs_per_batch, total_pairs)
-            with mx.stream(mx.gpu):
-                # searchsorted equivalents: counts of offsets <= a rank.
-                active0 = int((candidate_offsets <= pair0).sum().item()) - 1
-                active1 = int((candidate_offsets <= pair1 - 1).sum().item())
+            if active1 - active0 == 1:
+                max_point_pairs = pair1 - pair0
+            elif max_count < _ALL_MATCHES_PAIR_POINT_THRESHOLD:
+                max_point_pairs = min(max_count, pair1 - pair0)
+            else:
                 # Clip the active prefix offsets to this exact pair-rank batch.
                 # The largest difference detects a single skewed candidate
                 # list even when its cost is hidden by a tiny chunk average.
-                clipped = mx.clip(candidate_offsets[active0 : active1 + 1], pair0, pair1)
-                max_point_pairs = int((clipped[1:] - clipped[:-1]).max().item())
-            max_ring_edges, max_candidate_edges = self._device_edge_bounds(
+                with mx.stream(mx.gpu):
+                    clipped = mx.clip(
+                        candidate_offsets[active0 : active1 + 1], pair0, pair1
+                    )
+                    max_point_pairs = int((clipped[1:] - clipped[:-1]).max().item())
+            max_ring_edges, max_candidate_edges, candidate_edge_work = self._device_edge_bounds(
                 active_cell[active0:active1]
             )
             out_point, out_poly = pip_all_matches(
@@ -1125,11 +1276,11 @@ class GridIndex:
                 max_point_pairs=max_point_pairs,
                 max_ring_edges=max_ring_edges,
                 max_candidate_edges=max_candidate_edges,
+                candidate_edge_work=candidate_edge_work,
             )
             if int(out_point.shape[0]):
                 matches_pt.append(out_point)
                 matches_pg.append(out_poly)
-            pair0 = pair1
 
         if not matches_pt:
             return empty
@@ -1152,7 +1303,7 @@ class GridIndex:
         n = int(local.shape[0])
 
         if total_pairs <= max_pairs_per_batch:
-            max_ring_edges = self._device_first_match_bound(cell, counts)
+            max_ring_edges, candidate_edge_work = self._device_first_match_bound(cell, counts)
             return pip_first_match(
                 local,
                 self.polygons,
@@ -1160,6 +1311,7 @@ class GridIndex:
                 cell_offsets_mx,
                 cell_poly_mx,
                 max_ring_edges=max_ring_edges,
+                candidate_edge_work=candidate_edge_work,
             )
 
         # Whole-point batches preserve the public hard cap on candidate work
@@ -1177,7 +1329,7 @@ class GridIndex:
                 point1 = int((cum <= base + max_pairs_per_batch).sum().item())
             if point1 <= point0:  # defensive: counts.max() was checked above
                 raise RuntimeError("could not form a bounded fused point batch")
-            max_ring_edges = self._device_first_match_bound(
+            max_ring_edges, candidate_edge_work = self._device_first_match_bound(
                 cell[point0:point1], counts[point0:point1]
             )
             results.append(
@@ -1188,6 +1340,7 @@ class GridIndex:
                     cell_offsets_mx,
                     cell_poly_mx,
                     max_ring_edges=max_ring_edges,
+                    candidate_edge_work=candidate_edge_work,
                 )
             )
             base = int(cum[point1 - 1].item())
@@ -1243,6 +1396,9 @@ class GridIndex:
             max_ring_edges = int(
                 self.polygons._geom_max_ring_edges[pair_poly].max(initial=0)
             )
+            candidate_edge_work = 0
+            if max_ring_edges >= _MIN_RING_EDGES and cold_edge_index_eligible(self.polygons):
+                candidate_edge_work = int(self.polygons._geom_edge_counts[pair_poly].sum())
             flags = np.array(
                 pip_pairs(
                     local,
@@ -1250,6 +1406,7 @@ class GridIndex:
                     mx.array(pair_point.astype(np.int32)),
                     mx.array(pair_poly.astype(np.int32)),
                     max_ring_edges=max_ring_edges,
+                    candidate_edge_work=candidate_edge_work,
                 )
             )
             hit = flags.astype(bool)
@@ -1654,6 +1811,318 @@ def point_in_polygon(
     )
 
 
+def _masked_array_types(pd) -> tuple[type, ...]:
+    return tuple(
+        t
+        for t in (
+            getattr(pd.arrays, "IntegerArray", None),
+            getattr(pd.arrays, "FloatingArray", None),
+            getattr(pd.arrays, "BooleanArray", None),
+        )
+        if t is not None
+    )
+
+
+def _numpy_extension_array_type(pd) -> type:
+    # pandas < 2.1 names the NumPy-backed extension array ``PandasArray``.
+    cls = getattr(pd.arrays, "NumpyExtensionArray", None)
+    return cls if cls is not None else pd.arrays.PandasArray
+
+
+def _take_sjoin_array(
+    pd,
+    arr,
+    pos: np.ndarray,
+    *,
+    allow_fill: bool,
+    missing: np.ndarray | None = None,
+    safe_pos: np.ndarray | None = None,
+):
+    """Gather rows from a pandas/GeoPandas column array, preserving dtypes.
+
+    For inner joins (or left joins with no unmatched rows), direct NumPy fancy
+    indexing on NumPy-backed, masked, categorical, and GeometryArray columns
+    avoids pandas' per-element fill-value checks while always allocating fresh
+    storage. When ``-1`` fill markers are present, masked arrays reuse the
+    caller's precomputed mask/safe indices and all other extension types
+    delegate to ``ExtensionArray.take(..., allow_fill=True)``.
+    """
+    masked = _masked_array_types(pd)
+    if not allow_fill or missing is None:
+        # Exact type: StringArray subclasses NumpyExtensionArray, and its bare
+        # _ndarray would drop the string dtype.
+        if type(arr) is _numpy_extension_array_type(pd):
+            return arr._ndarray[pos]
+        if (
+            type(arr).__name__ == "GeometryArray"
+            and hasattr(arr, "_data")
+            and hasattr(arr, "crs")
+        ):
+            return type(arr)(arr._data[pos], crs=arr.crs)
+        if isinstance(arr, pd.Categorical):
+            return pd.Categorical.from_codes(arr.codes[pos], dtype=arr.dtype)
+        if masked and isinstance(arr, masked):
+            return type(arr)(arr._data[pos], arr._mask[pos], copy=False)
+        return arr.take(pos, allow_fill=False)
+    if masked and isinstance(arr, masked) and len(arr) > 0:
+        return type(arr)(arr._data[safe_pos], arr._mask[safe_pos] | missing, copy=False)
+    return arr.take(pos, allow_fill=True)
+
+
+def _take_sjoin_index(pd, index, pos: np.ndarray):
+    """Gather rows from a pandas Index, avoiding take_nd overhead when possible."""
+    if isinstance(index, pd.RangeIndex):
+        return pd.Index(index.start + pos * index.step, name=index.name, copy=False)
+    if type(index) is pd.Index and type(index.array) is _numpy_extension_array_type(pd):
+        # Pass the dtype so pandas >= 3 does not re-infer object labels as str.
+        return pd.Index(
+            index.array._ndarray[pos], name=index.name, dtype=index.dtype, copy=False
+        )
+    return index.take(pos)
+
+
+def _extract_right_table(pd, right, n_right: int, *, copy_arrays: bool):
+    """Extract ``(right_index, right_attr_columns)`` from a right-hand input."""
+    candidate_index = getattr(right, "index", None)
+    if callable(getattr(candidate_index, "to_numpy", None)):
+        right_index = candidate_index.copy(deep=True) if copy_arrays else candidate_index
+    else:
+        right_index = pd.RangeIndex(n_right)
+    if not isinstance(right, pd.DataFrame):
+        return right_index, ()
+    geom_name = getattr(getattr(right, "geometry", None), "name", None)
+    if geom_name is None and "geometry" in right.columns:
+        geom_name = "geometry"
+    attrs = []
+    for i, col in enumerate(right.columns):
+        if col == geom_name:
+            continue
+        arr = right.iloc[:, i].array
+        attrs.append((col, arr.copy() if copy_arrays else arr))
+    return right_index, tuple(attrs)
+
+
+def _assemble_sjoin_frame(
+    pd,
+    base,
+    point_pos: np.ndarray,
+    right_pos: np.ndarray,
+    right_index,
+    right_attrs: tuple[tuple[str, object], ...],
+    *,
+    how: str,
+    all_matches: bool,
+    assigned: np.ndarray | None = None,
+    matched: np.ndarray | None = None,
+):
+    """Assemble the joined DataFrame/GeoDataFrame in bulk without extra copies."""
+    allow_fill = how == "left"
+    first_match_left = how == "left" and not all_matches
+
+    missing = None
+    safe_right_pos = None
+    if allow_fill and len(right_pos):
+        miss = right_pos < 0
+        if miss.any():
+            missing = miss
+            safe_right_pos = np.where(miss, 0, right_pos)
+
+    if first_match_left:
+        # Retain the original first-match left join's object label column.
+        index_right_col = np.full(len(base), np.nan, dtype=object)
+        if matched is not None and matched.any():
+            index_right_col[matched] = right_index.to_numpy()[assigned[matched]]
+    elif isinstance(right_index, pd.MultiIndex):
+        index_right_col = pd.api.extensions.take(
+            right_index.to_numpy(), right_pos, allow_fill=allow_fill
+        )
+    else:
+        index_right_col = _take_sjoin_array(
+            pd,
+            right_index.array,
+            right_pos,
+            allow_fill=allow_fill,
+            missing=missing,
+            safe_pos=safe_right_pos,
+        )
+
+    existing = set(base.columns)
+    existing.add("index_right")
+    right_taken: list[tuple[str, object]] = []
+    for col, arr in right_attrs:
+        name = col
+        while name in existing:  # keep suffixing until unique
+            name = f"{name}_right"
+        existing.add(name)
+        # Preserve nullable, categorical, string, and datetime extension
+        # dtypes; -1 is a missing row only for a left join.
+        right_taken.append(
+            (
+                name,
+                _take_sjoin_array(
+                    pd,
+                    arr,
+                    right_pos,
+                    allow_fill=allow_fill,
+                    missing=missing,
+                    safe_pos=safe_right_pos,
+                ),
+            )
+        )
+
+    gpd_mod = sys.modules.get("geopandas")
+    gpd_cls = getattr(gpd_mod, "GeoDataFrame", None) if gpd_mod is not None else None
+    is_plain_df = type(base) is pd.DataFrame
+    is_gdf = gpd_cls is not None and type(base) is gpd_cls
+
+    if (is_plain_df or is_gdf) and base.columns.is_unique and base.columns.nlevels == 1:
+        data: dict[object, object] = {}
+        if first_match_left:
+            # pandas 2.2's copy_on_write="warn" still shares memory, so only
+            # True (or pandas >= 3) may skip the defensive copy.
+            cow = (
+                int(pd.__version__.split(".", 1)[0]) >= 3
+                or getattr(pd.options.mode, "copy_on_write", False) is True
+            )
+            for col in base.columns:
+                data[col] = base[col] if cow else base[col].copy()
+            out_index = base.index
+        else:
+            out_index = _take_sjoin_index(pd, base.index, point_pos)
+            for col in base.columns:
+                values = _take_sjoin_array(
+                    pd, base[col].array, point_pos, allow_fill=False
+                )
+                if isinstance(values, np.ndarray) and values.dtype == object:
+                    # The DataFrame constructor re-infers bare object arrays
+                    # (str on pandas >= 3, datetime64 everywhere). A Series on
+                    # out_index keeps object, as base.iloc did, without a copy.
+                    values = pd.Series(values, index=out_index, dtype=object, copy=False)
+                data[col] = values
+        data["index_right"] = index_right_col
+        for name, values in right_taken:
+            data[name] = values
+        if is_gdf:
+            left_geom_name = getattr(base, "_geometry_column_name", None)
+            if left_geom_name in data:
+                left_crs = getattr(base.geometry, "crs", None)
+                out = gpd_cls(
+                    data,
+                    index=out_index,
+                    geometry=left_geom_name,
+                    crs=left_crs,
+                    copy=False,
+                )
+            else:
+                out = gpd_cls(data, index=out_index, copy=False)
+        else:
+            out = pd.DataFrame(data, index=out_index, copy=False)
+        # Carry over what base.iloc / base.copy propagate: attrs, flags
+        # (allows_duplicate_labels), subclass _metadata, and column-axis names.
+        names = list(base.columns.names)
+        if any(n is not None for n in names) and out.columns.nlevels == len(names):
+            out.columns = out.columns.set_names(names)
+        return out.__finalize__(base)
+
+    # Preserve subclass and non-flat or duplicate column behavior with pandas
+    # indexing. take() also avoids marking the result as a slice (which warns
+    # when the right columns are added on pandas < 3).
+    out = base.copy() if first_match_left else base.take(point_pos)
+    out["index_right"] = index_right_col
+    for name, values in right_taken:
+        out[name] = values
+    return out
+
+
+class PreparedJoin:
+    """Reusable right-hand polygon layer prepared for repeated :func:`sjoin` calls.
+
+    Builds and caches the :class:`PolygonSet` and :class:`GridIndex` once,
+    alongside an owned snapshot of the right-hand row index labels, CRS, and
+    non-geometry attribute columns. Lazy per-layer caches built on the first
+    join (such as the y-band edge index for detailed polygons, the float64
+    host edge grid, and the GEOS STRtree for ``exact_boundary=True``) remain
+    warm across subsequent calls.
+
+    Pass a ``PreparedJoin`` directly as ``right`` to :func:`sjoin`, or call
+    :meth:`sjoin` on it.
+    """
+
+    def __init__(
+        self,
+        right,
+        *,
+        origin=None,
+        validate: bool = False,
+        cell_size: float | None = None,
+        max_cells: int = 1_000_000,
+        max_entries: int = 20_000_000,
+    ):
+        import pandas as pd
+
+        if isinstance(right, PreparedJoin):
+            raise TypeError(
+                "right is already a PreparedJoin; pass it directly to sjoin()"
+            )
+        right_geom = right.geometry if hasattr(right, "geometry") else right
+        self.crs = getattr(right_geom, "crs", None)
+
+        n_right = len(right_geom) if hasattr(right_geom, "__len__") else 1
+        if n_right == 0:
+            _as_geometry_array(right)
+            self.polygons: PolygonSet | None = None
+            self.index: GridIndex | None = None
+            self.n_polygons = 0
+        else:
+            self.polygons = PolygonSet(right_geom, origin=origin, validate=validate)
+            self.index = GridIndex(
+                self.polygons,
+                cell_size=cell_size,
+                max_cells=max_cells,
+                max_entries=max_entries,
+            )
+            self.n_polygons = self.polygons.n_polygons
+
+        self._right_index, self._attr_columns = _extract_right_table(
+            pd, right, self.n_polygons, copy_arrays=True
+        )
+
+    def __len__(self) -> int:
+        return self.n_polygons
+
+    @property
+    def columns(self) -> tuple[str, ...]:
+        """Names of the cached right-hand non-geometry attribute columns."""
+        return tuple(name for name, _ in self._attr_columns)
+
+    def __repr__(self) -> str:
+        return (
+            f"PreparedJoin(n_polygons={self.n_polygons}, "
+            f"columns={len(self._attr_columns)}, crs={self.crs!r})"
+        )
+
+    def sjoin(
+        self,
+        left,
+        *,
+        how: str = "inner",
+        predicate: str = "intersects",
+        all_matches: bool = False,
+        exact_boundary: bool = False,
+        backend: str | None = None,
+    ):
+        """Join points in ``left`` against this prepared right-hand layer."""
+        return sjoin(
+            left,
+            self,
+            how=how,
+            predicate=predicate,
+            all_matches=all_matches,
+            exact_boundary=exact_boundary,
+            backend=backend,
+        )
+
+
 def sjoin(
     left,
     right,
@@ -1667,10 +2136,11 @@ def sjoin(
     """Spatial join: points in ``left`` matched to containing polygons in ``right``.
 
     A GeoPandas-flavored convenience wrapper around :func:`point_in_polygon`.
-    ``left`` is a (Geo)DataFrame/Series of points, ``right`` of polygons; a
-    plain pandas DataFrame with a ``geometry`` column of shapely objects works
-    too. Returns the left rows with an ``index_right`` column plus the right
-    table's non-geometry columns (suffixed ``_right`` on collision). Each
+    ``left`` is a (Geo)DataFrame/Series of points, ``right`` of polygons (or a
+    prebuilt :class:`PreparedJoin` for repeated joins against the same layer);
+    a plain pandas DataFrame with a ``geometry`` column of shapely objects
+    works too. Returns the left rows with an ``index_right`` column plus the
+    right table's non-geometry columns (suffixed ``_right`` on collision). Each
     point matches at most one polygon by default (the lowest polygon position
     wins when polygons overlap). Pass ``all_matches=True`` to return every
     matching pair, in left-row then right-row order; a left join also keeps
@@ -1698,33 +2168,53 @@ def sjoin(
         )
 
     left_geom = left.geometry if hasattr(left, "geometry") else left
-    right_geom = right.geometry if hasattr(right, "geometry") else right
     left_crs = getattr(left_geom, "crs", None)
-    right_crs = getattr(right_geom, "crs", None)
+
+    prepared = isinstance(right, PreparedJoin)
+    if prepared:
+        right_crs = right.crs
+        n_right = right.n_polygons
+        right_index = right._right_index
+        right_attrs = right._attr_columns
+    else:
+        right_geom = right.geometry if hasattr(right, "geometry") else right
+        right_crs = getattr(right_geom, "crs", None)
+        n_right = len(right_geom) if hasattr(right_geom, "__len__") else 1
+
     if left_crs is not None and right_crs is not None and left_crs != right_crs:
         raise ValueError(f"CRS mismatch: left={left_crs}, right={right_crs}")
 
-    n_right = len(right_geom) if hasattr(right_geom, "__len__") else 1
     if n_right == 0:
         # PolygonSet requires at least one geometry; a zero-polygon join is
         # simply a join with no matches. Argument validation must not depend
         # on data shape, so backend= still goes through resolve_backend.
         resolve_backend(backend, 0)
-        _as_geometry_array(right)
+        if not prepared:
+            _as_geometry_array(right)
         n_points = len(as_point_array(left_geom))
         if all_matches:
             pairs = (np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64))
         else:
             assigned = np.full(n_points, -1, dtype=np.int32)
     else:
-        result = point_in_polygon(
-            left_geom,
-            right_geom,
-            all_matches=all_matches,
-            predicate=predicate,
-            exact_boundary=exact_boundary,
-            backend=backend,
-        )
+        if prepared:
+            result = right.index.query(
+                left_geom,
+                all_matches=all_matches,
+                predicate=predicate,
+                exact_boundary=exact_boundary,
+                backend=backend,
+                _stacklevel=4,
+            )
+        else:
+            result = point_in_polygon(
+                left_geom,
+                right_geom,
+                all_matches=all_matches,
+                predicate=predicate,
+                exact_boundary=exact_boundary,
+                backend=backend,
+            )
         if all_matches:
             pairs = result
             n_points = len(left_geom)
@@ -1734,25 +2224,46 @@ def sjoin(
 
     if all_matches:
         point_pos, right_pos = (np.asarray(values, dtype=np.int64) for values in pairs)
+        assigned_arg = None
+        matched_arg = None
         if how == "left":
-            matched = np.zeros(n_points, dtype=bool)
-            matched[point_pos] = True
-            missing = np.flatnonzero(~matched)
-            if missing.size:
-                # The query's pairs are already point-major. Insert each
-                # unmatched row directly, without sorting or a label join.
-                destination = np.arange(len(point_pos)) + np.searchsorted(missing, point_pos)
-                missing_destination = np.arange(len(missing)) + np.searchsorted(point_pos, missing)
-                output_points = np.empty(len(point_pos) + len(missing), dtype=np.int64)
-                output_right = np.full(len(output_points), -1, dtype=np.int64)
-                output_points[destination] = point_pos
-                output_right[destination] = right_pos
-                output_points[missing_destination] = missing
-                point_pos, right_pos = output_points, output_right
+            if len(point_pos) == 0:
+                point_pos = np.arange(n_points, dtype=np.int64)
+                right_pos = np.full(n_points, -1, dtype=np.int64)
+            else:
+                matched = np.zeros(n_points, dtype=bool)
+                matched[point_pos] = True
+                unmatched = ~matched
+                n_missing = int(unmatched.sum())
+                if n_missing:
+                    # The query's pairs are already point-major. Count unmatched
+                    # points preceding each matched point in O(n_points) to place
+                    # every row directly without sorting or binary search.
+                    miss_prefix = np.cumsum(unmatched, dtype=np.int64)
+                    destination = np.arange(len(point_pos), dtype=np.int64)
+                    destination += miss_prefix[point_pos]
+                    total_rows = len(point_pos) + n_missing
+                    output_points = np.empty(total_rows, dtype=np.int64)
+                    output_right = np.full(total_rows, -1, dtype=np.int64)
+                    output_points[destination] = point_pos
+                    output_right[destination] = right_pos
+                    is_missing = np.ones(total_rows, dtype=bool)
+                    is_missing[destination] = False
+                    output_points[is_missing] = np.flatnonzero(unmatched)
+                    point_pos, right_pos = output_points, output_right
     else:
-        matched = assigned >= 0
-        point_pos = np.flatnonzero(matched) if how == "inner" else np.arange(n_points)
-        right_pos = assigned[matched] if how == "inner" else assigned
+        matched_arg = assigned >= 0
+        assigned_arg = assigned
+        point_pos = (
+            np.flatnonzero(matched_arg)
+            if how == "inner"
+            else np.arange(n_points, dtype=np.int64)
+        )
+        right_pos = (
+            assigned[matched_arg].astype(np.int64, copy=False)
+            if how == "inner"
+            else assigned.astype(np.int64, copy=False)
+        )
 
     if isinstance(left, pd.DataFrame):
         base = left
@@ -1765,41 +2276,20 @@ def sjoin(
         )
         base = pd.DataFrame({"geometry": np.asarray(left_geom, dtype=object)}, index=index)
 
-    candidate_index = getattr(right, "index", None)
-    right_index = (
-        candidate_index
-        if callable(getattr(candidate_index, "to_numpy", None))
-        else pd.RangeIndex(n_right)
+    if not prepared:
+        right_index, right_attrs = _extract_right_table(
+            pd, right, n_right, copy_arrays=False
+        )
+
+    return _assemble_sjoin_frame(
+        pd,
+        base,
+        point_pos,
+        right_pos,
+        right_index,
+        right_attrs,
+        how=how,
+        all_matches=all_matches,
+        assigned=assigned_arg,
+        matched=matched_arg,
     )
-
-    if how == "left" and not all_matches:
-        out = base.copy()
-        # Retain the original first-match left join's object label column.
-        col = np.full(n_points, np.nan, dtype=object)
-        col[matched] = right_index.to_numpy()[assigned[matched]]
-        out["index_right"] = col
-    else:
-        out = base.iloc[point_pos].copy()
-        if isinstance(right_index, pd.MultiIndex):
-            out["index_right"] = pd.api.extensions.take(
-                right_index.to_numpy(), right_pos, allow_fill=how == "left"
-            )
-        else:
-            out["index_right"] = right_index.array.take(right_pos, allow_fill=how == "left")
-
-    if isinstance(right, pd.DataFrame):
-        geom_name = getattr(getattr(right, "geometry", None), "name", None)
-        if geom_name is None and "geometry" in right.columns:
-            geom_name = "geometry"
-        existing = set(out.columns)
-        for col in right.columns:
-            if col == geom_name:
-                continue
-            name = col
-            while name in existing:  # keep suffixing until unique
-                name = f"{name}_right"
-            existing.add(name)
-            # ExtensionArray.take preserves nullable, categorical, string,
-            # and datetime dtypes. -1 is a missing row only for a left join.
-            out[name] = right[col].array.take(right_pos, allow_fill=how == "left")
-    return out

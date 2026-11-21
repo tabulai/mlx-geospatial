@@ -29,7 +29,13 @@ import mlx.core as mx
 
 from ._validation import check_chunk_bytes
 
-__all__ = ["R_EARTH_M", "haversine", "haversine_cross", "haversine_knn"]
+__all__ = [
+    "R_EARTH_M",
+    "HaversineReference",
+    "haversine",
+    "haversine_cross",
+    "haversine_knn",
+]
 
 R_EARTH_M = 6371008.8  # IUGG mean Earth radius, meters
 
@@ -68,6 +74,11 @@ def _prep(a, degrees: bool) -> mx.array:
         raise TypeError(
             "LocalPoints hold re-centered polygon-frame coordinates, not lon/lat; "
             "pass the original coordinates to the haversine functions"
+        )
+    if isinstance(a, HaversineReference):
+        raise TypeError(
+            "HaversineReference is a prepared reference set for haversine_knn "
+            "(or haversine_cross); pass raw coordinates for elementwise distances"
         )
     if isinstance(a, mx.array) and a.dtype == mx.float64:
         a = np.asarray(a)
@@ -306,13 +317,22 @@ def _knn_refine(
     return d, idx
 
 
-def _knn_fused(q: mx.array, r: mx.array, k: int, radius: float, *, threadgroup: int = 128):
+def _knn_fused(
+    q: mx.array,
+    r: mx.array,
+    k: int,
+    radius: float,
+    *,
+    threadgroup: int = 128,
+    rcos: mx.array | None = None,
+):
     """Scalar fused-select path: one Metal thread per query."""
     radius = _check_radius(radius)
     n, m = int(q.shape[0]), int(r.shape[0])
     kernel = _get_knn_select_kernel()
     qcos = mx.cos(q[:, 1])
-    rcos = mx.cos(r[:, 1])
+    if rcos is None:
+        rcos = mx.cos(r[:, 1])
     grid_x = ((n + threadgroup - 1) // threadgroup) * threadgroup
     (out_i,) = kernel(
         inputs=[q, qcos, r, rcos, mx.array([n, m], dtype=mx.int32)],
@@ -327,7 +347,13 @@ def _knn_fused(q: mx.array, r: mx.array, k: int, radius: float, *, threadgroup: 
 
 
 def _knn_simdgroup(
-    q: mx.array, r: mx.array, k: int, radius: float, *, threadgroup: int = 128
+    q: mx.array,
+    r: mx.array,
+    k: int,
+    radius: float,
+    *,
+    threadgroup: int = 128,
+    rcos: mx.array | None = None,
 ):
     """Exact fused-select path: one 32-lane SIMDgroup per query."""
     radius = _check_radius(radius)
@@ -341,7 +367,8 @@ def _knn_simdgroup(
     n, m = int(q.shape[0]), int(r.shape[0])
     kernel = _get_knn_simdgroup_select_kernel()
     qcos = mx.cos(q[:, 1])
-    rcos = mx.cos(r[:, 1])
+    if rcos is None:
+        rcos = mx.cos(r[:, 1])
     threads = n * _KNN_SIMDGROUP_WIDTH
     grid_x = ((threads + threadgroup - 1) // threadgroup) * threadgroup
     (out_i,) = kernel(
@@ -652,14 +679,15 @@ _knn_unit_vectors = mx.compile(_knn_unit_vectors_graph)
 _finite_abs = mx.compile(lambda p: mx.where(mx.isfinite(p), mx.abs(p), 0.0))
 
 
-def _knn_chord_slack(q: mx.array, r: mx.array) -> mx.array:
+def _knn_chord_slack(
+    q: mx.array, r: mx.array, *, r_max_abs: mx.array | None = None
+) -> mx.array:
     """Device-side threshold slack ``16 * 2^-24 * B``, or -1 to disable pruning.
 
     Lazy on the GPU, so choosing the route never waits for a host sync.
     """
-    lon_lat = mx.maximum(
-        mx.max(_finite_abs(q), axis=0), mx.max(_finite_abs(r), axis=0)
-    )
+    ref_abs = mx.max(_finite_abs(r), axis=0) if r_max_abs is None else r_max_abs
+    lon_lat = mx.maximum(mx.max(_finite_abs(q), axis=0), ref_abs)
     b = mx.max(lon_lat)
     safe = (lon_lat[1] <= _HALF_PI_F32) & (b <= _KNN_CHORD_MAX_COORD)
     slack = mx.where(safe, b * _KNN_CHORD_SLACK_PER_RADIAN, -1.0)
@@ -667,7 +695,16 @@ def _knn_chord_slack(q: mx.array, r: mx.array) -> mx.array:
 
 
 def _knn_chord(
-    q: mx.array, r: mx.array, k: int, radius: float, strategy: str, *, threadgroup: int = 128
+    q: mx.array,
+    r: mx.array,
+    k: int,
+    radius: float,
+    strategy: str,
+    *,
+    threadgroup: int = 128,
+    rv: mx.array | None = None,
+    rcos: mx.array | None = None,
+    r_max_abs: mx.array | None = None,
 ) -> tuple[mx.array, mx.array]:
     """Chord-filtered selection with the refine fused in; ``strategy`` is
     ``"scalar"`` (one thread per query) or ``"simdgroup"`` (32 lanes)."""
@@ -686,7 +723,8 @@ def _knn_chord(
     grid_x = ((n * lanes + threadgroup - 1) // threadgroup) * threadgroup
     # The float32 value _hav uses for (2.0 * radius).
     rad2 = mx.array(np.array([2.0 * np.float32(radius)], dtype=np.float32))
-    rv, rcos = _knn_unit_vectors(r)
+    if rv is None or rcos is None:
+        rv, rcos = _knn_unit_vectors(r)
     out_d, out_i = _get_knn_chord_kernel(strategy)(
         inputs=[
             q,
@@ -694,7 +732,7 @@ def _knn_chord(
             r,
             rv,
             rcos,
-            _knn_chord_slack(q, r),
+            _knn_chord_slack(q, r, r_max_abs=r_max_abs),
             rad2,
             mx.array([n, m], dtype=mx.int32),
         ],
@@ -730,7 +768,9 @@ def _knn_chord_strategy(n: int, m: int, k: int) -> str:
     return "scalar"
 
 
-def _knn_chord_route(n: int, m: int, k: int, strategy: str) -> bool:
+def _knn_chord_route(
+    n: int, m: int, k: int, strategy: str, *, prepared: bool = False
+) -> bool:
     """Whether the chord-filtered ``strategy`` beats today's selectors.
 
     Over n in [256, 262144], m in [128, 1e6] and k in {1, 5, 10, 16} this rule
@@ -738,9 +778,18 @@ def _knn_chord_route(n: int, m: int, k: int, strategy: str) -> bool:
     geometric mean. Beyond k = 16 the larger top-k loosens the threshold and
     the extra registers cost occupancy (0.7x at k = 32 with small m), and tiny
     shapes cannot repay the unit-vector and slack passes (~0.05 ms).
+
+    With a prepared :class:`HaversineReference`, reference unit vectors and
+    coordinate bounds are already resident on device, so only the query side
+    pays ``O(n)`` setup and chord pruning wins even for tiny query batches
+    against large reference sets.
     """
     if k > _KNN_CHORD_MAX_K:
         return False
+    if prepared:
+        if strategy == "scalar":
+            return True
+        return m >= 8_192 or (k <= 10 and m >= 4_096)
     if strategy == "scalar":
         # Large query batches gain from the fused refine alone.
         return n >= 16_384 or n * m >= 1 << 24
@@ -766,6 +815,83 @@ def _knn_metal_strategy(n: int, m: int, k: int) -> str:
         if k <= max_k:
             return "simdgroup" if n <= max_queries else "scalar"
     return "scalar"
+
+
+class HaversineReference:
+    """Precomputed spherical reference points for repeated :func:`haversine_knn` queries.
+
+    Converts ``(M, 2)`` ``(lon, lat)`` coordinates to float32 radians once and
+    caches the unit-sphere vectors, latitude cosines, and coordinate bounds on
+    the active MLX device. Subsequent nearest-neighbor calls reuse these
+    buffers directly without reconverting reference coordinates or recomputing
+    trigonometric features, and can apply chord-distance pruning even on small
+    query batches.
+
+    Pass a ``HaversineReference`` directly as ``reference`` to
+    :func:`haversine_knn` (where ``degrees=`` then applies only to ``query``),
+    or call :meth:`knn` on it.
+    """
+
+    def __init__(self, reference, *, degrees: bool = True):
+        if isinstance(reference, HaversineReference):
+            raise TypeError(
+                "reference is already a HaversineReference; pass it directly to haversine_knn()"
+            )
+        r = _prep(reference, degrees)
+        if r.ndim != 2:
+            raise ValueError(
+                f"HaversineReference expects 2-D input of shape (M, 2), got shape {r.shape}"
+            )
+        if isinstance(reference, mx.array) and reference.dtype == mx.float32 and not degrees:
+            # _prep's same-dtype cast shares storage. Own the radians so a
+            # writable NumPy view of the source cannot stale the cached trig.
+            r = mx.array(r)
+        m = int(r.shape[0])
+        if m == 0:
+            rv = mx.zeros((0, 4), dtype=mx.float32)
+            rcos = mx.zeros((0,), dtype=mx.float32)
+            r_max_abs = mx.zeros((2,), dtype=mx.float32)
+        else:
+            rv, rcos = _knn_unit_vectors(r)
+            r_max_abs = mx.max(_finite_abs(r), axis=0)
+        mx.eval(r, rv, rcos, r_max_abs)
+        self.radians = r
+        self.unit_vectors = rv
+        self.cos_lat = rcos
+        self._max_abs = r_max_abs
+
+    def __len__(self) -> int:
+        return int(self.radians.shape[0])
+
+    @property
+    def n_points(self) -> int:
+        return int(self.radians.shape[0])
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return (int(self.radians.shape[0]), 2)
+
+    def __repr__(self) -> str:
+        return f"HaversineReference(n_points={len(self)})"
+
+    def knn(
+        self,
+        query,
+        k: int,
+        *,
+        radius: float = R_EARTH_M,
+        degrees: bool = True,
+        chunk_bytes: int = 512 * 1024 * 1024,
+    ) -> tuple[mx.array, mx.array]:
+        """Find the ``k`` nearest reference points for each query point."""
+        return haversine_knn(
+            query,
+            self,
+            k,
+            radius=radius,
+            degrees=degrees,
+            chunk_bytes=chunk_bytes,
+        )
 
 
 def haversine(a, b, *, radius: float = R_EARTH_M, degrees: bool = True) -> mx.array:
@@ -801,8 +927,8 @@ def haversine_cross(
     radius = _check_radius(radius)
     if chunk_bytes is not None:
         chunk_bytes = check_chunk_bytes(chunk_bytes)
-    a = _prep(a, degrees)
-    b = _prep(b, degrees)
+    a = a.radians if isinstance(a, HaversineReference) else _prep(a, degrees)
+    b = b.radians if isinstance(b, HaversineReference) else _prep(b, degrees)
     if a.ndim != 2 or b.ndim != 2:
         raise ValueError("haversine_cross expects 2-D inputs of shape (N, 2) and (M, 2)")
     n, m = a.shape[0], b.shape[0]
@@ -845,6 +971,11 @@ def haversine_knn(
     index ``-1`` with distance ``inf``. Both execution paths below share this
     contract.
 
+    ``reference`` may be raw coordinates or a prebuilt
+    :class:`HaversineReference` to amortize radian conversion, unit-sphere
+    vectors, and coordinate bounds across repeated searches (when a
+    ``HaversineReference`` is passed, ``degrees=`` applies only to ``query``).
+
     Exact brute force. On Metal with ``k <= 32`` this adaptively runs one of
     two fused selection kernels: a 32-lane SIMDgroup cooperates on each query
     when query parallelism is scarce, while one thread per query wins for
@@ -874,8 +1005,9 @@ def haversine_knn(
     # do not need this budget, but accepting invalid values only on that route
     # would make the public API depend on hardware, k, and active MLX device.
     chunk_bytes = check_chunk_bytes(chunk_bytes)
+    prepared = isinstance(reference, HaversineReference)
     q = _prep(query, degrees)
-    r = _prep(reference, degrees)
+    r = reference.radians if prepared else _prep(reference, degrees)
     if q.ndim != 2 or r.ndim != 2:
         raise ValueError("haversine_knn expects 2-D inputs of shape (N, 2) and (M, 2)")
     n, m = q.shape[0], r.shape[0]
@@ -892,12 +1024,25 @@ def haversine_knn(
         and k <= _KNN_KERNEL_MAX_K
     ):
         strategy = _knn_chord_strategy(n, m, k)
-        if _knn_chord_route(n, m, k, strategy):
-            d, idx = _knn_chord(q, r, k, radius, strategy)
+        if _knn_chord_route(n, m, k, strategy, prepared=prepared):
+            d, idx = _knn_chord(
+                q,
+                r,
+                k,
+                radius,
+                strategy,
+                rv=reference.unit_vectors if prepared else None,
+                rcos=reference.cos_lat if prepared else None,
+                r_max_abs=reference._max_abs if prepared else None,
+            )
         elif _knn_metal_strategy(n, m, k) == "simdgroup":
-            d, idx = _knn_simdgroup(q, r, k, radius)
+            d, idx = _knn_simdgroup(
+                q, r, k, radius, rcos=reference.cos_lat if prepared else None
+            )
         else:
-            d, idx = _knn_fused(q, r, k, radius)
+            d, idx = _knn_fused(
+                q, r, k, radius, rcos=reference.cos_lat if prepared else None
+            )
         mx.eval(d, idx)
         return d, idx
     return _knn_composed(q, r, k, radius, chunk_bytes)
