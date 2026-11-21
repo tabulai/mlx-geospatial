@@ -20,8 +20,8 @@ NumPy and Shapely are installed automatically. For GeoPandas support:
 pip install "mlx-geospatial[geo]"
 ```
 
-Install this checkout with `pip install ".[geo]"` for the prepared APIs and
-the implementation measured below.
+Version **0.1.2** includes prepared joins, reusable nearest-neighbor reference
+sets, and the cold edge-index tuning measured below.
 
 ## Quickstart
 
@@ -125,14 +125,14 @@ The MLX measurement uses the frozen `GridIndex.query` and assembly adapter.
 | 1M × 260 | 2,048 | 233 ms | 1.57 s | **6.74×** | 171 ms | 1.17 s | **6.87×** |
 | 1M × 1 | 150,000 | 144 ms | 2.72 s | **18.88×** | 103 ms | 1.70 s | **16.41×** |
 
-![Complete spatial join timings on M1 Ultra and M4 Max](bench/results/2026-11-21-cold-edge/full-e2e-overview.png)
+![Complete spatial join timings on M1 Ultra and M4 Max][exact-join-chart]
 
 All **48 full-output checks** passed, including row order, attributes,
 indexes, dtypes, geometry, and CRS. Both Macs passed **825 tests** with the
 CI Metal validation settings and skipped one pandas-version-specific test.
 The published data identifies the exact source revision and includes
-individual trial samples and reproduction commands. [Benchmark guide](bench/README.md) ·
-[Source and measurements](bench/results/2026-11-21-cold-edge/)
+individual trial samples and reproduction commands. [Benchmark guide][benchmark-guide] ·
+[Source and measurements][benchmark-results]
 
 ### Cold edge-index routing
 
@@ -141,8 +141,8 @@ cost of indexing the whole layer. In the public first-match benchmark
 with 65,536 points and 260 zones of 2,048 vertices each, the median fell
 from **32.69 ms to 1.78 ms on M1 Ultra** and from **24.00 ms to
 1.23 ms on M4 Max**. Each trial starts with an existing polygon set and
-grid and a cold edge cache. [Cold-query chart](bench/results/2026-11-21-cold-edge/cold-edge-routing.png) ·
-[Before-and-after results](bench/results/2026-11-21-cold-edge/comparison.json)
+grid and a cold edge cache. [Cold-query chart][cold-query-chart] ·
+[Before-and-after results][benchmark-comparison]
 
 ## Warm-index point-in-polygon benchmarks
 
@@ -150,13 +150,13 @@ These component benchmarks reuse the MLX polygon index and report **minimum
 wall times** with `exact_boundary=False`. Each ratio compares a CPU baseline
 with MLX on the same machine; both panels use a **0–2,500× linear scale**.
 
-[![Warm-index point-in-polygon component timings on M1 Ultra and M4 Max, using the same ratio scale](bench/results/2026-11-21-cold-edge/pip-m1-m4-side-by-side.png)](bench/results/2026-11-21-cold-edge/pip-m1-m4-side-by-side.png)
+[![Warm-index point-in-polygon component timings on M1 Ultra and M4 Max, using the same ratio scale][warm-pip-chart]][warm-pip-chart]
 
 MLX and Shapely return pair arrays, GeoPandas returns a joined frame, and
 DuckDB returns a count. Each ratio uses its method's timed setup and output.
-[Component tables](bench/results/2026-11-21-cold-edge/COMPONENTS.md) ·
-[Editable SVG](bench/results/2026-11-21-cold-edge/pip-m1-m4-side-by-side.svg) ·
-[Historical measurements](bench/HISTORICAL.md)
+[Component tables][component-tables] ·
+[Editable SVG][warm-pip-svg] ·
+[Historical measurements][historical-measurements]
 
 ## API at a glance
 
@@ -228,3 +228,13 @@ describe the implementation.
 ## License
 
 [MIT](https://github.com/tabulai/mlx-geospatial/blob/main/LICENSE)
+
+[benchmark-guide]: https://github.com/tabulai/mlx-geospatial/blob/dbcdc68d4198b3c94f8ada11d9e7c591fb6ec34f/bench/README.md
+[benchmark-results]: https://github.com/tabulai/mlx-geospatial/tree/dbcdc68d4198b3c94f8ada11d9e7c591fb6ec34f/bench/results/2026-11-21-cold-edge
+[benchmark-comparison]: https://github.com/tabulai/mlx-geospatial/blob/dbcdc68d4198b3c94f8ada11d9e7c591fb6ec34f/bench/results/2026-11-21-cold-edge/comparison.json
+[component-tables]: https://github.com/tabulai/mlx-geospatial/blob/dbcdc68d4198b3c94f8ada11d9e7c591fb6ec34f/bench/results/2026-11-21-cold-edge/COMPONENTS.md
+[historical-measurements]: https://github.com/tabulai/mlx-geospatial/blob/dbcdc68d4198b3c94f8ada11d9e7c591fb6ec34f/bench/HISTORICAL.md
+[exact-join-chart]: https://raw.githubusercontent.com/tabulai/mlx-geospatial/dbcdc68d4198b3c94f8ada11d9e7c591fb6ec34f/bench/results/2026-11-21-cold-edge/full-e2e-overview.png
+[cold-query-chart]: https://raw.githubusercontent.com/tabulai/mlx-geospatial/dbcdc68d4198b3c94f8ada11d9e7c591fb6ec34f/bench/results/2026-11-21-cold-edge/cold-edge-routing.png
+[warm-pip-chart]: https://raw.githubusercontent.com/tabulai/mlx-geospatial/dbcdc68d4198b3c94f8ada11d9e7c591fb6ec34f/bench/results/2026-11-21-cold-edge/pip-m1-m4-side-by-side.png
+[warm-pip-svg]: https://raw.githubusercontent.com/tabulai/mlx-geospatial/dbcdc68d4198b3c94f8ada11d9e7c591fb6ec34f/bench/results/2026-11-21-cold-edge/pip-m1-m4-side-by-side.svg
