@@ -1,0 +1,59 @@
+{
+  "component_runner": "bench/e2e/run_benchmarks.py alongside a copy of bench/bench.py",
+  "date": "2026-11-21",
+  "hardware": {
+    "m1": {
+      "cpu_cores": 20,
+      "gpu_cores": 64,
+      "macos": "26.5.1",
+      "name": "Apple M1 Ultra"
+    },
+    "m4": {
+      "cpu_cores": 16,
+      "gpu_cores": 40,
+      "macos": "26.6.2",
+      "name": "Apple M4 Max"
+    }
+  },
+  "harness_sha256": {
+    "bench/bench.py": "ce373a805710323e9c6bc31dcbd1b39a7a86faa24b214ec76d83fd00ee49e2d6",
+    "bench/bench_public_api.py": "651141498466fa6bfee9e5f48c9d29196e0e1b5f006dcdca0d8c146e07530044",
+    "bench/e2e/bench.py": "5c2c9da30d83a13f65232ed592a9cced96dc19b28215d580596944a91c19f74a",
+    "bench/e2e/run_benchmarks.py": "cf1849904ea3fabd262ef7a2d3c4041475fe4f058c460c027bbf7f4f6b169669",
+    "bench/e2e/run_e2e.py": "6724340a7834ddfada7c5421084013b45fcb69ad423dd5678816e11615274b25"
+  },
+  "package_python_file_sha256": {
+    "__init__.py": "766c73f37de68e3bea1f7b43cfc10bc58f741bc851f9c5d573beb222d3e3727b",
+    "_boundary.py": "cf8f507f6fb7a1449dbc504aa739afd9c79550613576649eb6c388ed5638dd29",
+    "_dispatch.py": "6cdb7e9da028c0c93bdf3cba01d0d4b193af4a31775b6cf09c05cc8cd71dde13",
+    "_edge_grid.py": "eedecdeab17f5e4a932948fdf2ac777ebc25ff1abaeb15d18cfaa585e9efe9ee",
+    "_edge_index.py": "f165da7d82f1eec0f25ed9d88d076af6c0d25d3499b69cfb4998efee7411ba9c",
+    "_ingest.py": "6cb13da7faf84bcc580727735e0343eb38f754771592006807d09d70432dcffc",
+    "_pip.py": "9b3472b9c6a60aeb5d3e4b50767352fc3dffbb7df880e99c9afc8e28a9739701",
+    "_pip_indexed.py": "c538f9bb7d14da6c786ce80e53a49c84bde4bf1bb8826580df0cbe14fa0fcf4b",
+    "_precision.py": "083907d35b497d10d7d24a8f5a227cab19c2d1111350c40d54956740236eea5c",
+    "_validation.py": "310b4b7b097b33f95be4a79c11e67c5ffc54e7d84198dd162d8ceedf5d21f046",
+    "_version.py": "ae739b3e3b817044ada923b44ba82c752fe8b7c2133908d58fff8fd4b5146298",
+    "haversine.py": "8d3aac095e85bdf1b5e428ea51d53bd5a04d42c0fac7099942c25876e230def6",
+    "join.py": "8323221abe6ba3b4db3feacced36aac7b197dc1e89f5bc15aedef310d5e15aa8"
+  },
+  "package_python_manifest_sha256": "7b0b212c50a81193fedf22c44025e3958ee5ee322364e1f2d7a84e20cea38765",
+  "pre_tune_package_python_file_sha256": {
+    "__init__.py": "766c73f37de68e3bea1f7b43cfc10bc58f741bc851f9c5d573beb222d3e3727b",
+    "_boundary.py": "9986b0139a0ab428ed104a80f1ab67dc6c7718a354d393b2e53c6e1fe0a860b3",
+    "_dispatch.py": "6cdb7e9da028c0c93bdf3cba01d0d4b193af4a31775b6cf09c05cc8cd71dde13",
+    "_edge_grid.py": "eedecdeab17f5e4a932948fdf2ac777ebc25ff1abaeb15d18cfaa585e9efe9ee",
+    "_edge_index.py": "90e945eb1eec5f5bdd800732c82f46e5d260155ddd79825f72fb9c8823cdf603",
+    "_ingest.py": "6cb13da7faf84bcc580727735e0343eb38f754771592006807d09d70432dcffc",
+    "_pip.py": "0d2ecadcb7d166b5eb76499178f3cca0148d1d04713101a8450154d2c20f1374",
+    "_pip_indexed.py": "9ee6281972235316092c86e139f8320187b5a86bae0e682a21da81b316ca3170",
+    "_precision.py": "083907d35b497d10d7d24a8f5a227cab19c2d1111350c40d54956740236eea5c",
+    "_validation.py": "310b4b7b097b33f95be4a79c11e67c5ffc54e7d84198dd162d8ceedf5d21f046",
+    "_version.py": "ae739b3e3b817044ada923b44ba82c752fe8b7c2133908d58fff8fd4b5146298",
+    "haversine.py": "8d3aac095e85bdf1b5e428ea51d53bd5a04d42c0fac7099942c25876e230def6",
+    "join.py": "61f7e49944604c78781675b8af24edc4db3115e7e6d64b22cdf295fa08b603d2"
+  },
+  "pre_tune_source_patch": "before/source.patch",
+  "source_commit": "92a87cee33b48df78710506216320bde64027175",
+  "source_type": "Repository checkout selected by PYTHONPATH"
+}

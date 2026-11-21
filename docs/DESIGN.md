@@ -180,7 +180,11 @@ k-th best bounds the query's. Latitudes beyond ±90° or coordinates beyond
 without a host sync. These kernels also compute the distances and the final
 stable distance sort in-kernel, with the `_hav` arithmetic. Routing keeps the
 plain selectors for `k > 16` and for small shapes that cannot repay the
-unit-vector pass. An earlier routing study found that inputs defeating the
+unit-vector pass. `HaversineReference` precomputes and caches the reference
+radians, unit vectors, latitude cosines, and coordinate bounds on device so
+repeated searches skip reference conversion and can apply chord pruning even
+on small query batches (down to one query on large reference sets). An earlier
+routing study found that inputs defeating the
 filter, such as references packed into a cluster much smaller than its distance from the
 queries, ran about 15% slower than the plain selectors. The current city-cloud
 benchmark sweep does not remeasure that adverse distribution.
@@ -224,7 +228,11 @@ launch for the fused first-match kernel, which allocates nothing per pair;
 cell that individually exceeds it uses the bounded explicit-pair fallback
 (host-planned from the device-assigned cells). For `all_matches=True`, candidate-bearing points are
 compacted on the device (prefix sum + scatter) and conceptual candidate ranks
-are split by the same hard budget. Ordinary batches use point-centric count, prefix scan,
+are split by the same hard budget. When the entire query fits in one batch,
+the planner skips offset scanning and reuses the maximum candidate count from
+`_device_candidates`; multi-batch queries locate every batch endpoint together
+in one batched GPU binary-search launch instead of scanning the full offset
+array twice per batch. Ordinary batches use point-centric count, prefix scan,
 and ordered write passes; sparse or skewed batches use pair-parallel predicate
 flags, scan, and ordered writes. Both routes avoid host candidate-pair
 expansion and atomics while preserving point-then-polygon output order.
@@ -233,6 +241,8 @@ The index stores saturated per-cell maximum-ring and summed-edge-work
 summaries for dispatch. First-match uses SIMD32/TG128 only when every candidate
 in every used cell has a ring of at least 1,024 edges; mixed cells stay scalar
 so an unvisited long polygon cannot penalize an early short-polygon hit.
+First-match can use cooperative traversal through 65,536 points (TG128 up to
+`min(16_384, max_ring_edges)` and SIMD32 up to 65,536).
 All-match forces candidate-parallel compaction when a used cell contains a
 long ring or at least 8,192 candidate edges, avoiding a serial point thread
 and a duplicate predicate pass. Within that route, the bounded predicate-work
@@ -255,10 +265,26 @@ still sends uncertain points through the original float64/GEOS oracle.
 Construction is lazy and cached, including rejected builds. Expansion is
 checked before allocating repeated references: at most 16 references per
 original edge on average and 8 million total. Highly folded geometry with
-poor pruning retains the existing traversal. Cold queries below 32,768
-candidate pairs (65,536 points for first-match or boundary filtering) avoid
-the build; warm queries reuse it regardless of size. The index changes the visited edge subset, not containment,
-first-match selection, pair limits, or output ordering.
+poor pruning retains the existing traversal. Cold containment queries estimate
+edge work from the used grid cells and compare it with the edge count of the
+whole layer. The crossover is higher when first-match can use cooperative
+traversal. Large sparse batches can therefore defer construction, and smaller
+dense batches can build early. Repeated medium batches accumulate eligible
+candidate-edge work, and warm queries reuse the bands at any batch size.
+
+Exact-boundary filtering can justify the build sooner because it also avoids
+linear boundary traversal or a host edge search. It checks its own cutoff
+before containment so both stages can use bands built by the same query.
+Both routes preserve the containment and output-order contracts.
+
+Public `sjoin` assembles the output DataFrame/GeoDataFrame in bulk (taking
+each column once without a redundant post-`iloc` copy and constructing the
+frame with `copy=False` over freshly gathered arrays) while preserving
+extension dtypes, duplicate/multi-indexes, and CRS. `PreparedJoin` packages a
+right-hand layer's `PolygonSet`, `GridIndex`, CRS, row labels, and owned
+attribute snapshots for reuse across repeated `sjoin` calls. Public-API
+timings live in `bench/bench_public_api.py`, separate from the frozen adapter
+under `bench/e2e/`.
 
 ## Dispatch
 
@@ -276,7 +302,7 @@ first match, and about four times later for all matches. The constants live
 in `_dispatch.py` and `bench.py --op crossover` re-fits them. The asymmetry
 is bounded on both sides. Fixed GPU cost depends on the GPU's clock state;
 a query after host-only work can cost more than one in a warm burst. The
-[current component report](../bench/results/2026-10-19-opus-speedups/COMPONENTS.md)
+[current component report](../bench/results/2026-11-21-cold-edge/COMPONENTS.md)
 records fresh warm/idle probes and CPU/GPU crossover tables. The shipped
 `GPU_LAUNCH_US` (350) and `GPU_ALL_MATCHES_LAUNCH_US` (1500) constants are
 unchanged by that measurement run. The original calibration and its timing
@@ -323,7 +349,7 @@ not predict speed. Band overlap, candidate counts and result size also
 matter. These are point-in-polygon joins, not polygon overlays or arbitrary
 spatial predicates.
 
-The separate [current component benchmarks](../bench/results/2026-10-19-opus-speedups/COMPONENTS.md)
+The separate [current component benchmarks](../bench/results/2026-11-21-cold-edge/COMPONENTS.md)
 measure warm/cold array queries, distance matrices, kNN and CPU/GPU
 crossover. Their prepared-polygon orientation, output contracts and timing
 statistics differ. Do not combine those ratios with the current complete

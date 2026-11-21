@@ -20,6 +20,9 @@ NumPy and Shapely are installed automatically. For GeoPandas support:
 pip install "mlx-geospatial[geo]"
 ```
 
+Install this checkout with `pip install ".[geo]"` for the prepared APIs and
+the implementation measured below.
+
 ## Quickstart
 
 Find which polygon contains each point:
@@ -98,63 +101,48 @@ distances, indices = ms.haversine_knn(points, landmarks, k=1)  # shape (3, 1) ea
 
 Keep the original coordinates for these functions: `LocalPoints` are shifted
 coordinates and cannot be used for distances.
+For repeated searches against fixed landmarks, build
+`ms.HaversineReference(landmarks)` once and pass it to `haversine_knn`.
 
 ## End-to-end spatial join performance
 
-Commit `8805228` was measured on **M1 Ultra** and **M4 Max** on
-2026-10-19. It was faster than native GeoPandas in all six tested workloads
-on each machine: **3.78–18.66×** on M1 Ultra and **2.55–16.51×** on M4 Max.
-The median of the six per-workload speedup ratios was **8.00×** and **6.35×**,
-respectively. These are synthetic point-in-polygon results, not a guarantee
-for every dataset or spatial operation.
+In the November 21, 2026 runs, MLX was **3.63–18.88× faster on M1 Ultra**
+and **3.26–16.41× faster on M4 Max** than native GeoPandas across six
+synthetic point-in-polygon workloads. The median of the six ratios was
+**8.23×** and **7.10×**, respectively.
 
-Each time below is the **median of three trials** after one full warmup.
-Both methods start with ready GeoDataFrames and build **fresh indexes** on
-every call. Timers include exact boundary handling, every matching pair,
-complete joined GeoDataFrames with attributes, and the same final sorting.
+The times are medians of three paired trials after a full warmup. Both
+methods start with ready GeoDataFrames. The timers include fresh indexes,
+exact boundaries, all matches, complete joined GeoDataFrames, and sorting.
+The MLX measurement uses the frozen `GridIndex.query` and assembly adapter.
 
 | Points × polygons | Vertices | M1 Ultra MLX | M1 Ultra GeoPandas | Speedup | M4 Max MLX | M4 Max GeoPandas | Speedup |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| 100k × 260 | 48 | 22.9 ms | 86.6 ms | **3.78×** | 18.6 ms | 47.5 ms | **2.55×** |
-| 1M × 260 | 48 | 157 ms | 1.67 s | **10.66×** | 118 ms | 805 ms | **6.81×** |
-| 10M × 260 | 48 | 2.34 s | 22.23 s | **9.52×** | 1.38 s | 11.02 s | **7.96×** |
-| 1M × 10k | 48 | 263 ms | 1.60 s | **6.08×** | 191 ms | 923 ms | **4.84×** |
-| 1M × 260 | 2,048 | 246 ms | 1.60 s | **6.49×** | 172 ms | 1.02 s | **5.90×** |
-| 1M × 1 | 150,000 | 146 ms | 2.73 s | **18.66×** | 98.1 ms | 1.62 s | **16.51×** |
+| 100k × 260 | 48 | 24.7 ms | 89.6 ms | **3.63×** | 18.3 ms | 59.5 ms | **3.26×** |
+| 1M × 260 | 48 | 149 ms | 1.63 s | **10.94×** | 119 ms | 873 ms | **7.33×** |
+| 10M × 260 | 48 | 2.22 s | 21.54 s | **9.72×** | 1.64 s | 12.18 s | **7.43×** |
+| 1M × 10k | 48 | 246 ms | 1.56 s | **6.35×** | 199 ms | 1.03 s | **5.16×** |
+| 1M × 260 | 2,048 | 233 ms | 1.57 s | **6.74×** | 171 ms | 1.17 s | **6.87×** |
+| 1M × 1 | 150,000 | 144 ms | 2.72 s | **18.88×** | 103 ms | 1.70 s | **16.41×** |
 
-![End-to-end spatial join speedups on M1 Ultra and M4 Max](bench/results/2026-10-19-opus-speedups/full-e2e-overview.png)
+![Complete spatial join timings on M1 Ultra and M4 Max](bench/results/2026-11-21-cold-edge/full-e2e-overview.png)
 
-The latest changes add threaded Point coordinate extraction, a float64 host
-edge grid for exact-boundary checks, and polygon-major GEOS refinement for
-detailed single-ring polygons. MLX uses up to eight host extraction workers
-in addition to the GPU; GeoPandas uses its native join without parallel
-partitioning. Observed MLX join times improved **1.16–1.95× on M1 Ultra**
-and **1.20–1.97× on M4 Max** versus the preceding measured build.
-These comparisons use the same inputs and runtime in separate sessions;
-background activity can also affect the differences.
+All **48 full-output checks** passed, including row order, attributes,
+indexes, dtypes, geometry, and CRS. Both Macs passed **825 tests** with the
+CI Metal validation settings and skipped one pandas-version-specific test.
+The published data identifies the exact source revision and includes
+individual trial samples and reproduction commands. [Benchmark guide](bench/README.md) ·
+[Source and measurements](bench/results/2026-11-21-cold-edge/)
 
-**All 48 paired full-output checks passed**, including row order, attributes,
-indexes, dtypes, geometry and CRS. A fresh full suite passed **721 tests on each
-machine** with Metal validation enabled. Both hosts used Python 3.14.2,
-MLX 0.32.4 and GeoPandas 1.2.0; the benchmark guide records the remaining
-dependencies, hardware and differing macOS versions.
+### Cold edge-index routing
 
-The comparison uses native `geopandas.sjoin(..., how="inner",
-predicate="within")` against the unchanged MLX all-pairs query and
-GeoDataFrame assembly adapter. It does **not** time the public `ms.sjoin`
-wrapper. Input frame construction/copies, process startup, cold kernel
-compilation, I/O and validation are excluded. The 2,048-vertex zones
-resample 48-vertex boundaries; extra vertices do not imply equivalent new
-shape complexity. The 150k-vertex case uses an undulating polygon.
-
-These results describe the source snapshot in the [build manifest](bench/results/2026-10-19-opus-speedups/build-manifest.json).
-Version **0.1.1** includes the measured optimizations. See the
-[benchmark guide](bench/README.md) for full methodology and reproduction,
-[raw measurements](bench/results/2026-10-19-opus-speedups/comparison.json) for
-individual trial samples, and the [fresh component tables](bench/results/2026-10-19-opus-speedups/COMPONENTS.md)
-for warm-array, distance, kNN and crossover measurements, including the new
-chord-distance kNN filter. These use different timing and output contracts.
-[Historical measurements](bench/HISTORICAL.md) remain archived separately.
+The cutoff now weighs the candidate-edge work of the query against the
+cost of indexing the whole layer. In the public first-match benchmark
+with 65,536 points and 260 zones of 2,048 vertices each, the median fell
+from **32.69 ms to 1.78 ms on M1 Ultra** and from **24.00 ms to
+1.23 ms on M4 Max**. Each trial starts with an existing polygon set and
+grid and a cold edge cache. [Cold-query chart](bench/results/2026-11-21-cold-edge/cold-edge-routing.png) ·
+[Before-and-after results](bench/results/2026-11-21-cold-edge/comparison.json)
 
 ## Warm-index point-in-polygon benchmarks
 
@@ -162,12 +150,13 @@ These component benchmarks reuse the MLX polygon index and report **minimum
 wall times** with `exact_boundary=False`. Each ratio compares a CPU baseline
 with MLX on the same machine; both panels use a **0–2,500× linear scale**.
 
-[![Warm-index point-in-polygon component comparisons on M1 Ultra and M4 Max, using the same ratio scale](bench/results/2026-10-19-opus-speedups/pip-m1-m4-side-by-side.png)](bench/results/2026-10-19-opus-speedups/pip-m1-m4-side-by-side.png)
+[![Warm-index point-in-polygon component timings on M1 Ultra and M4 Max, using the same ratio scale](bench/results/2026-11-21-cold-edge/pip-m1-m4-side-by-side.png)](bench/results/2026-11-21-cold-edge/pip-m1-m4-side-by-side.png)
 
-MLX returns pair arrays, GeoPandas returns a joined frame, and DuckDB returns
-a count. Timed setup differs across methods, so these ratios are not equivalent
-end-to-end join speedups. See the [component tables and timing contracts](bench/results/2026-10-19-opus-speedups/COMPONENTS.md)
-for details, or download the [editable SVG](bench/results/2026-10-19-opus-speedups/pip-m1-m4-side-by-side.svg).
+MLX and Shapely return pair arrays, GeoPandas returns a joined frame, and
+DuckDB returns a count. Each ratio uses its method's timed setup and output.
+[Component tables](bench/results/2026-11-21-cold-edge/COMPONENTS.md) ·
+[Editable SVG](bench/results/2026-11-21-cold-edge/pip-m1-m4-side-by-side.svg) ·
+[Historical measurements](bench/HISTORICAL.md)
 
 ## API at a glance
 
@@ -176,9 +165,11 @@ for details, or download the [editable SVG](bench/results/2026-10-19-opus-speedu
 | `point_in_polygon(points, polygons)` | One polygon index per point; `all_matches=True` returns every pair |
 | `contains_matrix(points, polygons)` | Dense boolean matrix of shape `(points, polygons)` |
 | `sjoin(points_df, polygons_df)` | Joined DataFrame; `all_matches=True` returns every matching polygon |
+| `PreparedJoin(polygons_df)` | Reusable right-hand polygon table for repeated `sjoin` calls |
 | `haversine(a, b)` | Elementwise or broadcast great-circle distances |
 | `haversine_cross(a, b)` | All-pairs distance matrix |
 | `haversine_knn(queries, references, k)` | Nearest distances and reference indices |
+| `HaversineReference(references)` | Reusable GPU reference set for repeated `haversine_knn` searches |
 | `PolygonSet(geometries)` | Polygons prepared for reuse; `to_local(points)` prepares query points |
 | `GridIndex(polygons)` | Reusable spatial index; call `query(points)` |
 
@@ -197,6 +188,8 @@ joined = ms.sjoin(
 An inner join returns matching pairs; a left join also keeps each unmatched
 point once. The left index and right index labels are retained, including
 duplicate labels, and right attributes come from each matched polygon row.
+Pass `ms.PreparedJoin(polygons_df)` as the right argument to reuse that
+polygon layer across batches.
 
 ## Accuracy and limits
 

@@ -1,0 +1,133 @@
+Instrumented run: M4 Max tuned cold edge index; structured output: components/benchmark-results.json
+machine: Apple M4 Max, 16 cores (12 performance + 4 efficiency), macOS 26.6.2, mlx 0.32.4, Python 3.14.2
+
+### haversine_cross 20k x 20k
+  mlx-geospatial haversine_cross      9.6 ms
+  numpy float64                       2.72 s  (282.6x vs ours)
+  sklearn haversine_distances         3.95 s  (409.9x vs ours)
+
+### haversine_knn 1k queries, 1M refs, k=10
+  mlx-geospatial haversine_knn (k=10, brute force)                8.8 ms
+  sklearn BallTree(haversine), build + query, 1 core            310.7 ms  (35.4x vs brute force)
+  sklearn BallTree(haversine), query only (prebuilt), 1 core      8.5 ms  (1.0x vs brute force)
+
+### haversine_knn 1M queries, 10k refs, k=10
+  mlx-geospatial haversine_knn (k=10, brute force)               45.2 ms
+  sklearn BallTree(haversine), build + query, 1 core              4.50 s  (99.5x vs brute force)
+  sklearn BallTree(haversine), query only (prebuilt), 1 core      4.50 s  (99.5x vs brute force)
+
+### haversine_knn 200k queries, 200k refs, k=10
+  mlx-geospatial haversine_knn (k=10, brute force)               72.6 ms
+  sklearn BallTree(haversine), build + query, 1 core              1.21 s  (16.7x vs brute force)
+  sklearn BallTree(haversine), query only (prebuilt), 1 core      1.16 s  (16.0x vs brute force)
+
+### haversine_knn 1M queries, 200k refs, k=10
+  mlx-geospatial haversine_knn (k=10, brute force)              321.8 ms
+  sklearn BallTree(haversine), build + query, 1 core              5.93 s  (18.4x vs brute force)
+  sklearn BallTree(haversine), query only (prebuilt), 1 core      5.80 s  (18.0x vs brute force)
+
+### dense PIP 100,000 points x 32 polygons x 48 vertices
+  mlx-geospatial dense PIP (direct 2-D Metal)      789 us
+  composed MLX dense PIP oracle                   11.4 ms  (14.4x vs ours)
+
+### join 100,000 points x 260 zones (48 vertices)
+  mlx-geospatial point_in_polygon, first match (cold: ingest + index)                            1.5 ms
+  mlx-geospatial point_in_polygon, first match (warm index)                                      421 us
+  mlx-geospatial point_in_polygon, all pairs (warm index)                                        1.5 ms
+  mlx-geospatial point_in_polygon, first match (warm index, device-resident points)              299 us
+    [coverage: 67% of points lie in a polygon, 1.64 polygons per such point, 109,267 pairs]
+  shapely STRtree bulk query (prepared polygons), all pairs, 1 core                             47.6 ms  (31.4x vs all pairs (warm index))
+  geopandas sjoin (polygons left, prepared), all pairs, 1 core                                  58.4 ms  (38.5x vs all pairs (warm index))
+  duckdb spatial join, count(*) over all pairs, 16 threads                                     131.2 ms  (86.5x vs all pairs (warm index))
+
+### join 1,000,000 points x 260 zones (48 vertices)
+  mlx-geospatial point_in_polygon, first match (cold: ingest + index)                              8.3 ms
+  mlx-geospatial point_in_polygon, first match (warm index)                                        2.7 ms
+  mlx-geospatial point_in_polygon, all pairs (warm index)                                          7.1 ms
+  mlx-geospatial point_in_polygon, first match (warm index, device-resident points)                1.4 ms
+    [coverage: 66% of points lie in a polygon, 1.64 polygons per such point, 1,076,307 pairs]
+  shapely STRtree bulk query (prepared polygons), all pairs, 1 core                              766.5 ms  (108.7x vs all pairs (warm index))
+  geopandas sjoin (polygons left, prepared), all pairs, 1 core                                   771.1 ms  (109.3x vs all pairs (warm index))
+  duckdb spatial join, count(*) over all pairs, 16 threads                                       539.6 ms  (76.5x vs all pairs (warm index))
+
+### join 10,000,000 points x 260 zones (48 vertices)
+  mlx-geospatial point_in_polygon, first match (cold: ingest + index)                              24.9 ms
+  mlx-geospatial point_in_polygon, first match (warm index)                                        24.3 ms
+  mlx-geospatial point_in_polygon, all pairs (warm index)                                          67.7 ms
+  mlx-geospatial point_in_polygon, first match (warm index, device-resident points)                12.8 ms
+    [coverage: 65% of points lie in a polygon, 1.64 polygons per such point, 10,689,126 pairs]
+  shapely STRtree bulk query (prepared polygons), all pairs, 1 core                                 8.55 s  (126.3x vs all pairs (warm index))
+  geopandas sjoin (polygons left, prepared), all pairs, 1 core                                      8.83 s  (130.4x vs all pairs (warm index))
+  duckdb spatial join, count(*) over all pairs, 16 threads                                          5.89 s  (87.0x vs all pairs (warm index))
+
+### join 1,000,000 points x 10,000 zones (48 vertices)
+  mlx-geospatial point_in_polygon, first match (cold: ingest + index)                             26.3 ms
+  mlx-geospatial point_in_polygon, first match (warm index)                                        2.8 ms
+  mlx-geospatial point_in_polygon, all pairs (warm index)                                          7.7 ms
+  mlx-geospatial point_in_polygon, first match (warm index, device-resident points)                1.5 ms
+    [coverage: 67% of points lie in a polygon, 1.67 polygons per such point, 1,121,561 pairs]
+  shapely STRtree bulk query (prepared polygons), all pairs, 1 core                              914.4 ms  (118.9x vs all pairs (warm index))
+  geopandas sjoin (polygons left, prepared), all pairs, 1 core                                   947.0 ms  (123.2x vs all pairs (warm index))
+  duckdb spatial join, count(*) over all pairs, 16 threads                                       526.7 ms  (68.5x vs all pairs (warm index))
+
+### join 1,000,000 points x 260 zones (2,048 vertices)
+  mlx-geospatial point_in_polygon, first match (cold: ingest + index)                             43.5 ms
+  mlx-geospatial point_in_polygon, first match (warm index)                                        4.2 ms
+  mlx-geospatial point_in_polygon, all pairs (warm index)                                          7.4 ms
+  mlx-geospatial point_in_polygon, first match (warm index, device-resident points)                3.0 ms
+    [coverage: 67% of points lie in a polygon, 1.60 polygons per such point, 1,076,106 pairs]
+  shapely STRtree bulk query (prepared polygons), all pairs, 1 core                                1.08 s  (145.7x vs all pairs (warm index))
+  geopandas sjoin (polygons left, prepared), all pairs, 1 core                                     1.11 s  (149.5x vs all pairs (warm index))
+  duckdb spatial join, count(*) over all pairs, 16 threads                                         2.27 s  (305.4x vs all pairs (warm index))
+
+### join 1,000,000 points x one 150,000-vertex coastline polygon
+  mlx-geospatial point_in_polygon, first match (cold: ingest + index)                           38.5 ms
+  mlx-geospatial point_in_polygon, first match (warm index)                                     14.0 ms
+  mlx-geospatial point_in_polygon, all pairs (warm index)                                       11.2 ms
+  mlx-geospatial point_in_polygon, first match (warm index, device-resident points)             13.1 ms
+    [coverage: 22% of points lie in a polygon, 1.00 polygons per such point, 217,314 pairs]
+  shapely STRtree bulk query (prepared polygons), all pairs, 1 core                              1.78 s  (159.0x vs all pairs (warm index))
+  geopandas sjoin (polygons left, prepared), all pairs, 1 core                                   1.81 s  (161.3x vs all pairs (warm index))
+  duckdb spatial join, count(*) over all pairs, 16 threads                                      25.62 s  (2284.5x vs all pairs (warm index))
+
+### crossover: 260 48-vertex zones (~150 candidate edges per point)
+    points  first match: cpu       gpu      auto  pick  | all matches: cpu       gpu      auto  pick
+       100            508 us    411 us    238 us  cpu!  |           235 us    1.1 ms    241 us  cpu
+       200            423 us    388 us    411 us  cpu!  |           398 us    1.1 ms    321 us  cpu
+       500            719 us    269 us    270 us  gpu   |           706 us    783 us    699 us  cpu
+     1,000            1.4 ms    226 us    230 us  gpu   |           1.4 ms    807 us    1.4 ms  cpu!
+     2,000            2.8 ms    200 us    197 us  gpu   |           2.7 ms    905 us    905 us  gpu
+     5,000            6.9 ms    221 us    217 us  gpu   |           6.8 ms    1.1 ms    1.0 ms  gpu
+    10,000           13.7 ms    217 us    221 us  gpu   |          13.7 ms    1.0 ms    1.0 ms  gpu
+    50,000           68.8 ms    293 us    292 us  gpu   |          68.2 ms    1.3 ms    1.2 ms  gpu
+
+### crossover: 256 square tiling (~9 candidate edges per point)
+    points  first match: cpu       gpu      auto  pick  | all matches: cpu       gpu      auto  pick
+       100             62 us    151 us     65 us  cpu   |            57 us    728 us     62 us  cpu
+       200             76 us    160 us     78 us  cpu   |            70 us    691 us     83 us  cpu
+       500            112 us    151 us    117 us  cpu   |           108 us    720 us    106 us  cpu
+     1,000            173 us    159 us    175 us  cpu!  |           162 us    765 us    164 us  cpu
+     2,000            297 us    146 us    299 us  cpu!  |           274 us    704 us    277 us  cpu
+     5,000            640 us    155 us    156 us  gpu   |           650 us    739 us    638 us  cpu
+    10,000            1.3 ms    156 us    157 us  gpu   |           1.2 ms    851 us    859 us  gpu
+    50,000            6.6 ms    196 us    210 us  gpu   |           6.2 ms    874 us    882 us  gpu
+
+### crossover: 260 2048-vertex zones (~6475 candidate edges per point)
+    points  first match: cpu       gpu      auto  pick  | all matches: cpu       gpu      auto  pick
+       100            5.5 ms    341 us    311 us  gpu   |           5.5 ms    826 us    817 us  gpu
+       200           11.4 ms    348 us    391 us  gpu   |          11.4 ms    1.0 ms    866 us  gpu
+       500           27.8 ms    394 us    372 us  gpu   |          27.6 ms    997 us    983 us  gpu
+     1,000           54.6 ms    352 us    347 us  gpu   |          54.8 ms    1.1 ms    1.1 ms  gpu
+     2,000          110.6 ms    376 us    406 us  gpu   |         112.1 ms    1.1 ms    1.1 ms  gpu
+     5,000          282.0 ms    513 us    467 us  gpu   |         286.1 ms    1.3 ms    1.4 ms  gpu
+    10,000          573.6 ms    537 us    526 us  gpu   |         570.2 ms    1.8 ms    1.9 ms  gpu
+    50,000            2.84 s    594 us    541 us  gpu   |           2.83 s    1.3 ms    1.3 ms  gpu
+  ('!' marks a row where auto picked the slower side by more than 5%)
+
+  dispatch constants          current -> measured here
+  CPU_US_PER_POINT            0.090 -> 0.054
+  CPU_US_PER_EDGE             0.00860 -> 0.00878
+  GPU_LAUNCH_US               350 -> 247 warm (229 warm / 1958 after the GPU idled 200 ms, 500 points)
+  GPU_ALL_MATCHES_LAUNCH_US   1500 -> 826 warm (1531 warm / 2908 idle)
+  (GPU columns are steady-state, clocks warmed before each timing. GPU_LAUNCH_US sits between the warm and the idle cost measured here; GPU_ALL_MATCHES_LAUNCH_US sits below the warm cost measured here (1531 us). The host fallback's ~53 us fixed cost per call is not a model term.)
+  gpu_min_points()            first match 254 / 2139 / 7 points; all matches 1085 / 9166 / 27 (48-vertex zones, square tiling, 2048-vertex zones)

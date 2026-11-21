@@ -1,0 +1,2159 @@
+{
+  "cases": [
+    {
+      "id": 0,
+      "input_fingerprints": [
+        {
+          "arguments": {
+            "n": 100000
+          },
+          "dtype": "float64",
+          "generator": "make_points",
+          "kind": "numpy_contiguous_bytes",
+          "sequence": 12,
+          "sha256": "9e2d810b181a96206d8e2a44b84f4223b0d77cbed3f0c51a6833f17bbc928449",
+          "shape": [
+            100000,
+            2
+          ]
+        },
+        {
+          "arguments": {
+            "m": 260,
+            "vertices": 48
+          },
+          "dtype": "object",
+          "generator": "make_zones",
+          "kind": "geometry_wkb_little_endian",
+          "sequence": 13,
+          "sha256": "e2aa6e0ebee29602aff437e4d6e803aa966f213331252efd5ad1ecd0db4d7526",
+          "shape": [
+            260
+          ]
+        }
+      ],
+      "input_points": 100000,
+      "label": "100k \u00d7 260",
+      "load_end": {
+        "load_average_1_5_15_minutes": [
+          2.876953125,
+          4.025390625,
+          4.02880859375
+        ],
+        "swap_usage": "total = 17408.00M  used = 16346.50M  free = 1061.50M  (encrypted)",
+        "utc": "2026-11-21T15:22:24.921670+00:00",
+        "vm_stat": "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                                  2371085.\nPages active:                                2622038.\nPages inactive:                              2410134.\nPages speculative:                            316347.\nPages throttled:                                   0.\nPages wired down:                             471799.\nPages purgeable:                              159609.\n\"Translation faults\":                    24632876462.\nPages copy-on-write:                       754398551.\nPages zero filled:                       16552841260.\nPages reactivated:                        2559177704.\nPages purged:                              467160575.\nFile-backed pages:                           2367353.\nAnonymous pages:                             2981166.\nPages stored in compressor:                  2768553.\nPages occupied by compressor:                  78445.\nDecompressions:                           3050212919.\nCompressions:                             3511729513.\nPageins:                                   255415910.\nPageouts:                                    1711559.\nSwapins:                                   193844495.\nSwapouts:                                  224752155."
+      },
+      "load_start": {
+        "load_average_1_5_15_minutes": [
+          2.876953125,
+          4.025390625,
+          4.02880859375
+        ],
+        "swap_usage": "total = 17408.00M  used = 16346.50M  free = 1061.50M  (encrypted)",
+        "utc": "2026-11-21T15:22:23.713919+00:00",
+        "vm_stat": "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                                  2446004.\nPages active:                                2611168.\nPages inactive:                              2410140.\nPages speculative:                            316345.\nPages throttled:                                   0.\nPages wired down:                             407734.\nPages purgeable:                              157051.\n\"Translation faults\":                    24632860081.\nPages copy-on-write:                       754398109.\nPages zero filled:                       16552758670.\nPages reactivated:                        2559177704.\nPages purged:                              467160575.\nFile-backed pages:                           2367353.\nAnonymous pages:                             2970300.\nPages stored in compressor:                  2768553.\nPages occupied by compressor:                  78445.\nDecompressions:                           3050212919.\nCompressions:                             3511729513.\nPageins:                                   255415908.\nPageouts:                                    1711559.\nSwapins:                                   193844495.\nSwapouts:                                  224752155."
+      },
+      "m": 260,
+      "matched_unique_points": 66815,
+      "multi_hit_points": 29133,
+      "n": 100000,
+      "output_pair_sha256": "b864720cf2f5c521648aa5ae977922c65521542f11d392841df5d14b0f01ab36",
+      "output_rows": 109267,
+      "pairs": [
+        {
+          "order": [
+            "mlx",
+            "geopandas"
+          ],
+          "phase": "warmup",
+          "seconds": {
+            "geopandas": 0.09185204468667507,
+            "mlx": 0.06280225142836571
+          },
+          "trial": 0,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 100000,
+            "matched_unique_points": 66815,
+            "multi_hit_points": 29133,
+            "pair_sha256": "b864720cf2f5c521648aa5ae977922c65521542f11d392841df5d14b0f01ab36",
+            "rows": 109267,
+            "status": "passed",
+            "unmatched_points": 33185
+          }
+        },
+        {
+          "order": [
+            "geopandas",
+            "mlx"
+          ],
+          "phase": "measured",
+          "seconds": {
+            "geopandas": 0.0895603746175766,
+            "mlx": 0.026584872975945473
+          },
+          "trial": 1,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 100000,
+            "matched_unique_points": 66815,
+            "multi_hit_points": 29133,
+            "pair_sha256": "b864720cf2f5c521648aa5ae977922c65521542f11d392841df5d14b0f01ab36",
+            "rows": 109267,
+            "status": "passed",
+            "unmatched_points": 33185
+          }
+        },
+        {
+          "order": [
+            "mlx",
+            "geopandas"
+          ],
+          "phase": "measured",
+          "seconds": {
+            "geopandas": 0.08778412640094757,
+            "mlx": 0.024666456505656242
+          },
+          "trial": 2,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 100000,
+            "matched_unique_points": 66815,
+            "multi_hit_points": 29133,
+            "pair_sha256": "b864720cf2f5c521648aa5ae977922c65521542f11d392841df5d14b0f01ab36",
+            "rows": 109267,
+            "status": "passed",
+            "unmatched_points": 33185
+          }
+        },
+        {
+          "order": [
+            "geopandas",
+            "mlx"
+          ],
+          "phase": "measured",
+          "seconds": {
+            "geopandas": 0.09087466448545456,
+            "mlx": 0.02212962508201599
+          },
+          "trial": 3,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 100000,
+            "matched_unique_points": 66815,
+            "multi_hit_points": 29133,
+            "pair_sha256": "b864720cf2f5c521648aa5ae977922c65521542f11d392841df5d14b0f01ab36",
+            "rows": 109267,
+            "status": "passed",
+            "unmatched_points": 33185
+          }
+        }
+      ],
+      "speedup_geopandas_over_mlx": 3.630856933059663,
+      "status": "completed",
+      "timings": {
+        "geopandas": {
+          "maximum_seconds": 0.09087466448545456,
+          "median_seconds": 0.0895603746175766,
+          "minimum_seconds": 0.08778412640094757,
+          "range_seconds": 0.0030905380845069885,
+          "samples_seconds": [
+            0.0895603746175766,
+            0.08778412640094757,
+            0.09087466448545456
+          ]
+        },
+        "mlx": {
+          "maximum_seconds": 0.026584872975945473,
+          "median_seconds": 0.024666456505656242,
+          "minimum_seconds": 0.02212962508201599,
+          "range_seconds": 0.0044552478939294815,
+          "samples_seconds": [
+            0.026584872975945473,
+            0.024666456505656242,
+            0.02212962508201599
+          ]
+        }
+      },
+      "unmatched_points": 33185,
+      "vertices": 48
+    },
+    {
+      "id": 1,
+      "input_fingerprints": [
+        {
+          "arguments": {
+            "n": 1000000
+          },
+          "dtype": "float64",
+          "generator": "make_points",
+          "kind": "numpy_contiguous_bytes",
+          "sequence": 14,
+          "sha256": "87ad8ba8032d78ad124e977bb0cf6df1a5408de510f80efa49e04f1ed334063b",
+          "shape": [
+            1000000,
+            2
+          ]
+        },
+        {
+          "arguments": {
+            "m": 260,
+            "vertices": 48
+          },
+          "dtype": "object",
+          "generator": "make_zones",
+          "kind": "geometry_wkb_little_endian",
+          "sequence": 15,
+          "sha256": "ce04243b0b4a85039b8f0e54b2fd71be6d7d5bcbf8b9d5c953dfca3bcf025a6f",
+          "shape": [
+            260
+          ]
+        }
+      ],
+      "input_points": 1000000,
+      "label": "1M \u00d7 260",
+      "load_end": {
+        "load_average_1_5_15_minutes": [
+          2.7353515625,
+          3.9580078125,
+          4.00439453125
+        ],
+        "swap_usage": "total = 17408.00M  used = 16346.50M  free = 1061.50M  (encrypted)",
+        "utc": "2026-11-21T15:22:35.383443+00:00",
+        "vm_stat": "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                                  2352936.\nPages active:                                2713196.\nPages inactive:                              2420179.\nPages speculative:                            316459.\nPages throttled:                                   0.\nPages wired down:                             388680.\nPages purgeable:                              164465.\n\"Translation faults\":                    24633040906.\nPages copy-on-write:                       754409328.\nPages zero filled:                       16552979655.\nPages reactivated:                        2559177743.\nPages purged:                              467161089.\nFile-backed pages:                           2367472.\nAnonymous pages:                             3082362.\nPages stored in compressor:                  2768553.\nPages occupied by compressor:                  78445.\nDecompressions:                           3050212919.\nCompressions:                             3511729513.\nPageins:                                   255415925.\nPageouts:                                    1711559.\nSwapins:                                   193844495.\nSwapouts:                                  224752155."
+      },
+      "load_start": {
+        "load_average_1_5_15_minutes": [
+          2.876953125,
+          4.025390625,
+          4.02880859375
+        ],
+        "swap_usage": "total = 17408.00M  used = 16346.50M  free = 1061.50M  (encrypted)",
+        "utc": "2026-11-21T15:22:24.959430+00:00",
+        "vm_stat": "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                                  2371113.\nPages active:                                2622043.\nPages inactive:                              2410134.\nPages speculative:                            316347.\nPages throttled:                                   0.\nPages wired down:                             471799.\nPages purgeable:                              161369.\n\"Translation faults\":                    24632880136.\nPages copy-on-write:                       754398906.\nPages zero filled:                       16552841374.\nPages reactivated:                        2559177704.\nPages purged:                              467160575.\nFile-backed pages:                           2367353.\nAnonymous pages:                             2981171.\nPages stored in compressor:                  2768553.\nPages occupied by compressor:                  78445.\nDecompressions:                           3050212919.\nCompressions:                             3511729513.\nPageins:                                   255415912.\nPageouts:                                    1711559.\nSwapins:                                   193844495.\nSwapouts:                                  224752155."
+      },
+      "m": 260,
+      "matched_unique_points": 655462,
+      "multi_hit_points": 290486,
+      "n": 1000000,
+      "output_pair_sha256": "3bba2f6708907bc7f10baadae794c337e53dbbeab4f8a6fe9833d0a1133334ce",
+      "output_rows": 1076307,
+      "pairs": [
+        {
+          "order": [
+            "geopandas",
+            "mlx"
+          ],
+          "phase": "warmup",
+          "seconds": {
+            "geopandas": 1.5864462088793516,
+            "mlx": 0.17390058375895023
+          },
+          "trial": 0,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 1000000,
+            "matched_unique_points": 655462,
+            "multi_hit_points": 290486,
+            "pair_sha256": "3bba2f6708907bc7f10baadae794c337e53dbbeab4f8a6fe9833d0a1133334ce",
+            "rows": 1076307,
+            "status": "passed",
+            "unmatched_points": 344538
+          }
+        },
+        {
+          "order": [
+            "mlx",
+            "geopandas"
+          ],
+          "phase": "measured",
+          "seconds": {
+            "geopandas": 1.510172376409173,
+            "mlx": 0.14884908311069012
+          },
+          "trial": 1,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 1000000,
+            "matched_unique_points": 655462,
+            "multi_hit_points": 290486,
+            "pair_sha256": "3bba2f6708907bc7f10baadae794c337e53dbbeab4f8a6fe9833d0a1133334ce",
+            "rows": 1076307,
+            "status": "passed",
+            "unmatched_points": 344538
+          }
+        },
+        {
+          "order": [
+            "geopandas",
+            "mlx"
+          ],
+          "phase": "measured",
+          "seconds": {
+            "geopandas": 1.6743864994496107,
+            "mlx": 0.15893575176596642
+          },
+          "trial": 2,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 1000000,
+            "matched_unique_points": 655462,
+            "multi_hit_points": 290486,
+            "pair_sha256": "3bba2f6708907bc7f10baadae794c337e53dbbeab4f8a6fe9833d0a1133334ce",
+            "rows": 1076307,
+            "status": "passed",
+            "unmatched_points": 344538
+          }
+        },
+        {
+          "order": [
+            "mlx",
+            "geopandas"
+          ],
+          "phase": "measured",
+          "seconds": {
+            "geopandas": 1.6278974991291761,
+            "mlx": 0.14505700021982193
+          },
+          "trial": 3,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 1000000,
+            "matched_unique_points": 655462,
+            "multi_hit_points": 290486,
+            "pair_sha256": "3bba2f6708907bc7f10baadae794c337e53dbbeab4f8a6fe9833d0a1133334ce",
+            "rows": 1076307,
+            "status": "passed",
+            "unmatched_points": 344538
+          }
+        }
+      ],
+      "speedup_geopandas_over_mlx": 10.936563834381207,
+      "status": "completed",
+      "timings": {
+        "geopandas": {
+          "maximum_seconds": 1.6743864994496107,
+          "median_seconds": 1.6278974991291761,
+          "minimum_seconds": 1.510172376409173,
+          "range_seconds": 0.1642141230404377,
+          "samples_seconds": [
+            1.510172376409173,
+            1.6743864994496107,
+            1.6278974991291761
+          ]
+        },
+        "mlx": {
+          "maximum_seconds": 0.15893575176596642,
+          "median_seconds": 0.14884908311069012,
+          "minimum_seconds": 0.14505700021982193,
+          "range_seconds": 0.013878751546144485,
+          "samples_seconds": [
+            0.14884908311069012,
+            0.15893575176596642,
+            0.14505700021982193
+          ]
+        }
+      },
+      "unmatched_points": 344538,
+      "vertices": 48
+    },
+    {
+      "id": 2,
+      "input_fingerprints": [
+        {
+          "arguments": {
+            "n": 10000000
+          },
+          "dtype": "float64",
+          "generator": "make_points",
+          "kind": "numpy_contiguous_bytes",
+          "sequence": 16,
+          "sha256": "7b7a3fe21b42c40918cbc076aef8ec938d75fb11103c9ae1890b4c084aea417d",
+          "shape": [
+            10000000,
+            2
+          ]
+        },
+        {
+          "arguments": {
+            "m": 260,
+            "vertices": 48
+          },
+          "dtype": "object",
+          "generator": "make_zones",
+          "kind": "geometry_wkb_little_endian",
+          "sequence": 17,
+          "sha256": "28f25167c02765943eba87047c9b07e177374da78d8d9cd6ca6fd7367897c18b",
+          "shape": [
+            260
+          ]
+        }
+      ],
+      "input_points": 10000000,
+      "label": "10M \u00d7 260",
+      "load_end": {
+        "load_average_1_5_15_minutes": [
+          2.86083984375,
+          3.5322265625,
+          3.81982421875
+        ],
+        "swap_usage": "total = 17408.00M  used = 16346.50M  free = 1061.50M  (encrypted)",
+        "utc": "2026-11-21T15:24:40.374440+00:00",
+        "vm_stat": "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                                  2169467.\nPages active:                                2780770.\nPages inactive:                              2535877.\nPages speculative:                            316840.\nPages throttled:                                   0.\nPages wired down:                             388407.\nPages purgeable:                              165112.\n\"Translation faults\":                    24635274356.\nPages copy-on-write:                       754613651.\nPages zero filled:                       16554919913.\nPages reactivated:                        2559177917.\nPages purged:                              467163935.\nFile-backed pages:                           2367686.\nAnonymous pages:                             3265801.\nPages stored in compressor:                  2768548.\nPages occupied by compressor:                  78442.\nDecompressions:                           3050212924.\nCompressions:                             3511729513.\nPageins:                                   255416401.\nPageouts:                                    1711559.\nSwapins:                                   193844495.\nSwapouts:                                  224752155."
+      },
+      "load_start": {
+        "load_average_1_5_15_minutes": [
+          2.7353515625,
+          3.9580078125,
+          4.00439453125
+        ],
+        "swap_usage": "total = 17408.00M  used = 16346.50M  free = 1061.50M  (encrypted)",
+        "utc": "2026-11-21T15:22:35.578607+00:00",
+        "vm_stat": "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                                  2333378.\nPages active:                                2732724.\nPages inactive:                              2420177.\nPages speculative:                            316459.\nPages throttled:                                   0.\nPages wired down:                             388689.\nPages purgeable:                              164457.\n\"Translation faults\":                    24633062303.\nPages copy-on-write:                       754409707.\nPages zero filled:                       16552999316.\nPages reactivated:                        2559177743.\nPages purged:                              467161089.\nFile-backed pages:                           2367472.\nAnonymous pages:                             3101888.\nPages stored in compressor:                  2768553.\nPages occupied by compressor:                  78445.\nDecompressions:                           3050212919.\nCompressions:                             3511729513.\nPageins:                                   255415927.\nPageouts:                                    1711559.\nSwapins:                                   193844495.\nSwapouts:                                  224752155."
+      },
+      "m": 260,
+      "matched_unique_points": 6501488,
+      "multi_hit_points": 2849585,
+      "n": 10000000,
+      "output_pair_sha256": "d318e703ed85b2e9df3a75791c73dc0471497ea8b335fbd211a39ebf2c2cae90",
+      "output_rows": 10689126,
+      "pairs": [
+        {
+          "order": [
+            "mlx",
+            "geopandas"
+          ],
+          "phase": "warmup",
+          "seconds": {
+            "geopandas": 21.346682835370302,
+            "mlx": 2.3653357084840536
+          },
+          "trial": 0,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 10000000,
+            "matched_unique_points": 6501488,
+            "multi_hit_points": 2849585,
+            "pair_sha256": "d318e703ed85b2e9df3a75791c73dc0471497ea8b335fbd211a39ebf2c2cae90",
+            "rows": 10689126,
+            "status": "passed",
+            "unmatched_points": 3498512
+          }
+        },
+        {
+          "order": [
+            "geopandas",
+            "mlx"
+          ],
+          "phase": "measured",
+          "seconds": {
+            "geopandas": 21.540379583835602,
+            "mlx": 2.216205667704344
+          },
+          "trial": 1,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 10000000,
+            "matched_unique_points": 6501488,
+            "multi_hit_points": 2849585,
+            "pair_sha256": "d318e703ed85b2e9df3a75791c73dc0471497ea8b335fbd211a39ebf2c2cae90",
+            "rows": 10689126,
+            "status": "passed",
+            "unmatched_points": 3498512
+          }
+        },
+        {
+          "order": [
+            "mlx",
+            "geopandas"
+          ],
+          "phase": "measured",
+          "seconds": {
+            "geopandas": 21.53679408505559,
+            "mlx": 2.170095333829522
+          },
+          "trial": 2,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 10000000,
+            "matched_unique_points": 6501488,
+            "multi_hit_points": 2849585,
+            "pair_sha256": "d318e703ed85b2e9df3a75791c73dc0471497ea8b335fbd211a39ebf2c2cae90",
+            "rows": 10689126,
+            "status": "passed",
+            "unmatched_points": 3498512
+          }
+        },
+        {
+          "order": [
+            "geopandas",
+            "mlx"
+          ],
+          "phase": "measured",
+          "seconds": {
+            "geopandas": 21.303119707852602,
+            "mlx": 2.2563063353300095
+          },
+          "trial": 3,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 10000000,
+            "matched_unique_points": 6501488,
+            "multi_hit_points": 2849585,
+            "pair_sha256": "d318e703ed85b2e9df3a75791c73dc0471497ea8b335fbd211a39ebf2c2cae90",
+            "rows": 10689126,
+            "status": "passed",
+            "unmatched_points": 3498512
+          }
+        }
+      ],
+      "speedup_geopandas_over_mlx": 9.717867975387174,
+      "status": "completed",
+      "timings": {
+        "geopandas": {
+          "maximum_seconds": 21.540379583835602,
+          "median_seconds": 21.53679408505559,
+          "minimum_seconds": 21.303119707852602,
+          "range_seconds": 0.2372598759829998,
+          "samples_seconds": [
+            21.540379583835602,
+            21.53679408505559,
+            21.303119707852602
+          ]
+        },
+        "mlx": {
+          "maximum_seconds": 2.2563063353300095,
+          "median_seconds": 2.216205667704344,
+          "minimum_seconds": 2.170095333829522,
+          "range_seconds": 0.08621100150048733,
+          "samples_seconds": [
+            2.216205667704344,
+            2.170095333829522,
+            2.2563063353300095
+          ]
+        }
+      },
+      "unmatched_points": 3498512,
+      "vertices": 48
+    },
+    {
+      "id": 3,
+      "input_fingerprints": [
+        {
+          "arguments": {
+            "n": 1000000
+          },
+          "dtype": "float64",
+          "generator": "make_points",
+          "kind": "numpy_contiguous_bytes",
+          "sequence": 18,
+          "sha256": "77f86ccac1441ab6dfe6f2169eaf8ef997de374851fd1e08279823c8ebb3b05c",
+          "shape": [
+            1000000,
+            2
+          ]
+        },
+        {
+          "arguments": {
+            "m": 10000,
+            "vertices": 48
+          },
+          "dtype": "object",
+          "generator": "make_zones",
+          "kind": "geometry_wkb_little_endian",
+          "sequence": 19,
+          "sha256": "84619700339901e3eaa6dd850db86f64d410f89a6b91cc8e0dffea2c1dd0c642",
+          "shape": [
+            10000
+          ]
+        }
+      ],
+      "input_points": 1000000,
+      "label": "1M \u00d7 10k",
+      "load_end": {
+        "load_average_1_5_15_minutes": [
+          3.05712890625,
+          3.53857421875,
+          3.81689453125
+        ],
+        "swap_usage": "total = 17408.00M  used = 16346.50M  free = 1061.50M  (encrypted)",
+        "utc": "2026-11-21T15:24:51.509682+00:00",
+        "vm_stat": "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                                  2096192.\nPages active:                                2851346.\nPages inactive:                              2537704.\nPages speculative:                            316855.\nPages throttled:                                   0.\nPages wired down:                             389232.\nPages purgeable:                              164184.\n\"Translation faults\":                    24635444791.\nPages copy-on-write:                       754623693.\nPages zero filled:                       16555098002.\nPages reactivated:                        2559177917.\nPages purged:                              467164615.\nFile-backed pages:                           2367701.\nAnonymous pages:                             3338204.\nPages stored in compressor:                  2768547.\nPages occupied by compressor:                  78442.\nDecompressions:                           3050212925.\nCompressions:                             3511729513.\nPageins:                                   255416405.\nPageouts:                                    1711559.\nSwapins:                                   193844495.\nSwapouts:                                  224752155."
+      },
+      "load_start": {
+        "load_average_1_5_15_minutes": [
+          2.86083984375,
+          3.5322265625,
+          3.81982421875
+        ],
+        "swap_usage": "total = 17408.00M  used = 16346.50M  free = 1061.50M  (encrypted)",
+        "utc": "2026-11-21T15:24:40.609929+00:00",
+        "vm_stat": "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                                  2166094.\nPages active:                                2784161.\nPages inactive:                              2535861.\nPages speculative:                            316840.\nPages throttled:                                   0.\nPages wired down:                             388408.\nPages purgeable:                              165112.\n\"Translation faults\":                    24635282312.\nPages copy-on-write:                       754614046.\nPages zero filled:                       16554923444.\nPages reactivated:                        2559177917.\nPages purged:                              467163935.\nFile-backed pages:                           2367686.\nAnonymous pages:                             3269176.\nPages stored in compressor:                  2768548.\nPages occupied by compressor:                  78442.\nDecompressions:                           3050212924.\nCompressions:                             3511729513.\nPageins:                                   255416403.\nPageouts:                                    1711559.\nSwapins:                                   193844495.\nSwapouts:                                  224752155."
+      },
+      "m": 10000,
+      "matched_unique_points": 673587,
+      "multi_hit_points": 308179,
+      "n": 1000000,
+      "output_pair_sha256": "1b861470e080fd1d95b352f77416933b00e67f4d1ed14c728b126fbd6ec0c130",
+      "output_rows": 1121558,
+      "pairs": [
+        {
+          "order": [
+            "geopandas",
+            "mlx"
+          ],
+          "phase": "warmup",
+          "seconds": {
+            "geopandas": 1.5566664170473814,
+            "mlx": 0.28954616747796535
+          },
+          "trial": 0,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 1000000,
+            "matched_unique_points": 673587,
+            "multi_hit_points": 308179,
+            "pair_sha256": "1b861470e080fd1d95b352f77416933b00e67f4d1ed14c728b126fbd6ec0c130",
+            "rows": 1121558,
+            "status": "passed",
+            "unmatched_points": 326413
+          }
+        },
+        {
+          "order": [
+            "mlx",
+            "geopandas"
+          ],
+          "phase": "measured",
+          "seconds": {
+            "geopandas": 1.5352241657674313,
+            "mlx": 0.24631433375179768
+          },
+          "trial": 1,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 1000000,
+            "matched_unique_points": 673587,
+            "multi_hit_points": 308179,
+            "pair_sha256": "1b861470e080fd1d95b352f77416933b00e67f4d1ed14c728b126fbd6ec0c130",
+            "rows": 1121558,
+            "status": "passed",
+            "unmatched_points": 326413
+          }
+        },
+        {
+          "order": [
+            "geopandas",
+            "mlx"
+          ],
+          "phase": "measured",
+          "seconds": {
+            "geopandas": 1.6048985421657562,
+            "mlx": 0.2620847914367914
+          },
+          "trial": 2,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 1000000,
+            "matched_unique_points": 673587,
+            "multi_hit_points": 308179,
+            "pair_sha256": "1b861470e080fd1d95b352f77416933b00e67f4d1ed14c728b126fbd6ec0c130",
+            "rows": 1121558,
+            "status": "passed",
+            "unmatched_points": 326413
+          }
+        },
+        {
+          "order": [
+            "mlx",
+            "geopandas"
+          ],
+          "phase": "measured",
+          "seconds": {
+            "geopandas": 1.5638741683214903,
+            "mlx": 0.24424303881824017
+          },
+          "trial": 3,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 1000000,
+            "matched_unique_points": 673587,
+            "multi_hit_points": 308179,
+            "pair_sha256": "1b861470e080fd1d95b352f77416933b00e67f4d1ed14c728b126fbd6ec0c130",
+            "rows": 1121558,
+            "status": "passed",
+            "unmatched_points": 326413
+          }
+        }
+      ],
+      "speedup_geopandas_over_mlx": 6.349099317530386,
+      "status": "completed",
+      "timings": {
+        "geopandas": {
+          "maximum_seconds": 1.6048985421657562,
+          "median_seconds": 1.5638741683214903,
+          "minimum_seconds": 1.5352241657674313,
+          "range_seconds": 0.06967437639832497,
+          "samples_seconds": [
+            1.5352241657674313,
+            1.6048985421657562,
+            1.5638741683214903
+          ]
+        },
+        "mlx": {
+          "maximum_seconds": 0.2620847914367914,
+          "median_seconds": 0.24631433375179768,
+          "minimum_seconds": 0.24424303881824017,
+          "range_seconds": 0.017841752618551254,
+          "samples_seconds": [
+            0.24631433375179768,
+            0.2620847914367914,
+            0.24424303881824017
+          ]
+        }
+      },
+      "unmatched_points": 326413,
+      "vertices": 48
+    },
+    {
+      "id": 4,
+      "input_fingerprints": [
+        {
+          "arguments": {
+            "n": 1000000
+          },
+          "dtype": "float64",
+          "generator": "make_points",
+          "kind": "numpy_contiguous_bytes",
+          "sequence": 20,
+          "sha256": "b3b14104e6c70bfa19b2cc76ecdc2013f68fa9c7a2618be2ca393f210b1de826",
+          "shape": [
+            1000000,
+            2
+          ]
+        },
+        {
+          "arguments": {
+            "m": 260,
+            "vertices": 48
+          },
+          "dtype": "object",
+          "generator": "make_zones",
+          "kind": "geometry_wkb_little_endian",
+          "sequence": 21,
+          "sha256": "4d6aec90cf0b21ee44f3af51a52418d6916391788258f31d49818cfa94ab2f6b",
+          "shape": [
+            260
+          ]
+        },
+        {
+          "arguments": {
+            "vertices": 2048
+          },
+          "dtype": "object",
+          "generator": "densify_zones",
+          "kind": "geometry_wkb_little_endian",
+          "sequence": 22,
+          "sha256": "3bc3c144b515dfdddde4a95c243436275d25296c96611d4fa5bfff4ee646fdc2",
+          "shape": [
+            260
+          ]
+        }
+      ],
+      "input_points": 1000000,
+      "label": "1M \u00d7 260",
+      "load_end": {
+        "load_average_1_5_15_minutes": [
+          2.96142578125,
+          3.50341796875,
+          3.80126953125
+        ],
+        "swap_usage": "total = 17408.00M  used = 16346.50M  free = 1061.50M  (encrypted)",
+        "utc": "2026-11-21T15:25:02.368640+00:00",
+        "vm_stat": "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                                  2099116.\nPages active:                                2779038.\nPages inactive:                              2517068.\nPages speculative:                            316855.\nPages throttled:                                   0.\nPages wired down:                             479213.\nPages purgeable:                              164245.\n\"Translation faults\":                    24635610406.\nPages copy-on-write:                       754634074.\nPages zero filled:                       16555193970.\nPages reactivated:                        2559177955.\nPages purged:                              467164617.\nFile-backed pages:                           2367700.\nAnonymous pages:                             3245261.\nPages stored in compressor:                  2768547.\nPages occupied by compressor:                  78442.\nDecompressions:                           3050212925.\nCompressions:                             3511729513.\nPageins:                                   255416409.\nPageouts:                                    1711559.\nSwapins:                                   193844495.\nSwapouts:                                  224752155."
+      },
+      "load_start": {
+        "load_average_1_5_15_minutes": [
+          3.05712890625,
+          3.53857421875,
+          3.81689453125
+        ],
+        "swap_usage": "total = 17408.00M  used = 16346.50M  free = 1061.50M  (encrypted)",
+        "utc": "2026-11-21T15:24:51.623281+00:00",
+        "vm_stat": "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                                  2096134.\nPages active:                                2851365.\nPages inactive:                              2537703.\nPages speculative:                            316855.\nPages throttled:                                   0.\nPages wired down:                             389232.\nPages purgeable:                              164184.\n\"Translation faults\":                    24635450810.\nPages copy-on-write:                       754624080.\nPages zero filled:                       16555098370.\nPages reactivated:                        2559177917.\nPages purged:                              467164615.\nFile-backed pages:                           2367701.\nAnonymous pages:                             3338222.\nPages stored in compressor:                  2768547.\nPages occupied by compressor:                  78442.\nDecompressions:                           3050212925.\nCompressions:                             3511729513.\nPageins:                                   255416407.\nPageouts:                                    1711559.\nSwapins:                                   193844495.\nSwapouts:                                  224752155."
+      },
+      "m": 260,
+      "matched_unique_points": 673014,
+      "multi_hit_points": 287223,
+      "n": 1000000,
+      "output_pair_sha256": "96f2fe2aa4bcf6063708d03a4d745b548a54d019546baddf5a2ea6c9f0982d23",
+      "output_rows": 1076107,
+      "pairs": [
+        {
+          "order": [
+            "mlx",
+            "geopandas"
+          ],
+          "phase": "warmup",
+          "seconds": {
+            "geopandas": 1.646815501153469,
+            "mlx": 0.2568075004965067
+          },
+          "trial": 0,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 1000000,
+            "matched_unique_points": 673014,
+            "multi_hit_points": 287223,
+            "pair_sha256": "96f2fe2aa4bcf6063708d03a4d745b548a54d019546baddf5a2ea6c9f0982d23",
+            "rows": 1076107,
+            "status": "passed",
+            "unmatched_points": 326986
+          }
+        },
+        {
+          "order": [
+            "geopandas",
+            "mlx"
+          ],
+          "phase": "measured",
+          "seconds": {
+            "geopandas": 1.5748849175870419,
+            "mlx": 0.23640708439052105
+          },
+          "trial": 1,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 1000000,
+            "matched_unique_points": 673014,
+            "multi_hit_points": 287223,
+            "pair_sha256": "96f2fe2aa4bcf6063708d03a4d745b548a54d019546baddf5a2ea6c9f0982d23",
+            "rows": 1076107,
+            "status": "passed",
+            "unmatched_points": 326986
+          }
+        },
+        {
+          "order": [
+            "mlx",
+            "geopandas"
+          ],
+          "phase": "measured",
+          "seconds": {
+            "geopandas": 1.5421671643853188,
+            "mlx": 0.21706104464828968
+          },
+          "trial": 2,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 1000000,
+            "matched_unique_points": 673014,
+            "multi_hit_points": 287223,
+            "pair_sha256": "96f2fe2aa4bcf6063708d03a4d745b548a54d019546baddf5a2ea6c9f0982d23",
+            "rows": 1076107,
+            "status": "passed",
+            "unmatched_points": 326986
+          }
+        },
+        {
+          "order": [
+            "geopandas",
+            "mlx"
+          ],
+          "phase": "measured",
+          "seconds": {
+            "geopandas": 1.571669915691018,
+            "mlx": 0.2330577913671732
+          },
+          "trial": 3,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 1000000,
+            "matched_unique_points": 673014,
+            "multi_hit_points": 287223,
+            "pair_sha256": "96f2fe2aa4bcf6063708d03a4d745b548a54d019546baddf5a2ea6c9f0982d23",
+            "rows": 1076107,
+            "status": "passed",
+            "unmatched_points": 326986
+          }
+        }
+      ],
+      "speedup_geopandas_over_mlx": 6.743691796233129,
+      "status": "completed",
+      "timings": {
+        "geopandas": {
+          "maximum_seconds": 1.5748849175870419,
+          "median_seconds": 1.571669915691018,
+          "minimum_seconds": 1.5421671643853188,
+          "range_seconds": 0.0327177532017231,
+          "samples_seconds": [
+            1.5748849175870419,
+            1.5421671643853188,
+            1.571669915691018
+          ]
+        },
+        "mlx": {
+          "maximum_seconds": 0.23640708439052105,
+          "median_seconds": 0.2330577913671732,
+          "minimum_seconds": 0.21706104464828968,
+          "range_seconds": 0.01934603974223137,
+          "samples_seconds": [
+            0.23640708439052105,
+            0.21706104464828968,
+            0.2330577913671732
+          ]
+        }
+      },
+      "unmatched_points": 326986,
+      "vertices": 2048
+    },
+    {
+      "coastline": 150000,
+      "id": 5,
+      "input_fingerprints": [
+        {
+          "arguments": {
+            "n": 1000000
+          },
+          "dtype": "float64",
+          "generator": "make_points",
+          "kind": "numpy_contiguous_bytes",
+          "sequence": 23,
+          "sha256": "6d9a6a6ea011c43527164b243411af61097ed6ebf5fdecb27251903960db1b59",
+          "shape": [
+            1000000,
+            2
+          ]
+        },
+        {
+          "arguments": {
+            "vertices": 150000
+          },
+          "dtype": "object",
+          "generator": "make_coastline",
+          "kind": "geometry_wkb_little_endian",
+          "sequence": 24,
+          "sha256": "47a6f574c8d317b912460c0b8f639f9160c50a40fac066fd1655b417368c7f5b",
+          "shape": [
+            1
+          ]
+        }
+      ],
+      "input_points": 1000000,
+      "label": "1M \u00d7 1",
+      "load_end": {
+        "load_average_1_5_15_minutes": [
+          3.30908203125,
+          3.55810546875,
+          3.81591796875
+        ],
+        "swap_usage": "total = 17408.00M  used = 16346.50M  free = 1061.50M  (encrypted)",
+        "utc": "2026-11-21T15:25:16.359342+00:00",
+        "vm_stat": "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                                  2098052.\nPages active:                                2854035.\nPages inactive:                              2533220.\nPages speculative:                            316862.\nPages throttled:                                   0.\nPages wired down:                             389188.\nPages purgeable:                              164253.\n\"Translation faults\":                    24635677839.\nPages copy-on-write:                       754635706.\nPages zero filled:                       16555229687.\nPages reactivated:                        2559177955.\nPages purged:                              467165316.\nFile-backed pages:                           2367707.\nAnonymous pages:                             3336410.\nPages stored in compressor:                  2768547.\nPages occupied by compressor:                  78442.\nDecompressions:                           3050212925.\nCompressions:                             3511729513.\nPageins:                                   255416413.\nPageouts:                                    1711559.\nSwapins:                                   193844495.\nSwapouts:                                  224752155."
+      },
+      "load_start": {
+        "load_average_1_5_15_minutes": [
+          2.96142578125,
+          3.50341796875,
+          3.80126953125
+        ],
+        "swap_usage": "total = 17408.00M  used = 16346.50M  free = 1061.50M  (encrypted)",
+        "utc": "2026-11-21T15:25:02.810857+00:00",
+        "vm_stat": "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                                  2098879.\nPages active:                                2862296.\nPages inactive:                              2517500.\nPages speculative:                            316855.\nPages throttled:                                   0.\nPages wired down:                             395764.\nPages purgeable:                              164470.\n\"Translation faults\":                    24635617035.\nPages copy-on-write:                       754634492.\nPages zero filled:                       16555194890.\nPages reactivated:                        2559177955.\nPages purged:                              467164617.\nFile-backed pages:                           2367700.\nAnonymous pages:                             3328951.\nPages stored in compressor:                  2768547.\nPages occupied by compressor:                  78442.\nDecompressions:                           3050212925.\nCompressions:                             3511729513.\nPageins:                                   255416411.\nPageouts:                                    1711559.\nSwapins:                                   193844495.\nSwapouts:                                  224752155."
+      },
+      "m": 1,
+      "matched_unique_points": 217315,
+      "multi_hit_points": 0,
+      "n": 1000000,
+      "output_pair_sha256": "027a2f377408718291920539726709ea15fde3a87af1bcec6b2b8611cd9db4f4",
+      "output_rows": 217315,
+      "pairs": [
+        {
+          "order": [
+            "geopandas",
+            "mlx"
+          ],
+          "phase": "warmup",
+          "seconds": {
+            "geopandas": 2.727124374359846,
+            "mlx": 0.15716229379177094
+          },
+          "trial": 0,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 1000000,
+            "matched_unique_points": 217315,
+            "multi_hit_points": 0,
+            "pair_sha256": "027a2f377408718291920539726709ea15fde3a87af1bcec6b2b8611cd9db4f4",
+            "rows": 217315,
+            "status": "passed",
+            "unmatched_points": 782685
+          }
+        },
+        {
+          "order": [
+            "mlx",
+            "geopandas"
+          ],
+          "phase": "measured",
+          "seconds": {
+            "geopandas": 2.7118891663849354,
+            "mlx": 0.13983950018882751
+          },
+          "trial": 1,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 1000000,
+            "matched_unique_points": 217315,
+            "multi_hit_points": 0,
+            "pair_sha256": "027a2f377408718291920539726709ea15fde3a87af1bcec6b2b8611cd9db4f4",
+            "rows": 217315,
+            "status": "passed",
+            "unmatched_points": 782685
+          }
+        },
+        {
+          "order": [
+            "geopandas",
+            "mlx"
+          ],
+          "phase": "measured",
+          "seconds": {
+            "geopandas": 2.7183756232261658,
+            "mlx": 0.1526107508689165
+          },
+          "trial": 2,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 1000000,
+            "matched_unique_points": 217315,
+            "multi_hit_points": 0,
+            "pair_sha256": "027a2f377408718291920539726709ea15fde3a87af1bcec6b2b8611cd9db4f4",
+            "rows": 217315,
+            "status": "passed",
+            "unmatched_points": 782685
+          }
+        },
+        {
+          "order": [
+            "mlx",
+            "geopandas"
+          ],
+          "phase": "measured",
+          "seconds": {
+            "geopandas": 2.717609668150544,
+            "mlx": 0.14397083409130573
+          },
+          "trial": 3,
+          "validation": {
+            "columns": [
+              "point_id",
+              "value",
+              "geometry",
+              "index_right",
+              "zone_id",
+              "zone_name",
+              "zone_weight"
+            ],
+            "crs": "EPSG:4326",
+            "dtypes": {
+              "geometry": "geometry",
+              "index_right": "int64",
+              "point_id": "int64",
+              "value": "float64",
+              "zone_id": "int64",
+              "zone_name": "string",
+              "zone_weight": "float64"
+            },
+            "index_dtype": "int64",
+            "index_name": null,
+            "input_points": 1000000,
+            "matched_unique_points": 217315,
+            "multi_hit_points": 0,
+            "pair_sha256": "027a2f377408718291920539726709ea15fde3a87af1bcec6b2b8611cd9db4f4",
+            "rows": 217315,
+            "status": "passed",
+            "unmatched_points": 782685
+          }
+        }
+      ],
+      "speedup_geopandas_over_mlx": 18.876112549483786,
+      "status": "completed",
+      "timings": {
+        "geopandas": {
+          "maximum_seconds": 2.7183756232261658,
+          "median_seconds": 2.717609668150544,
+          "minimum_seconds": 2.7118891663849354,
+          "range_seconds": 0.0064864568412303925,
+          "samples_seconds": [
+            2.7118891663849354,
+            2.7183756232261658,
+            2.717609668150544
+          ]
+        },
+        "mlx": {
+          "maximum_seconds": 0.1526107508689165,
+          "median_seconds": 0.14397083409130573,
+          "minimum_seconds": 0.13983950018882751,
+          "range_seconds": 0.012771250680088997,
+          "samples_seconds": [
+            0.13983950018882751,
+            0.1526107508689165,
+            0.14397083409130573
+          ]
+        }
+      },
+      "unmatched_points": 782685,
+      "vertices": 150000
+    }
+  ],
+  "correctness_fixture": {
+    "columns": [
+      "point_id",
+      "value",
+      "geometry",
+      "index_right",
+      "zone_id",
+      "zone_name",
+      "zone_weight"
+    ],
+    "crs": "EPSG:4326",
+    "dtypes": {
+      "geometry": "geometry",
+      "index_right": "int64",
+      "point_id": "int64",
+      "value": "float64",
+      "zone_id": "int64",
+      "zone_name": "string",
+      "zone_weight": "float64"
+    },
+    "empty_output": {
+      "columns": [
+        "point_id",
+        "value",
+        "geometry",
+        "index_right",
+        "zone_id",
+        "zone_name",
+        "zone_weight"
+      ],
+      "crs": "EPSG:4326",
+      "dtypes": {
+        "geometry": "geometry",
+        "index_right": "int64",
+        "point_id": "int64",
+        "value": "float64",
+        "zone_id": "int64",
+        "zone_name": "string",
+        "zone_weight": "float64"
+      },
+      "index_dtype": "int64",
+      "index_name": null,
+      "matched_unique_points": 0,
+      "multi_hit_points": 0,
+      "rows": 0,
+      "status": "passed"
+    },
+    "fixture": "Overlaps, hole, outside, exact edges/vertices, points \u00b11e-10 from edges",
+    "index_dtype": "int64",
+    "index_name": null,
+    "matched_unique_points": 7,
+    "multi_hit_points": 1,
+    "pair_sha256": "19509f7d381b96a495e814a110df8dd3f7d6b6999a6214e2c9808a2361e6d5ec",
+    "rows": 8,
+    "status": "passed"
+  },
+  "elapsed_seconds": 173.40178745798767,
+  "finished_at": "2026-11-21T15:25:16.417618+00:00",
+  "input_fingerprints": [
+    {
+      "arguments": {
+        "n": 20000
+      },
+      "dtype": "float64",
+      "generator": "make_points",
+      "kind": "numpy_contiguous_bytes",
+      "sequence": 0,
+      "sha256": "a1271e1b623d63d5c36661c180a5663d7530e174a6ca237968a377ffedc269dc",
+      "shape": [
+        20000,
+        2
+      ]
+    },
+    {
+      "arguments": {
+        "n": 20000
+      },
+      "dtype": "float64",
+      "generator": "make_points",
+      "kind": "numpy_contiguous_bytes",
+      "sequence": 1,
+      "sha256": "723b1a38a08afd125ed141da9526e1c2ce0a32d1f98478674c78c617de5b33d1",
+      "shape": [
+        20000,
+        2
+      ]
+    },
+    {
+      "arguments": {
+        "n": 1000
+      },
+      "dtype": "float64",
+      "generator": "make_points",
+      "kind": "numpy_contiguous_bytes",
+      "sequence": 2,
+      "sha256": "b796899cb997a61b5de03a318a87b4fd48d6ae25d079fb9d90a2f8857c84f6af",
+      "shape": [
+        1000,
+        2
+      ]
+    },
+    {
+      "arguments": {
+        "n": 1000000
+      },
+      "dtype": "float64",
+      "generator": "make_points",
+      "kind": "numpy_contiguous_bytes",
+      "sequence": 3,
+      "sha256": "aa332c0d39bd3333205fd2be85345abdab9fd126fc3e2cc5cfade425228e5b88",
+      "shape": [
+        1000000,
+        2
+      ]
+    },
+    {
+      "arguments": {
+        "n": 1000000
+      },
+      "dtype": "float64",
+      "generator": "make_points",
+      "kind": "numpy_contiguous_bytes",
+      "sequence": 4,
+      "sha256": "13f8c2c903c2cf4721c090bd45082397a56a275ceb17a3a376336f8af6f10f06",
+      "shape": [
+        1000000,
+        2
+      ]
+    },
+    {
+      "arguments": {
+        "n": 10000
+      },
+      "dtype": "float64",
+      "generator": "make_points",
+      "kind": "numpy_contiguous_bytes",
+      "sequence": 5,
+      "sha256": "86e27d703b77bbc2ccd18237a72d5cd212a4e612eaac36c0768a5a3c13c8f3f9",
+      "shape": [
+        10000,
+        2
+      ]
+    },
+    {
+      "arguments": {
+        "n": 200000
+      },
+      "dtype": "float64",
+      "generator": "make_points",
+      "kind": "numpy_contiguous_bytes",
+      "sequence": 6,
+      "sha256": "b53ae61fa82ab528cce2fdfd2b4b9c544fac75098fe17628ccc4ab0f24f6f071",
+      "shape": [
+        200000,
+        2
+      ]
+    },
+    {
+      "arguments": {
+        "n": 200000
+      },
+      "dtype": "float64",
+      "generator": "make_points",
+      "kind": "numpy_contiguous_bytes",
+      "sequence": 7,
+      "sha256": "6c06d5bdea14f86c1672006bd3f38d4b594acee1a746c1a9949f9fd8979ab2b3",
+      "shape": [
+        200000,
+        2
+      ]
+    },
+    {
+      "arguments": {
+        "n": 1000000
+      },
+      "dtype": "float64",
+      "generator": "make_points",
+      "kind": "numpy_contiguous_bytes",
+      "sequence": 8,
+      "sha256": "d9247369e090329fd5464f55d2fce0285e3c4a51d3e8eae017d0cc451e2aa26a",
+      "shape": [
+        1000000,
+        2
+      ]
+    },
+    {
+      "arguments": {
+        "n": 200000
+      },
+      "dtype": "float64",
+      "generator": "make_points",
+      "kind": "numpy_contiguous_bytes",
+      "sequence": 9,
+      "sha256": "e4d64f31b0a2116958f6c6b7a63a8e1db32b5b45fec4ff875a6644240979e541",
+      "shape": [
+        200000,
+        2
+      ]
+    },
+    {
+      "arguments": {
+        "n": 100000
+      },
+      "dtype": "float64",
+      "generator": "make_points",
+      "kind": "numpy_contiguous_bytes",
+      "sequence": 10,
+      "sha256": "a5e4b88b688ed929b24bcdc865b7af2551cc18592c576a8c86b146ab39645f76",
+      "shape": [
+        100000,
+        2
+      ]
+    },
+    {
+      "arguments": {
+        "m": 32,
+        "vertices": 48
+      },
+      "dtype": "object",
+      "generator": "make_zones",
+      "kind": "geometry_wkb_little_endian",
+      "sequence": 11,
+      "sha256": "867178a133ffe956908dd7192a6f708a7f06e04890b016d602cfc5e21b33a814",
+      "shape": [
+        32
+      ]
+    },
+    {
+      "arguments": {
+        "n": 100000
+      },
+      "dtype": "float64",
+      "generator": "make_points",
+      "kind": "numpy_contiguous_bytes",
+      "sequence": 12,
+      "sha256": "9e2d810b181a96206d8e2a44b84f4223b0d77cbed3f0c51a6833f17bbc928449",
+      "shape": [
+        100000,
+        2
+      ]
+    },
+    {
+      "arguments": {
+        "m": 260,
+        "vertices": 48
+      },
+      "dtype": "object",
+      "generator": "make_zones",
+      "kind": "geometry_wkb_little_endian",
+      "sequence": 13,
+      "sha256": "e2aa6e0ebee29602aff437e4d6e803aa966f213331252efd5ad1ecd0db4d7526",
+      "shape": [
+        260
+      ]
+    },
+    {
+      "arguments": {
+        "n": 1000000
+      },
+      "dtype": "float64",
+      "generator": "make_points",
+      "kind": "numpy_contiguous_bytes",
+      "sequence": 14,
+      "sha256": "87ad8ba8032d78ad124e977bb0cf6df1a5408de510f80efa49e04f1ed334063b",
+      "shape": [
+        1000000,
+        2
+      ]
+    },
+    {
+      "arguments": {
+        "m": 260,
+        "vertices": 48
+      },
+      "dtype": "object",
+      "generator": "make_zones",
+      "kind": "geometry_wkb_little_endian",
+      "sequence": 15,
+      "sha256": "ce04243b0b4a85039b8f0e54b2fd71be6d7d5bcbf8b9d5c953dfca3bcf025a6f",
+      "shape": [
+        260
+      ]
+    },
+    {
+      "arguments": {
+        "n": 10000000
+      },
+      "dtype": "float64",
+      "generator": "make_points",
+      "kind": "numpy_contiguous_bytes",
+      "sequence": 16,
+      "sha256": "7b7a3fe21b42c40918cbc076aef8ec938d75fb11103c9ae1890b4c084aea417d",
+      "shape": [
+        10000000,
+        2
+      ]
+    },
+    {
+      "arguments": {
+        "m": 260,
+        "vertices": 48
+      },
+      "dtype": "object",
+      "generator": "make_zones",
+      "kind": "geometry_wkb_little_endian",
+      "sequence": 17,
+      "sha256": "28f25167c02765943eba87047c9b07e177374da78d8d9cd6ca6fd7367897c18b",
+      "shape": [
+        260
+      ]
+    },
+    {
+      "arguments": {
+        "n": 1000000
+      },
+      "dtype": "float64",
+      "generator": "make_points",
+      "kind": "numpy_contiguous_bytes",
+      "sequence": 18,
+      "sha256": "77f86ccac1441ab6dfe6f2169eaf8ef997de374851fd1e08279823c8ebb3b05c",
+      "shape": [
+        1000000,
+        2
+      ]
+    },
+    {
+      "arguments": {
+        "m": 10000,
+        "vertices": 48
+      },
+      "dtype": "object",
+      "generator": "make_zones",
+      "kind": "geometry_wkb_little_endian",
+      "sequence": 19,
+      "sha256": "84619700339901e3eaa6dd850db86f64d410f89a6b91cc8e0dffea2c1dd0c642",
+      "shape": [
+        10000
+      ]
+    },
+    {
+      "arguments": {
+        "n": 1000000
+      },
+      "dtype": "float64",
+      "generator": "make_points",
+      "kind": "numpy_contiguous_bytes",
+      "sequence": 20,
+      "sha256": "b3b14104e6c70bfa19b2cc76ecdc2013f68fa9c7a2618be2ca393f210b1de826",
+      "shape": [
+        1000000,
+        2
+      ]
+    },
+    {
+      "arguments": {
+        "m": 260,
+        "vertices": 48
+      },
+      "dtype": "object",
+      "generator": "make_zones",
+      "kind": "geometry_wkb_little_endian",
+      "sequence": 21,
+      "sha256": "4d6aec90cf0b21ee44f3af51a52418d6916391788258f31d49818cfa94ab2f6b",
+      "shape": [
+        260
+      ]
+    },
+    {
+      "arguments": {
+        "vertices": 2048
+      },
+      "dtype": "object",
+      "generator": "densify_zones",
+      "kind": "geometry_wkb_little_endian",
+      "sequence": 22,
+      "sha256": "3bc3c144b515dfdddde4a95c243436275d25296c96611d4fa5bfff4ee646fdc2",
+      "shape": [
+        260
+      ]
+    },
+    {
+      "arguments": {
+        "n": 1000000
+      },
+      "dtype": "float64",
+      "generator": "make_points",
+      "kind": "numpy_contiguous_bytes",
+      "sequence": 23,
+      "sha256": "6d9a6a6ea011c43527164b243411af61097ed6ebf5fdecb27251903960db1b59",
+      "shape": [
+        1000000,
+        2
+      ]
+    },
+    {
+      "arguments": {
+        "vertices": 150000
+      },
+      "dtype": "object",
+      "generator": "make_coastline",
+      "kind": "geometry_wkb_little_endian",
+      "sequence": 24,
+      "sha256": "47a6f574c8d317b912460c0b8f639f9160c50a40fac066fd1655b417368c7f5b",
+      "shape": [
+        1
+      ]
+    }
+  ],
+  "invocation": [
+    "bench/e2e/run_e2e.py",
+    "--output",
+    "<output-directory>",
+    "--machine-label",
+    "M1 Ultra tuned cold edge index",
+    "--reference-json",
+    "bench/e2e/reference-benchmark-results.json"
+  ],
+  "load_end": {
+    "load_average_1_5_15_minutes": [
+      3.30908203125,
+      3.55810546875,
+      3.81591796875
+    ],
+    "swap_usage": "total = 17408.00M  used = 16346.50M  free = 1061.50M  (encrypted)",
+    "utc": "2026-11-21T15:25:16.417622+00:00",
+    "vm_stat": "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                                  2098083.\nPages active:                                2853300.\nPages inactive:                              2533955.\nPages speculative:                            316862.\nPages throttled:                                   0.\nPages wired down:                             389188.\nPages purgeable:                              164253.\n\"Translation faults\":                    24635680048.\nPages copy-on-write:                       754636095.\nPages zero filled:                       16555229797.\nPages reactivated:                        2559177955.\nPages purged:                              467165316.\nFile-backed pages:                           2367707.\nAnonymous pages:                             3336410.\nPages stored in compressor:                  2768547.\nPages occupied by compressor:                  78442.\nDecompressions:                           3050212925.\nCompressions:                             3511729513.\nPageins:                                   255416415.\nPageouts:                                    1711559.\nSwapins:                                   193844495.\nSwapouts:                                  224752155."
+  },
+  "load_start": {
+    "load_average_1_5_15_minutes": [
+      2.876953125,
+      4.025390625,
+      4.02880859375
+    ],
+    "swap_usage": "total = 17408.00M  used = 16346.50M  free = 1061.50M  (encrypted)",
+    "utc": "2026-11-21T15:22:23.063774+00:00",
+    "vm_stat": "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                                  2453223.\nPages active:                                2608493.\nPages inactive:                              2409955.\nPages speculative:                            316425.\nPages throttled:                                   0.\nPages wired down:                             403325.\nPages purgeable:                              157976.\n\"Translation faults\":                    24632836763.\nPages copy-on-write:                       754395132.\nPages zero filled:                       16552747321.\nPages reactivated:                        2559177704.\nPages purged:                              467160575.\nFile-backed pages:                           2367346.\nAnonymous pages:                             2967527.\nPages stored in compressor:                  2768553.\nPages occupied by compressor:                  78445.\nDecompressions:                           3050212919.\nCompressions:                             3511729513.\nPageins:                                   255415891.\nPageouts:                                    1711559.\nSwapins:                                   193844495.\nSwapouts:                                  224752155."
+  },
+  "machine_label": "M1 Ultra tuned cold edge index",
+  "metadata": {
+    "architecture": "arm64",
+    "bench_sha256": "5c2c9da30d83a13f65232ed592a9cced96dc19b28215d580596944a91c19f74a",
+    "cpu_count": 20,
+    "duckdb_defaults": {
+      "memory_limit": "102.3 GiB",
+      "threads": 20
+    },
+    "e2e_runner_sha256": "6724340a7834ddfada7c5421084013b45fcb69ad423dd5678816e11615274b25",
+    "environment": {
+      "METAL_DEBUG_ERROR_MODE": null,
+      "METAL_DEVICE_WRAPPER_TYPE": null,
+      "MKL_NUM_THREADS": "1",
+      "MLX_GEOSPATIAL_BACKEND": null,
+      "MLX_METAL_DEBUG": null,
+      "MTL_DEBUG_LAYER": null,
+      "MTL_SHADER_VALIDATION": null,
+      "MallocStackLogging": null,
+      "NUMEXPR_NUM_THREADS": "1",
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "PYTHONDEVMODE": null,
+      "PYTHONFAULTHANDLER": null,
+      "PYTHONHASHSEED": null,
+      "PYTHONMALLOC": null,
+      "PYTHONOPTIMIZE": null,
+      "PYTHONUNBUFFERED": null,
+      "VECLIB_MAXIMUM_THREADS": "1"
+    },
+    "geos_version": "3.14.1",
+    "gpu_hardware": [
+      {
+        "_name": "Apple M1 Ultra",
+        "sppci_cores": "64",
+        "sppci_model": "Apple M1 Ultra"
+      }
+    ],
+    "machine_description": "Apple M1 Ultra, 20 cores (16 performance + 4 efficiency), macOS 26.5.1, mlx 0.32.4, Python 3.14.2",
+    "macos": [
+      "26.5.1",
+      [
+        "",
+        "",
+        ""
+      ],
+      "arm64"
+    ],
+    "metal_available": true,
+    "metal_device_info": {
+      "architecture": "applegpu_g13d",
+      "device_name": "Apple M1 Ultra",
+      "max_buffer_length": 86586540032,
+      "max_recommended_working_set_size": 115448725504,
+      "memory_size": 137438953472,
+      "resource_limit": 499000
+    },
+    "mlx_default_device": "Device(gpu, 0)",
+    "package_python_file_sha256": {
+      "__init__.py": "766c73f37de68e3bea1f7b43cfc10bc58f741bc851f9c5d573beb222d3e3727b",
+      "_boundary.py": "cf8f507f6fb7a1449dbc504aa739afd9c79550613576649eb6c388ed5638dd29",
+      "_dispatch.py": "6cdb7e9da028c0c93bdf3cba01d0d4b193af4a31775b6cf09c05cc8cd71dde13",
+      "_edge_grid.py": "eedecdeab17f5e4a932948fdf2ac777ebc25ff1abaeb15d18cfaa585e9efe9ee",
+      "_edge_index.py": "f165da7d82f1eec0f25ed9d88d076af6c0d25d3499b69cfb4998efee7411ba9c",
+      "_ingest.py": "6cb13da7faf84bcc580727735e0343eb38f754771592006807d09d70432dcffc",
+      "_pip.py": "9b3472b9c6a60aeb5d3e4b50767352fc3dffbb7df880e99c9afc8e28a9739701",
+      "_pip_indexed.py": "c538f9bb7d14da6c786ce80e53a49c84bde4bf1bb8826580df0cbe14fa0fcf4b",
+      "_precision.py": "083907d35b497d10d7d24a8f5a227cab19c2d1111350c40d54956740236eea5c",
+      "_validation.py": "310b4b7b097b33f95be4a79c11e67c5ffc54e7d84198dd162d8ceedf5d21f046",
+      "_version.py": "ae739b3e3b817044ada923b44ba82c752fe8b7c2133908d58fff8fd4b5146298",
+      "haversine.py": "8d3aac095e85bdf1b5e428ea51d53bd5a04d42c0fac7099942c25876e230def6",
+      "join.py": "8323221abe6ba3b4db3feacced36aac7b197dc1e89f5bc15aedef310d5e15aa8"
+    },
+    "package_python_manifest_sha256": "7b0b212c50a81193fedf22c44025e3958ee5ee322364e1f2d7a84e20cea38765",
+    "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+    "power": {
+      "battery_percent": [],
+      "power_mode_settings": [
+        "AC Power:"
+      ],
+      "power_source": "AC Power"
+    },
+    "python_flags": "sys.flags(debug=0, inspect=0, interactive=0, optimize=0, dont_write_bytecode=1, no_user_site=0, no_site=0, ignore_environment=0, verbose=0, bytes_warning=0, quiet=0, hash_randomization=1, isolated=0, dev_mode=False, utf8_mode=0, warn_default_encoding=0, safe_path=False, int_max_str_digits=4300)",
+    "python_version": "3.14.2 (main, Dec  5 2025, 16:49:16) [Clang 17.0.0 (clang-1700.4.4.1)]",
+    "python_xoptions": {},
+    "runner_sha256": "cf1849904ea3fabd262ef7a2d3c4041475fe4f058c460c027bbf7f4f6b169669",
+    "sysctl": {
+      "hw.logicalcpu": "20",
+      "hw.memsize": "137438953472",
+      "hw.perflevel0.physicalcpu": "16",
+      "hw.perflevel1.physicalcpu": "4",
+      "hw.physicalcpu": "20",
+      "machdep.cpu.brand_string": "Apple M1 Ultra"
+    },
+    "versions": {
+      "duckdb": "1.5.6",
+      "geopandas": "1.2.0",
+      "mlx": "0.32.4",
+      "mlx-geospatial": "0.1.0",
+      "mlx-metal": "0.32.4",
+      "numpy": "2.5.4",
+      "pandas": "3.0.6",
+      "pyarrow": "26.0.0",
+      "scikit-learn": "1.9.1",
+      "scipy": "1.18.1",
+      "shapely": "2.2.0",
+      "threadpoolctl": "3.7.0"
+    }
+  },
+  "protocol": {
+    "cpu_threads": "GeoPandas/GEOS native spatial join; no parallel partitioning",
+    "crs": "EPSG:4326",
+    "excluded": [
+      "input GeoDataFrame construction and fresh copies",
+      "imports/runtime initialization",
+      "correctness validation",
+      "metadata collection",
+      "disk I/O"
+    ],
+    "geopandas": "geopandas.sjoin(left, right, how='inner', predicate='within') with native default indexing",
+    "headline_statistic": "median of three paired alternating trials",
+    "how": "inner",
+    "included": [
+      "MLX PolygonSet construction and GPU ingestion",
+      "all spatial index construction",
+      "point-coordinate extraction for MLX",
+      "GPU query and host result materialization",
+      "exact-boundary GEOS refinement",
+      "complete joined GeoDataFrame materialization",
+      "all left and right nongeometry attributes",
+      "canonical row sorting"
+    ],
+    "input_copy": "Independent GeometryArrays and attribute arrays; immutable Shapely geometry objects may be shared, but polygon prepared state is destroyed before every method",
+    "input_start": "Already constructed matching GeoDataFrames, without cached indexes or prepared polygons",
+    "matching": "all matching pairs",
+    "mlx": "Fresh PolygonSet(right), GridIndex; query(left.geometry, all_matches=True, predicate='within', exact_boundary=True, backend='gpu'); attribute assembly",
+    "mlx_native_sjoin_used": false,
+    "predicate": "within",
+    "scope": "Six synthetic point-in-polygon workloads; valid polygons, unique unnamed indexes, noncolliding attribute names",
+    "seed": 0,
+    "sorting": "Both outputs sorted by point_id, then index_right inside each timer; original left index preserved",
+    "trials_per_method": 3,
+    "validation": "Every warmup pair and trial pair: GeoDataFrame equality, exact attrs/index/columns/dtypes/CRS, zero-tolerance geometry coordinate equality",
+    "warmups_per_method_per_case": 1
+  },
+  "reference_fingerprints_verified": 25,
+  "reference_json_sha256": "d859a4922c709b1413fe065a7584da266320dcccad3dc8f08e47f5995dc01f26",
+  "schema_version": 1,
+  "started_at": "2026-11-21T15:22:23.063764+00:00",
+  "status": "completed",
+  "updated_at": "2026-11-21T15:25:16.464668+00:00"
+}

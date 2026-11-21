@@ -4,53 +4,44 @@ The primary comparison measures **exact point-in-polygon joins from ready
 GeoDataFrames to complete joined GeoDataFrames**, including fresh index
 construction. Both implementations return every matching point–polygon pair,
 with the same attributes, point geometry, index labels, dtypes, CRS, and row
-order. The measurements below cover six synthetic workloads on an M1 Ultra
-and an M4 Max, recorded on **2026-10-19**.
-
-These results describe the source build of commit `8805228`; version **0.1.1**
-includes its optimizations. The identical measured wheel was installed on both hosts;
-its source hashes and build information are preserved in the
-[build manifest](results/2026-10-19-opus-speedups/build-manifest.json).
+order. The measurements cover six synthetic workloads on an M1 Ultra
+and an M4 Max, recorded on **November 21, 2026**. Both hosts imported the
+same repository source. [Source manifest](results/2026-11-21-cold-edge/source-manifest.json)
 
 ## Current results
 
-MLX completed all six joins faster than GeoPandas on each machine:
-**3.78–18.66× on M1 Ultra** (median ratio **8.00×**) and
-**2.55–16.51× on M4 Max** (median ratio **6.35×**). The M4 Max
-completed the MLX joins **1.23–1.69× faster** than the M1 Ultra.
-These are complete new runs of all six workloads on commit `8805228`;
-no rows are carried over from earlier optimization studies.
+MLX completed all six joins faster than GeoPandas on each machine.
+Speedups ranged from **3.63–18.88× on M1 Ultra** (median **8.23×**) and
+**3.26–16.41× on M4 Max** (median **7.10×**).
 
-The latest build adds threaded Point extraction, a host float64 edge grid,
-and polygon-major GEOS refinement. Relative to the preceding complete run,
-MLX medians improved **1.16–1.95× on M1 Ultra** and **1.20–1.97× on M4 Max**.
-The [prior/current table](results/2026-10-19-opus-speedups/tables.md)
-compares identical inputs and runtime versions in separate sessions;
-these differences can also reflect background activity.
-
-![Exact spatial joins with fresh indexes and complete GeoDataFrame outputs](results/2026-10-19-opus-speedups/full-e2e-overview.png)
+![Exact spatial joins with fresh indexes and complete GeoDataFrame outputs](results/2026-11-21-cold-edge/full-e2e-overview.png)
 
 | Points × polygons | Vertices | M1 Ultra MLX | M1 Ultra GeoPandas | Speedup | M4 Max MLX | M4 Max GeoPandas | Speedup |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| 100k × 260 | 48 | 22.9 ms | 86.6 ms | **3.78×** | 18.6 ms | 47.5 ms | **2.55×** |
-| 1M × 260 | 48 | 157 ms | 1.67 s | **10.66×** | 118 ms | 805 ms | **6.81×** |
-| 10M × 260 | 48 | 2.34 s | 22.23 s | **9.52×** | 1.38 s | 11.02 s | **7.96×** |
-| 1M × 10k | 48 | 263 ms | 1.60 s | **6.08×** | 191 ms | 923 ms | **4.84×** |
-| 1M × 260 | 2,048 | 246 ms | 1.60 s | **6.49×** | 172 ms | 1.02 s | **5.90×** |
-| 1M × 1 | 150,000 | 146 ms | 2.73 s | **18.66×** | 98.1 ms | 1.62 s | **16.51×** |
+| 100k × 260 | 48 | 24.7 ms | 89.6 ms | **3.63×** | 18.3 ms | 59.5 ms | **3.26×** |
+| 1M × 260 | 48 | 149 ms | 1.63 s | **10.94×** | 119 ms | 873 ms | **7.33×** |
+| 10M × 260 | 48 | 2.22 s | 21.54 s | **9.72×** | 1.64 s | 12.18 s | **7.43×** |
+| 1M × 10k | 48 | 246 ms | 1.56 s | **6.35×** | 199 ms | 1.03 s | **5.16×** |
+| 1M × 260 | 2,048 | 233 ms | 1.57 s | **6.74×** | 171 ms | 1.17 s | **6.87×** |
+| 1M × 1 | 150,000 | 144 ms | 2.72 s | **18.88×** | 103 ms | 1.70 s | **16.41×** |
 
 Each speedup is the GeoPandas median divided by the MLX median on the same
 machine. Medians across workloads are descriptive summaries of these six
 ratios, not a prediction for another dataset. Elapsed times use seconds
 or milliseconds; output counts and geometry complexity differ by workload.
 
-The charts and tables come from the same unrounded
-[JSON results](results/2026-10-19-opus-speedups/comparison.json) and
-[CSV results](results/2026-10-19-opus-speedups/comparison.csv). Individual trial
-samples are retained in JSON; both formats retain minimum/maximum ranges. Download the
-[overview SVG](results/2026-10-19-opus-speedups/full-e2e-overview.svg),
-[M1 Ultra chart](results/2026-10-19-opus-speedups/full-e2e-m1.png), or
-[M4 Max chart](results/2026-10-19-opus-speedups/full-e2e-m4.png).
+The charts and tables use the same unrounded medians. JSON includes the
+individual trial samples. [JSON](results/2026-11-21-cold-edge/e2e-comparison.json) ·
+[CSV](results/2026-11-21-cold-edge/e2e-comparison.csv) ·
+[Overview SVG](results/2026-11-21-cold-edge/full-e2e-overview.svg) ·
+[M1 Ultra chart](results/2026-11-21-cold-edge/full-e2e-m1.png) ·
+[M4 Max chart](results/2026-11-21-cold-edge/full-e2e-m4.png)
+
+Relative to the pre-tuning runs on the same host, complete-join MLX medians
+changed by −13.6% to +14.6% on M1 Ultra and −4.6% to +8.5% on M4 Max.
+Those full runs were timed in separate sessions. The alternating M4 Max
+coastline follow-up measured 90.0 ms before and 91.5 ms after.
+[Before-and-after results](results/2026-11-21-cold-edge/comparison.json)
 
 ## What is measured
 
@@ -73,11 +64,10 @@ are excluded and overlaps produce multiple rows.
   index label, inside the timer. Each timed call uses fresh input copies and
   indexes; native prepared polygon state is cleared before every call.
 
-The MLX measurement uses the frozen **query-plus-attribute-assembly adapter**
-in [the harness](e2e/run_e2e.py). It does not time native `ms.sjoin`.
-`ms.sjoin(..., all_matches=True)` is a supported public API tested separately;
-keeping the adapter unchanged preserves comparability across the optimization
-studies.
+The MLX measurement uses a frozen adapter that calls `GridIndex.query`
+and assembles the attributes. The public API suite times native
+`ms.sjoin(..., all_matches=True)` separately. [Exact harness](e2e/run_e2e.py) ·
+[Public API suite](bench_public_api.py)
 
 Input GeoDataFrame construction and copying, synthetic data generation,
 imports, runtime initialization, cold kernel compilation, validation, metadata
@@ -124,13 +114,12 @@ all possible DataFrame schemas or join modes.
 measured pairs for each of six workloads on each host. Validation covers
 every row, attribute, dtype, index label and order, geometry coordinate, active
 geometry name, and CRS. Input fingerprints, output pair hashes, dependency
-versions, and installed package source hashes match across machines. The
+versions, and package source hashes match across machines. The
 small boundary fixture also passed on both hosts.
 
-A fresh full test suite passed **721 tests on each host with Metal validation
-enabled**, using the identical archived source from which the measured wheel
-was built. Metal validation is disabled for timing. Fresh test logs, benchmark
-logs and source identity are retained with [the result files](results/2026-10-19-opus-speedups/).
+The test suite passed **825 tests on each host** with the CI Metal flags and
+skipped one pandas 2.2-specific test. Timings use the ordinary Metal runtime.
+[Test logs and source evidence](results/2026-11-21-cold-edge/)
 
 ## Machines and runtime
 
@@ -151,18 +140,16 @@ recorded in each raw result file.
 
 ## Reproduce the spatial joins
 
-Use an Apple silicon Mac with Python 3.14.2. From the repository root, create
-an environment with the pinned dependencies and install a clean archive of
-the measured commit. A clean source directory keeps stale build files out
-of the installed wheel:
+Use an Apple silicon Mac with Python 3.14.2. From the repository root,
+install the pinned dependencies and extract the measured revision.
+The commands below select that source with `PYTHONPATH`.
 
 ```bash
 python3.14 -m venv .venv-e2e
 source .venv-e2e/bin/activate
 python -m pip install -r bench/e2e/requirements.txt
 BENCH_SOURCE=$(mktemp -d /tmp/mlx-geospatial-source.XXXXXX)
-git archive 880522855606458869052d6ff069fbd1cbb53d1a | tar -x -C "$BENCH_SOURCE"
-python -m pip install --no-deps "$BENCH_SOURCE"
+git archive 92a87cee33b48df78710506216320bde64027175 | tar -x -C "$BENCH_SOURCE"
 ```
 
 The following runs all six workloads. Set a descriptive machine label and
@@ -174,11 +161,12 @@ E2E_OUTPUT=$(mktemp -d /tmp/mlx-geospatial-e2e.XXXXXX)
 env -u MTL_DEBUG_LAYER -u MTL_SHADER_VALIDATION \
   -u METAL_DEVICE_WRAPPER_TYPE -u METAL_DEBUG_ERROR_MODE -u MLX_METAL_DEBUG \
   -u MLX_GEOSPATIAL_BACKEND \
+  PYTHONPATH="$BENCH_SOURCE" \
   OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
   MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
-  caffeinate -dimsu python bench/e2e/run_e2e.py \
+  caffeinate -dimsu python "$BENCH_SOURCE/bench/e2e/run_e2e.py" \
   --output "$E2E_OUTPUT" --machine-label "My Apple silicon Mac" \
-  --reference-json bench/e2e/reference-benchmark-results.json
+  --reference-json "$BENCH_SOURCE/bench/e2e/reference-benchmark-results.json"
 ```
 
 Add `--smoke-only` for the small correctness fixture or `--cases 4` for the
@@ -190,44 +178,40 @@ input sequence so their selected workload matches the full run.
 Run the same command on the second host with the same checkout and pinned
 environment. Compare package module hashes, input fingerprints, protocol,
 dependency versions, and output pair hashes before comparing elapsed times.
-The [raw M1 result](results/2026-10-19-opus-speedups/m1/e2e-results.json) and
-[raw M4 result](results/2026-10-19-opus-speedups/m4/e2e-results.json) show the recorded
+The [raw M1 result](results/2026-11-21-cold-edge/m1/e2e-results.json) and
+[raw M4 result](results/2026-11-21-cold-edge/m4/e2e-results.json) show the recorded
 metadata and individual trials for this report.
 
 The unchanged runner imports the adjacent frozen `bench.py` and
 `run_benchmarks.py`; use the complete [bench/e2e directory](e2e/) to reproduce
 this study. The top-level `bench/bench.py` is a separate array-operation
 harness and is not a substitute for these inputs or timing boundaries.
-[Analysis and chart sources](results/2026-10-19-opus-speedups/) are stored alongside
+[Analysis and chart sources](results/2026-11-21-cold-edge/) are stored alongside
 the measurements so the tables and figures remain inspectable and reproducible.
 
 ## Other benchmarks and earlier results
 
-The [current component report](results/2026-10-19-opus-speedups/COMPONENTS.md)
-refreshes every component table on the same source and both machines:
-all-pair arrays, first-match host/device queries, cold queries, haversine
-matrices, four kNN shapes, dense PIP and CPU/GPU crossover. Its raw samples,
-JSON and CSV are retained alongside the tables. Component timings use the
-frozen best-of protocol, not the paired E2E medians above.
+The latest component runs cover all-pair arrays, first-match host and device
+queries, cold queries, haversine matrices, four kNN shapes, dense PIP and
+144 CPU/GPU/auto crossover timings per Mac. The report gives the minimum
+wall times and includes separate BallTree build-plus-query and prebuilt-tree
+timings. [Component tables](results/2026-11-21-cold-edge/COMPONENTS.md)
 
-Across the four `k=10` shapes, MLX kNN times improved **1.73–5.98× on M1
-Ultra** and **3.31–8.19× on M4 Max** versus the prior matched component
-runs. These are comparisons between separate sessions. The report retains
-both BallTree build-plus-query and prebuilt-tree timings: the prebuilt tree
-still narrowly wins the 1k-query × 1M-reference case on M4 Max.
-
-To reproduce the recorded component sweep with structured samples and the
-console evidence needed for the crossover tables, use the same installed
-build and pinned environment as above:
+To reproduce the recorded sweep, run the top-level array harness through
+the recorder in the pinned environment above. The recorder loads the
+adjacent `bench.py`.
 
 ```bash
 COMPONENT_OUTPUT=$(mktemp -d /tmp/mlx-geospatial-components.XXXXXX)
+COMPONENT_DRIVER=$(mktemp -d /tmp/mlx-geospatial-driver.XXXXXX)
+cp "$BENCH_SOURCE/bench/bench.py" "$BENCH_SOURCE/bench/e2e/run_benchmarks.py" "$COMPONENT_DRIVER/"
 env -u MTL_DEBUG_LAYER -u MTL_SHADER_VALIDATION \
   -u METAL_DEVICE_WRAPPER_TYPE -u METAL_DEBUG_ERROR_MODE -u MLX_METAL_DEBUG \
   -u MLX_GEOSPATIAL_BACKEND \
+  PYTHONPATH="$BENCH_SOURCE" \
   OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
   MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
-  caffeinate -dimsu python bench/e2e/run_benchmarks.py \
+  caffeinate -dimsu python "$COMPONENT_DRIVER/run_benchmarks.py" \
   --output "$COMPONENT_OUTPUT" --machine-label "My Apple silicon Mac" \
   > "$COMPONENT_OUTPUT/benchmark.log" 2>&1
 ```
@@ -235,12 +219,9 @@ env -u MTL_DEBUG_LAYER -u MTL_SHADER_VALIDATION \
 The full sweep replays the reference input sequence; individual `--op`
 commands below start the random generator at a different position.
 
-[Historical measurements](HISTORICAL.md) preserve the pre-release warm
-point-in-polygon, first-match, CPU/GPU crossover, distance-matrix, and kNN
-results, plus earlier optimization studies and the preceding complete E2E run.
-They keep their original runtime, output, precision, and index-reuse caveats.
-In particular, warm NumPy pair arrays are not complete GeoDataFrames, and the
-distance comparison uses float32 MLX results versus float64 CPU results.
+The [October release benchmarks](results/2026-10-19-opus-speedups/) and
+[historical measurements](HISTORICAL.md) preserve their original runtime,
+output, precision and index-reuse contracts.
 
 Use the separate array harness for new component measurements:
 
@@ -256,3 +237,32 @@ The dense-PIP mode is a kernel microbenchmark with pre-ingested polygons and
 device-resident points. Crossover measurements concern the library's own
 float32 NumPy fallback versus its GPU route, not GeoPandas. BallTree results
 must distinguish tree construction plus query from querying an existing tree.
+
+## Public API benchmarks
+
+Run `python bench/bench_public_api.py` for native `sjoin`, `PreparedJoin`,
+`HaversineReference`, detailed-polygon first-match routing, and all-match
+batching. It reports median query times, separates preparation from repeat
+queries, and verifies complete spatial join outputs and prepared kNN results
+outside the timers. The detailed-polygon cold timings include an edge-index
+build when dispatch triggers one. Use `--raw-only` with v0.1.1 to measure
+the same inputs through the APIs available in that release.
+
+### Cold edge-index routing
+
+![Median first-match query latencies before and after tuning on both Macs](results/2026-11-21-cold-edge/cold-edge-routing.png)
+
+In the public first-match sweep, 65,536 points against 260 zones of 2,048
+vertices each went from **32.69 ms to 1.78 ms on M1 Ultra** and **24.00 ms
+to 1.23 ms on M4 Max**. The two builds were measured in separate sessions.
+Each query starts with a polygon set and grid already built and an empty
+edge cache.
+
+The paired dispatch sweep alternated the two revisions on the same inputs.
+All 96 cases per Mac returned identical results. Among the 36 cases where
+the build decision changed, median speedups were **1.83× on M1 Ultra** and
+**2.14× on M4 Max**. The M1 all-match case with 262,144 points and 260
+4,096-vertex zones increased from 65.9 ms to 72.6 ms.
+[M1 paired samples](results/2026-11-21-cold-edge/m1/cold-dispatch-ab.jsonl) ·
+[M4 paired samples](results/2026-11-21-cold-edge/m4/cold-dispatch-ab.jsonl) ·
+[Chart SVG](results/2026-11-21-cold-edge/cold-edge-routing.svg)

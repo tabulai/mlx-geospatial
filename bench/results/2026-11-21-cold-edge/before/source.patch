@@ -1,0 +1,281 @@
+--- a/mlx_geospatial/_boundary.py
++++ b/mlx_geospatial/_boundary.py
+@@ -16,2 +15,0 @@
+-_COLD_LINEAR_BOUNDARY_POINTS = 98_304
+-_COLD_LONG_BOUNDARY_POINTS = 65_536
+@@ -181,13 +178,0 @@
+-def cold_boundary_prefers_index(polygons, n: int) -> bool:
+-    """Whether the cold boundary pass should build bands before containment."""
+-    from ._edge_index import cold_edge_index_eligible
+-
+-    # For the longest rings, the fallback is a host search rather than linear
+-    # Metal traversal, so building bands pays off at a smaller point count.
+-    minimum = (
+-        _COLD_LINEAR_BOUNDARY_POINTS if polygons.max_edges_per_ring <= _MAX_RING_EDGES
+-        else _COLD_LONG_BOUNDARY_POINTS
+-    )
+-    return n >= minimum and cold_edge_index_eligible(polygons)
+-
+-
+@@ -204,6 +189,3 @@
+-    polygons = index.polygons
+-    if polygons._y_edge_index is False and not cold_boundary_prefers_index(
+-        polygons, int(local.shape[0])
+-    ):
+-        return None
+-    edge_index = get_edge_index(polygons)
++    if int(local.shape[0]) < 65_536 and index.polygons._y_edge_index is False:
++        return None
++    edge_index = get_edge_index(index.polygons)
+@@ -233,0 +216 @@
++    polygons = index.polygons
+--- a/mlx_geospatial/_edge_index.py
++++ b/mlx_geospatial/_edge_index.py
+@@ -66,10 +65,0 @@
+-def cold_edge_index_eligible(polygons) -> bool:
+-    """Whether estimate work is worthwhile for a cold, buildable layer."""
+-    return (
+-        polygons._y_edge_index is False
+-        and polygons.max_edges_per_ring >= _MIN_RING_EDGES
+-        and polygons.n_polygons <= 1024
+-        and polygons._total_edges <= _MAX_REFERENCES
+-    )
+-
+-
+@@ -83 +73 @@
+-    if polygons._total_edges > _MAX_REFERENCES:
++    if int(polygons._geom_edge_counts.sum()) > _MAX_REFERENCES:
+--- a/mlx_geospatial/_pip.py
++++ b/mlx_geospatial/_pip.py
+@@ -1283 +1282,0 @@
+-    candidate_edge_work: int | None = None,
+@@ -1302,4 +1301,2 @@
+-    indexed = indexed_pip(
+-        "pairs", points_local, polygons, [pair_point, pair_poly], [n_pairs],
+-        threadgroup=threadgroup, candidate_edge_work=candidate_edge_work,
+-    )
++    indexed = indexed_pip("pairs", points_local, polygons,
++                          [pair_point, pair_poly], [n_pairs], threadgroup=threadgroup)
+@@ -1349 +1345,0 @@
+-    candidate_edge_work: int | None = None,
+@@ -1361,0 +1358,5 @@
++    indexed = indexed_pip("first", points_local, polygons,
++                          [point_cell, cell_offsets, cell_poly], [n_points],
++                          threadgroup=threadgroup)
++    if indexed is not None:
++        return indexed
+@@ -1371,7 +1371,0 @@
+-    indexed = indexed_pip(
+-        "first", points_local, polygons, [point_cell, cell_offsets, cell_poly],
+-        [n_points], threadgroup=threadgroup, candidate_edge_work=candidate_edge_work,
+-        cooperative=strategy != "scalar",
+-    )
+-    if indexed is not None:
+-        return indexed
+@@ -1423 +1416,0 @@
+-    candidate_edge_work: int | None = None,
+@@ -1528 +1520,0 @@
+-            candidate_edge_work=candidate_edge_work,
+--- a/mlx_geospatial/_pip_indexed.py
++++ b/mlx_geospatial/_pip_indexed.py
+@@ -7 +7 @@
+-from ._edge_index import EDGE_BIN_HEADER, cold_edge_index_eligible, get_edge_index
++from ._edge_index import EDGE_BIN_HEADER, _MIN_RING_EDGES, get_edge_index
+@@ -94,8 +94 @@
+-# The index covers the whole layer. Estimate the work avoided in the current
+-# query from its candidate edges, using a higher break-even when cooperative
+-# traversal is available. These ratios cover the M1 Ultra and M4 Max sweeps
+-# across dispersed zones, overlap, out-of-grid points and a long coastline.
+-_COLD_MIN_EDGE_WORK = 64_000_000
+-_COLD_FIRST_EDGES_MULTIPLIER = 6_000
+-_COLD_COOPERATIVE_EDGES_MULTIPLIER = 14_000
+-_COLD_PAIR_EDGES_MULTIPLIER = 4_800
++_COLD_MINIMUM = {"first": 65_536, "pairs": 32_768, "all": 32_768}
+@@ -112,4 +105 @@
+-def indexed_pip(
+-    kind, points, polygons, extra_inputs, shape, *,
+-    threadgroup=256, candidate_edge_work=None, cooperative=False,
+-):
++def indexed_pip(kind, points, polygons, extra_inputs, shape, *, threadgroup=256):
+@@ -124,2 +114,7 @@
+-    if polygons._y_edge_index is False:
+-        if not cold_edge_index_eligible(polygons):
++    # Cold index construction can dominate small detailed-polygon queries.
++    # First-match sees every point, including rows outside the grid; pair
++    # routes have already compacted away zero-candidate rows.
++    cold_minimum = _COLD_MINIMUM[kind]
++    if n < cold_minimum and polygons._y_edge_index is False:
++        max_ring = polygons.max_edges_per_ring
++        if max_ring < _MIN_RING_EDGES:
+@@ -127,15 +122,7 @@
+-        # A pair-range batch may include only part of the first and last cell's
+-        # candidates. Cap the cell estimate by the number of pairs evaluated.
+-        work_cap = n * polygons.max_edges_per_polygon
+-        edge_work = work_cap if candidate_edge_work is None else candidate_edge_work
+-        if kind == "first":
+-            min_size = 16_384
+-            multiplier = (
+-                _COLD_COOPERATIVE_EDGES_MULTIPLIER if cooperative else _COLD_FIRST_EDGES_MULTIPLIER
+-            )
+-        else:
+-            min_size = 32_768
+-            multiplier = _COLD_PAIR_EDGES_MULTIPLIER
+-            edge_work = min(edge_work, work_cap)
+-        build_now = n >= min_size and edge_work >= max(
+-            _COLD_MIN_EDGE_WORK, multiplier * polygons._total_edges
++        edge_work = n * max_ring
++        if edge_work < _REPEAT_MIN_EDGE_WORK:
++            return None
++        polygons._y_edge_index_work += edge_work
++        threshold = max(
++            _REPEAT_BUILD_MIN_EDGE_WORK,
++            _REPEAT_BUILD_EDGES_MULTIPLIER * polygons._total_edges,
+@@ -143,13 +130,2 @@
+-        if not build_now:
+-            # First-match can stop early. Preserve the per-batch work limit
+-            # while removing credit for points that never reach any polygon.
+-            repeat_work = min(edge_work, n * polygons.max_edges_per_ring)
+-            if repeat_work < _REPEAT_MIN_EDGE_WORK:
+-                return None
+-            polygons._y_edge_index_work += repeat_work
+-            threshold = max(
+-                _REPEAT_BUILD_MIN_EDGE_WORK,
+-                _REPEAT_BUILD_EDGES_MULTIPLIER * polygons._total_edges,
+-            )
+-            if polygons._y_edge_index_work < threshold:
+-                return None
++        if polygons._y_edge_index_work < threshold:
++            return None
+--- a/mlx_geospatial/join.py
++++ b/mlx_geospatial/join.py
+@@ -44,2 +44 @@
+-from ._boundary import boundary_candidate_rows, cold_boundary_prefers_index
+-from ._edge_index import _MIN_RING_EDGES, cold_edge_index_eligible
++from ._boundary import boundary_candidate_rows
+@@ -62 +60,0 @@
+-from ._pip_indexed import _REPEAT_MIN_EDGE_WORK
+@@ -892,8 +890,2 @@
+-    def _measure_cold_edge_work(self, n: int) -> bool:
+-        return (
+-            n * self._max_cell_edge_work >= _REPEAT_MIN_EDGE_WORK
+-            and cold_edge_index_eligible(self.polygons)
+-        )
+-
+-    def _device_first_match_bound(self, cell: mx.array, counts: mx.array) -> tuple[int, int]:
+-        """Cooperative traversal bound and cold index work for the used cells."""
++    def _device_first_match_bound(self, cell: mx.array, counts: mx.array) -> int:
++        """Device twin of :meth:`_first_match_ring_bound` (one sync if needed)."""
+@@ -901,2 +893,2 @@
+-            return 0, 0
+-        max_ring_mx, all_long_mx, edges_mx = self._device_tables()
++            return 0
++        max_ring_mx, all_long_mx, _ = self._device_tables()
+@@ -908,12 +900,7 @@
+-            work = None
+-            if self._measure_cold_edge_work(int(cell.shape[0])):
+-                work = mx.where(used, mx.take(edges_mx, safe), 0).astype(mx.int64).sum()
+-                mx.eval(all_long, max_ring, work)
+-            else:
+-                mx.eval(all_long, max_ring)
+-        longest = int(max_ring.item())
+-        candidate_work = int(work.item()) if work is not None and longest >= _MIN_RING_EDGES else 0
+-        return (longest if bool(all_long.item()) else 0), candidate_work
+-
+-    def _device_edge_bounds(self, cells: mx.array) -> tuple[int, int, int]:
+-        """Edge bounds and cold index work for candidate-bearing cells."""
++            mx.eval(all_long, max_ring)
++        if not bool(all_long.item()):
++            return 0
++        return int(max_ring.item())
++
++    def _device_edge_bounds(self, cells: mx.array) -> tuple[int, int]:
++        """Device twin of :meth:`_candidate_edge_bounds` for candidate-bearing cells."""
+@@ -924 +911 @@
+-            return self._max_cell_ring_edges, self._max_cell_edge_work, 0
++            return self._max_cell_ring_edges, self._max_cell_edge_work
+@@ -926 +913 @@
+-            return 0, 0, 0
++            return 0, 0
+@@ -929,2 +916 @@
+-            cell_work = mx.take(edge_work_mx, cells)
+-            largest_cell = cell_work.max()
++            edge_work = mx.take(edge_work_mx, cells).max()
+@@ -932,2 +918,2 @@
+-                mx.eval(largest_cell)
+-                return 0, int(largest_cell.item()), 0
++                mx.eval(edge_work)
++                return 0, int(edge_work.item())
+@@ -935,9 +921,2 @@
+-            work = None
+-            if self._measure_cold_edge_work(int(cells.shape[0])):
+-                work = cell_work.astype(mx.int64).sum()
+-                mx.eval(max_ring, largest_cell, work)
+-            else:
+-                mx.eval(max_ring, largest_cell)
+-        longest = int(max_ring.item())
+-        candidate_work = int(work.item()) if work is not None and longest >= _MIN_RING_EDGES else 0
+-        return longest, int(largest_cell.item()), candidate_work
++            mx.eval(max_ring, edge_work)
++        return int(max_ring.item()), int(edge_work.item())
+@@ -1070,8 +1048,0 @@
+-        prefilter_first = False
+-        boundary_rows = None
+-
+-        def exact_candidates():
+-            return boundary_candidate_rows(
+-                self, local, cell, max_pairs_per_batch=max_pairs_per_batch
+-            )
+-
+@@ -1080,3 +1051,5 @@
+-                candidates = boundary_rows
+-                if chosen == "gpu" and not prefilter_first:
+-                    candidates = exact_candidates()
++                candidates = (
++                    boundary_candidate_rows(
++                        self, local, cell, max_pairs_per_batch=max_pairs_per_batch
++                    ) if chosen == "gpu" else None
++                )
+@@ -1099,9 +1071,0 @@
+-        # If boundary filtering can build cold bands, run it first so
+-        # containment reuses them. Otherwise containment can still warm bands
+-        # for the boundary pass, for example on a dense candidate batch.
+-        prefilter_first = (
+-            exact_boundary
+-            and self._max_cell_count <= max_pairs_per_batch
+-            and cold_boundary_prefers_index(polyset, n)
+-        )
+-
+@@ -1115,2 +1078,0 @@
+-            if prefilter_first:
+-                boundary_rows = exact_candidates()
+@@ -1127,2 +1088,0 @@
+-        if prefilter_first:
+-            boundary_rows = exact_candidates()
+@@ -1223,3 +1183 @@
+-            max_ring_edges, max_candidate_edges, candidate_edge_work = self._device_edge_bounds(
+-                active_cell
+-            )
++            max_ring_edges, max_candidate_edges = self._device_edge_bounds(active_cell)
+@@ -1239 +1196,0 @@
+-                candidate_edge_work=candidate_edge_work,
+@@ -1263 +1220 @@
+-            max_ring_edges, max_candidate_edges, candidate_edge_work = self._device_edge_bounds(
++            max_ring_edges, max_candidate_edges = self._device_edge_bounds(
+@@ -1279 +1235,0 @@
+-                candidate_edge_work=candidate_edge_work,
+@@ -1306 +1262 @@
+-            max_ring_edges, candidate_edge_work = self._device_first_match_bound(cell, counts)
++            max_ring_edges = self._device_first_match_bound(cell, counts)
+@@ -1314 +1269,0 @@
+-                candidate_edge_work=candidate_edge_work,
+@@ -1332 +1287 @@
+-            max_ring_edges, candidate_edge_work = self._device_first_match_bound(
++            max_ring_edges = self._device_first_match_bound(
+@@ -1343 +1297,0 @@
+-                    candidate_edge_work=candidate_edge_work,
+@@ -1399,3 +1352,0 @@
+-            candidate_edge_work = 0
+-            if max_ring_edges >= _MIN_RING_EDGES and cold_edge_index_eligible(self.polygons):
+-                candidate_edge_work = int(self.polygons._geom_edge_counts[pair_poly].sum())
+@@ -1409 +1359,0 @@
+-                    candidate_edge_work=candidate_edge_work,

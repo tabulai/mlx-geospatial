@@ -1,0 +1,2635 @@
+{
+  "m4": {
+    "exact_cases": [
+      {
+        "points": 100000,
+        "polygons": 260,
+        "vertices": 48,
+        "rows": 109267,
+        "before_mlx_ms": 19.023458007723093,
+        "tuned_mlx_ms": 18.273166846483946,
+        "before_geopandas_ms": 60.872333124279976,
+        "tuned_geopandas_ms": 59.49316592887044,
+        "mlx_elapsed_change_percent": -3.9440314212828453,
+        "tuned_speedup_over_geopandas": 3.255766579963007
+      },
+      {
+        "points": 1000000,
+        "polygons": 260,
+        "vertices": 48,
+        "rows": 1076307,
+        "before_mlx_ms": 124.79566689580679,
+        "tuned_mlx_ms": 119.07333275303245,
+        "before_geopandas_ms": 860.8420831151307,
+        "tuned_geopandas_ms": 872.5937497802079,
+        "mlx_elapsed_change_percent": -4.58536284561224,
+        "tuned_speedup_over_geopandas": 7.32820464167268
+      },
+      {
+        "points": 10000000,
+        "polygons": 260,
+        "vertices": 48,
+        "rows": 10689126,
+        "before_mlx_ms": 1634.9166673608124,
+        "tuned_mlx_ms": 1639.3234580755234,
+        "before_geopandas_ms": 12170.280957594514,
+        "tuned_geopandas_ms": 12183.569832704961,
+        "mlx_elapsed_change_percent": 0.26954222210142653,
+        "tuned_speedup_over_geopandas": 7.432071915208125
+      },
+      {
+        "points": 1000000,
+        "polygons": 10000,
+        "vertices": 48,
+        "rows": 1121558,
+        "before_mlx_ms": 193.34429176524282,
+        "tuned_mlx_ms": 198.56974994763732,
+        "before_geopandas_ms": 1023.7333751283586,
+        "tuned_geopandas_ms": 1025.1388330943882,
+        "mlx_elapsed_change_percent": 2.7026700062804165,
+        "tuned_speedup_over_geopandas": 5.162613305222555
+      },
+      {
+        "points": 1000000,
+        "polygons": 260,
+        "vertices": 2048,
+        "rows": 1076107,
+        "before_mlx_ms": 175.3462078049779,
+        "tuned_mlx_ms": 170.64237501472235,
+        "before_geopandas_ms": 1141.034749802202,
+        "tuned_geopandas_ms": 1171.602333895862,
+        "mlx_elapsed_change_percent": -2.6825973878415454,
+        "tuned_speedup_over_geopandas": 6.865834666182892
+      },
+      {
+        "points": 1000000,
+        "polygons": 1,
+        "vertices": 150000,
+        "rows": 217315,
+        "before_mlx_ms": 95.34270782023668,
+        "tuned_mlx_ms": 103.4021251834929,
+        "before_geopandas_ms": 1691.1361659877002,
+        "tuned_geopandas_ms": 1696.576707996428,
+        "mlx_elapsed_change_percent": 8.453103071555091,
+        "tuned_speedup_over_geopandas": 16.407561304816095
+      }
+    ],
+    "exact_median_speedup": 7.097019653927786,
+    "components": {
+      "workload_deltas": [
+        {
+          "workload": "haversine_cross 20k x 20k",
+          "operation": "mlx-geospatial haversine_cross",
+          "before_ms": 9.877750184386969,
+          "tuned_ms": 9.626084007322788,
+          "elapsed_change_percent": -2.5478086848356507
+        },
+        {
+          "workload": "haversine_cross 20k x 20k",
+          "operation": "numpy float64",
+          "before_ms": 2725.047375075519,
+          "tuned_ms": 2720.0661250390112,
+          "elapsed_change_percent": -0.18279498852271647
+        },
+        {
+          "workload": "haversine_cross 20k x 20k",
+          "operation": "sklearn haversine_distances",
+          "before_ms": 3939.1210000030696,
+          "tuned_ms": 3945.5092498101294,
+          "elapsed_change_percent": 0.1621745005308206
+        },
+        {
+          "workload": "haversine_knn 1k queries, 1M refs, k=10",
+          "operation": "mlx-geospatial haversine_knn (k=10, brute force)",
+          "before_ms": 8.772208355367184,
+          "tuned_ms": 8.764499798417091,
+          "elapsed_change_percent": -0.08787475898672792
+        },
+        {
+          "workload": "haversine_knn 1k queries, 1M refs, k=10",
+          "operation": "sklearn BallTree(haversine), build + query, 1 core",
+          "before_ms": 312.14979104697704,
+          "tuned_ms": 310.68437499925494,
+          "elapsed_change_percent": -0.4694592435275924
+        },
+        {
+          "workload": "haversine_knn 1k queries, 1M refs, k=10",
+          "operation": "sklearn BallTree(haversine), query only (prebuilt), 1 core",
+          "before_ms": 8.363665547221899,
+          "tuned_ms": 8.478084113448858,
+          "elapsed_change_percent": 1.3680433008821602
+        },
+        {
+          "workload": "haversine_knn 1M queries, 10k refs, k=10",
+          "operation": "mlx-geospatial haversine_knn (k=10, brute force)",
+          "before_ms": 44.9518752284348,
+          "tuned_ms": 45.18516594544053,
+          "elapsed_change_percent": 0.5189788319624133
+        },
+        {
+          "workload": "haversine_knn 1M queries, 10k refs, k=10",
+          "operation": "sklearn BallTree(haversine), build + query, 1 core",
+          "before_ms": 4537.629167083651,
+          "tuned_ms": 4497.603625059128,
+          "elapsed_change_percent": -0.882080499545268
+        },
+        {
+          "workload": "haversine_knn 1M queries, 10k refs, k=10",
+          "operation": "sklearn BallTree(haversine), query only (prebuilt), 1 core",
+          "before_ms": 4522.146083880216,
+          "tuned_ms": 4497.9290827177465,
+          "elapsed_change_percent": -0.5355200984947017
+        },
+        {
+          "workload": "haversine_knn 200k queries, 200k refs, k=10",
+          "operation": "mlx-geospatial haversine_knn (k=10, brute force)",
+          "before_ms": 75.66970912739635,
+          "tuned_ms": 72.58245907723904,
+          "elapsed_change_percent": -4.079902097891852
+        },
+        {
+          "workload": "haversine_knn 200k queries, 200k refs, k=10",
+          "operation": "sklearn BallTree(haversine), build + query, 1 core",
+          "before_ms": 1234.8005003295839,
+          "tuned_ms": 1214.6721668541431,
+          "elapsed_change_percent": -1.6300878943657837
+        },
+        {
+          "workload": "haversine_knn 200k queries, 200k refs, k=10",
+          "operation": "sklearn BallTree(haversine), query only (prebuilt), 1 core",
+          "before_ms": 1163.4119166992605,
+          "tuned_ms": 1163.8289173133671,
+          "elapsed_change_percent": 0.03584290380054256
+        },
+        {
+          "workload": "haversine_knn 1M queries, 200k refs, k=10",
+          "operation": "mlx-geospatial haversine_knn (k=10, brute force)",
+          "before_ms": 323.446249589324,
+          "tuned_ms": 321.7641250230372,
+          "elapsed_change_percent": -0.5200630919117377
+        },
+        {
+          "workload": "haversine_knn 1M queries, 200k refs, k=10",
+          "operation": "sklearn BallTree(haversine), build + query, 1 core",
+          "before_ms": 5934.488834347576,
+          "tuned_ms": 5926.828959025443,
+          "elapsed_change_percent": -0.1290738854844542
+        },
+        {
+          "workload": "haversine_knn 1M queries, 200k refs, k=10",
+          "operation": "sklearn BallTree(haversine), query only (prebuilt), 1 core",
+          "before_ms": 5905.716792214662,
+          "tuned_ms": 5804.514249786735,
+          "elapsed_change_percent": -1.7136369045217315
+        },
+        {
+          "workload": "dense PIP 100,000 points x 32 polygons x 48 vertices",
+          "operation": "mlx-geospatial dense PIP (direct 2-D Metal)",
+          "before_ms": 0.7397499866783619,
+          "tuned_ms": 0.7887911051511765,
+          "elapsed_change_percent": 6.629417959575745
+        },
+        {
+          "workload": "dense PIP 100,000 points x 32 polygons x 48 vertices",
+          "operation": "composed MLX dense PIP oracle",
+          "before_ms": 11.76041690632701,
+          "tuned_ms": 11.393959168344736,
+          "elapsed_change_percent": -3.1160267607955427
+        },
+        {
+          "workload": "join 100,000 points x 260 zones (48 vertices)",
+          "operation": "mlx-geospatial point_in_polygon, first match (cold: ingest + index)",
+          "before_ms": 1.2432499788701534,
+          "tuned_ms": 1.466624904423952,
+          "elapsed_change_percent": 17.96701623568886
+        },
+        {
+          "workload": "join 100,000 points x 260 zones (48 vertices)",
+          "operation": "mlx-geospatial point_in_polygon, first match (warm index)",
+          "before_ms": 0.42795902118086815,
+          "tuned_ms": 0.42062485590577126,
+          "elapsed_change_percent": -1.7137541007687385
+        },
+        {
+          "workload": "join 100,000 points x 260 zones (48 vertices)",
+          "operation": "mlx-geospatial point_in_polygon, all pairs (warm index)",
+          "before_ms": 1.5902090817689896,
+          "tuned_ms": 1.5164157375693321,
+          "elapsed_change_percent": -4.640480616395914
+        },
+        {
+          "workload": "join 100,000 points x 260 zones (48 vertices)",
+          "operation": "mlx-geospatial point_in_polygon, first match (warm index, device-resident points)",
+          "before_ms": 0.3164163790643215,
+          "tuned_ms": 0.2993340604007244,
+          "elapsed_change_percent": -5.398683441771068
+        },
+        {
+          "workload": "join 100,000 points x 260 zones (48 vertices)",
+          "operation": "shapely STRtree bulk query (prepared polygons), all pairs, 1 core",
+          "before_ms": 48.792541958391666,
+          "tuned_ms": 47.58070828393102,
+          "elapsed_change_percent": -2.4836452986894075
+        },
+        {
+          "workload": "join 100,000 points x 260 zones (48 vertices)",
+          "operation": "geopandas sjoin (polygons left, prepared), all pairs, 1 core",
+          "before_ms": 50.96783395856619,
+          "tuned_ms": 58.39954083785415,
+          "elapsed_change_percent": 14.581170715101388
+        },
+        {
+          "workload": "join 100,000 points x 260 zones (48 vertices)",
+          "operation": "duckdb spatial join, count(*) over all pairs, 16 threads",
+          "before_ms": 131.32099993526936,
+          "tuned_ms": 131.20345817878842,
+          "elapsed_change_percent": -0.08950720489401265
+        },
+        {
+          "workload": "join 1,000,000 points x 260 zones (48 vertices)",
+          "operation": "mlx-geospatial point_in_polygon, first match (cold: ingest + index)",
+          "before_ms": 4.3647498823702335,
+          "tuned_ms": 8.25229100883007,
+          "elapsed_change_percent": 89.0667559706479
+        },
+        {
+          "workload": "join 1,000,000 points x 260 zones (48 vertices)",
+          "operation": "mlx-geospatial point_in_polygon, first match (warm index)",
+          "before_ms": 2.6331250555813313,
+          "tuned_ms": 2.6740417815744877,
+          "elapsed_change_percent": 1.5539226253772798
+        },
+        {
+          "workload": "join 1,000,000 points x 260 zones (48 vertices)",
+          "operation": "mlx-geospatial point_in_polygon, all pairs (warm index)",
+          "before_ms": 7.142249960452318,
+          "tuned_ms": 7.054542191326618,
+          "elapsed_change_percent": -1.2280131556771434
+        },
+        {
+          "workload": "join 1,000,000 points x 260 zones (48 vertices)",
+          "operation": "mlx-geospatial point_in_polygon, first match (warm index, device-resident points)",
+          "before_ms": 1.427165698260069,
+          "tuned_ms": 1.438290812075138,
+          "elapsed_change_percent": 0.7795250284274857
+        },
+        {
+          "workload": "join 1,000,000 points x 260 zones (48 vertices)",
+          "operation": "shapely STRtree bulk query (prepared polygons), all pairs, 1 core",
+          "before_ms": 777.2154160775244,
+          "tuned_ms": 766.4785413071513,
+          "elapsed_change_percent": -1.3814541693679128
+        },
+        {
+          "workload": "join 1,000,000 points x 260 zones (48 vertices)",
+          "operation": "geopandas sjoin (polygons left, prepared), all pairs, 1 core",
+          "before_ms": 787.059458438307,
+          "tuned_ms": 771.1103749461472,
+          "elapsed_change_percent": -2.02641405565549
+        },
+        {
+          "workload": "join 1,000,000 points x 260 zones (48 vertices)",
+          "operation": "duckdb spatial join, count(*) over all pairs, 16 threads",
+          "before_ms": 539.6082079969347,
+          "tuned_ms": 539.6033748984337,
+          "elapsed_change_percent": -0.0008956680846106124
+        },
+        {
+          "workload": "join 10,000,000 points x 260 zones (48 vertices)",
+          "operation": "mlx-geospatial point_in_polygon, first match (cold: ingest + index)",
+          "before_ms": 25.460375007241964,
+          "tuned_ms": 24.94725026190281,
+          "elapsed_change_percent": -2.015385653955226
+        },
+        {
+          "workload": "join 10,000,000 points x 260 zones (48 vertices)",
+          "operation": "mlx-geospatial point_in_polygon, first match (warm index)",
+          "before_ms": 24.417582899332047,
+          "tuned_ms": 24.315624963492155,
+          "elapsed_change_percent": -0.4175594949763828
+        },
+        {
+          "workload": "join 10,000,000 points x 260 zones (48 vertices)",
+          "operation": "mlx-geospatial point_in_polygon, all pairs (warm index)",
+          "before_ms": 68.25641682371497,
+          "tuned_ms": 67.66229216009378,
+          "elapsed_change_percent": -0.8704304903019211
+        },
+        {
+          "workload": "join 10,000,000 points x 260 zones (48 vertices)",
+          "operation": "mlx-geospatial point_in_polygon, first match (warm index, device-resident points)",
+          "before_ms": 13.055874966084957,
+          "tuned_ms": 12.796750292181969,
+          "elapsed_change_percent": -1.9847361787403206
+        },
+        {
+          "workload": "join 10,000,000 points x 260 zones (48 vertices)",
+          "operation": "shapely STRtree bulk query (prepared polygons), all pairs, 1 core",
+          "before_ms": 8567.563041578978,
+          "tuned_ms": 8547.545332927257,
+          "elapsed_change_percent": -0.23364530327438793
+        },
+        {
+          "workload": "join 10,000,000 points x 260 zones (48 vertices)",
+          "operation": "geopandas sjoin (polygons left, prepared), all pairs, 1 core",
+          "before_ms": 8828.184290789068,
+          "tuned_ms": 8826.127666980028,
+          "elapsed_change_percent": -0.023296113235715676
+        },
+        {
+          "workload": "join 10,000,000 points x 260 zones (48 vertices)",
+          "operation": "duckdb spatial join, count(*) over all pairs, 16 threads",
+          "before_ms": 5787.583416793495,
+          "tuned_ms": 5885.694041848183,
+          "elapsed_change_percent": 1.695191550414732
+        },
+        {
+          "workload": "join 1,000,000 points x 10,000 zones (48 vertices)",
+          "operation": "mlx-geospatial point_in_polygon, first match (cold: ingest + index)",
+          "before_ms": 26.72279207035899,
+          "tuned_ms": 26.343166828155518,
+          "elapsed_change_percent": -1.4206047077863326
+        },
+        {
+          "workload": "join 1,000,000 points x 10,000 zones (48 vertices)",
+          "operation": "mlx-geospatial point_in_polygon, first match (warm index)",
+          "before_ms": 2.677083946764469,
+          "tuned_ms": 2.824667375534773,
+          "elapsed_change_percent": 5.51284276866526
+        },
+        {
+          "workload": "join 1,000,000 points x 10,000 zones (48 vertices)",
+          "operation": "mlx-geospatial point_in_polygon, all pairs (warm index)",
+          "before_ms": 7.676249835640192,
+          "tuned_ms": 7.689416874200106,
+          "elapsed_change_percent": 0.1715295729273869
+        },
+        {
+          "workload": "join 1,000,000 points x 10,000 zones (48 vertices)",
+          "operation": "mlx-geospatial point_in_polygon, first match (warm index, device-resident points)",
+          "before_ms": 1.535915769636631,
+          "tuned_ms": 1.547082792967558,
+          "elapsed_change_percent": 0.7270596182217037
+        },
+        {
+          "workload": "join 1,000,000 points x 10,000 zones (48 vertices)",
+          "operation": "shapely STRtree bulk query (prepared polygons), all pairs, 1 core",
+          "before_ms": 874.3682079948485,
+          "tuned_ms": 914.4302499480546,
+          "elapsed_change_percent": 4.581827379689241
+        },
+        {
+          "workload": "join 1,000,000 points x 10,000 zones (48 vertices)",
+          "operation": "geopandas sjoin (polygons left, prepared), all pairs, 1 core",
+          "before_ms": 895.0372501276433,
+          "tuned_ms": 947.0029999502003,
+          "elapsed_change_percent": 5.805987383781619
+        },
+        {
+          "workload": "join 1,000,000 points x 10,000 zones (48 vertices)",
+          "operation": "duckdb spatial join, count(*) over all pairs, 16 threads",
+          "before_ms": 506.24637492001057,
+          "tuned_ms": 526.7337919212878,
+          "elapsed_change_percent": 4.046926164066722
+        },
+        {
+          "workload": "join 1,000,000 points x 260 zones (2,048 vertices)",
+          "operation": "mlx-geospatial point_in_polygon, first match (cold: ingest + index)",
+          "before_ms": 34.963374957442284,
+          "tuned_ms": 43.49479218944907,
+          "elapsed_change_percent": 24.401011751272005
+        },
+        {
+          "workload": "join 1,000,000 points x 260 zones (2,048 vertices)",
+          "operation": "mlx-geospatial point_in_polygon, first match (warm index)",
+          "before_ms": 4.173667170107365,
+          "tuned_ms": 4.1590421460568905,
+          "elapsed_change_percent": -0.3504118429763947
+        },
+        {
+          "workload": "join 1,000,000 points x 260 zones (2,048 vertices)",
+          "operation": "mlx-geospatial point_in_polygon, all pairs (warm index)",
+          "before_ms": 10.284457821398973,
+          "tuned_ms": 7.434208411723375,
+          "elapsed_change_percent": -27.71414360555844
+        },
+        {
+          "workload": "join 1,000,000 points x 260 zones (2,048 vertices)",
+          "operation": "mlx-geospatial point_in_polygon, first match (warm index, device-resident points)",
+          "before_ms": 2.911666873842478,
+          "tuned_ms": 2.9598339460790157,
+          "elapsed_change_percent": 1.6542782647718468
+        },
+        {
+          "workload": "join 1,000,000 points x 260 zones (2,048 vertices)",
+          "operation": "shapely STRtree bulk query (prepared polygons), all pairs, 1 core",
+          "before_ms": 1055.5590000003576,
+          "tuned_ms": 1083.5242080502212,
+          "elapsed_change_percent": 2.6493268542880255
+        },
+        {
+          "workload": "join 1,000,000 points x 260 zones (2,048 vertices)",
+          "operation": "geopandas sjoin (polygons left, prepared), all pairs, 1 core",
+          "before_ms": 1079.3287907727063,
+          "tuned_ms": 1111.6784578189254,
+          "elapsed_change_percent": 2.9972022726327374
+        },
+        {
+          "workload": "join 1,000,000 points x 260 zones (2,048 vertices)",
+          "operation": "duckdb spatial join, count(*) over all pairs, 16 threads",
+          "before_ms": 2226.721417158842,
+          "tuned_ms": 2270.770125091076,
+          "elapsed_change_percent": 1.9781867454455648
+        },
+        {
+          "workload": "join 1,000,000 points x one 150,000-vertex coastline polygon",
+          "operation": "mlx-geospatial point_in_polygon, first match (cold: ingest + index)",
+          "before_ms": 37.48954087495804,
+          "tuned_ms": 38.50258281454444,
+          "elapsed_change_percent": 2.702198842512593
+        },
+        {
+          "workload": "join 1,000,000 points x one 150,000-vertex coastline polygon",
+          "operation": "mlx-geospatial point_in_polygon, first match (warm index)",
+          "before_ms": 14.114291872829199,
+          "tuned_ms": 14.02350002899766,
+          "elapsed_change_percent": -0.6432617707610166
+        },
+        {
+          "workload": "join 1,000,000 points x one 150,000-vertex coastline polygon",
+          "operation": "mlx-geospatial point_in_polygon, all pairs (warm index)",
+          "before_ms": 11.122291907668114,
+          "tuned_ms": 11.216165963560343,
+          "elapsed_change_percent": 0.8440171924233519
+        },
+        {
+          "workload": "join 1,000,000 points x one 150,000-vertex coastline polygon",
+          "operation": "mlx-geospatial point_in_polygon, first match (warm index, device-resident points)",
+          "before_ms": 12.848667334765196,
+          "tuned_ms": 13.051415793597698,
+          "elapsed_change_percent": 1.5779726686822704
+        },
+        {
+          "workload": "join 1,000,000 points x one 150,000-vertex coastline polygon",
+          "operation": "shapely STRtree bulk query (prepared polygons), all pairs, 1 core",
+          "before_ms": 1721.9597501680255,
+          "tuned_ms": 1783.259625080973,
+          "elapsed_change_percent": 3.5598901139800576
+        },
+        {
+          "workload": "join 1,000,000 points x one 150,000-vertex coastline polygon",
+          "operation": "geopandas sjoin (polygons left, prepared), all pairs, 1 core",
+          "before_ms": 1766.4714162237942,
+          "tuned_ms": 1809.1540830209851,
+          "elapsed_change_percent": 2.4162670510929685
+        },
+        {
+          "workload": "join 1,000,000 points x one 150,000-vertex coastline polygon",
+          "operation": "duckdb spatial join, count(*) over all pairs, 16 threads",
+          "before_ms": 25561.783958692104,
+          "tuned_ms": 25623.12558433041,
+          "elapsed_change_percent": 0.23997396166650642
+        }
+      ],
+      "crossover_deltas": [
+        {
+          "layer": "48-vertex zones",
+          "points": 100,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 0.23499969393014908,
+          "tuned_ms": 0.5076248198747635
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 100,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.43770764023065567,
+          "tuned_ms": 0.41058287024497986
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 100,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.2372092567384243,
+          "tuned_ms": 0.2382500097155571
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 100,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 0.22399984300136566,
+          "tuned_ms": 0.23508304730057716
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 100,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 1.2813750654459,
+          "tuned_ms": 1.1377092450857162
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 100,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 0.22924970835447311,
+          "tuned_ms": 0.24116737768054008
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 200,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 0.3908751532435417,
+          "tuned_ms": 0.4227920435369015
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 200,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.40745828300714493,
+          "tuned_ms": 0.38837501779198647
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 200,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.37191668525338173,
+          "tuned_ms": 0.41116634383797646
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 200,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 0.3420826978981495,
+          "tuned_ms": 0.39837509393692017
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 200,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 1.0838750749826431,
+          "tuned_ms": 1.0845423676073551
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 200,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 0.3230832517147064,
+          "tuned_ms": 0.32133376225829124
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 500,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 0.7170420140028,
+          "tuned_ms": 0.7190420292317867
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 500,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.4743337631225586,
+          "tuned_ms": 0.2688746899366379
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 500,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.45516714453697205,
+          "tuned_ms": 0.27012499049305916
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 500,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 0.7241247221827507,
+          "tuned_ms": 0.7058330811560154
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 500,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 1.0780422016978264,
+          "tuned_ms": 0.7825000211596489
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 500,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 0.7067909464240074,
+          "tuned_ms": 0.6989580579102039
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 1000,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 1.420541200786829,
+          "tuned_ms": 1.382875256240368
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 1000,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.4386669024825096,
+          "tuned_ms": 0.22579217329621315
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 1000,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.3537498414516449,
+          "tuned_ms": 0.230416189879179
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 1000,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 1.336792018264532,
+          "tuned_ms": 1.3533327728509903
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 1000,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 0.9932080283761024,
+          "tuned_ms": 0.8070841431617737
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 1000,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 1.3452498242259026,
+          "tuned_ms": 1.3508331030607224
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 2000,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 2.7260412462055683,
+          "tuned_ms": 2.792375162243843
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 2000,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.20512519404292107,
+          "tuned_ms": 0.20037498325109482
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 2000,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.20862510427832603,
+          "tuned_ms": 0.19691698253154755
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 2000,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 2.729291096329689,
+          "tuned_ms": 2.67716683447361
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 2000,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 1.036166213452816,
+          "tuned_ms": 0.9049172513186932
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 2000,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 1.0309158824384212,
+          "tuned_ms": 0.9054578840732574
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 5000,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 6.811582949012518,
+          "tuned_ms": 6.906125228852034
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 5000,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.22920779883861542,
+          "tuned_ms": 0.22141588851809502
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 5000,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.23750029504299164,
+          "tuned_ms": 0.21737534552812576
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 5000,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 6.991708185523748,
+          "tuned_ms": 6.801625248044729
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 5000,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 1.0262923315167427,
+          "tuned_ms": 1.1092079803347588
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 5000,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 1.1906251311302185,
+          "tuned_ms": 1.0257079266011715
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 10000,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 13.90850031748414,
+          "tuned_ms": 13.740625232458115
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 10000,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.24191662669181824,
+          "tuned_ms": 0.2165418118238449
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 10000,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.23920927196741104,
+          "tuned_ms": 0.22108294069766998
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 10000,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 13.714707922190428,
+          "tuned_ms": 13.658583629876375
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 10000,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 0.9784582071006298,
+          "tuned_ms": 1.0404582135379314
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 10000,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 1.0322919115424156,
+          "tuned_ms": 1.026500016450882
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 50000,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 68.77904199063778,
+          "tuned_ms": 68.78041662275791
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 50000,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.29945792630314827,
+          "tuned_ms": 0.2925829030573368
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 50000,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.3097918815910816,
+          "tuned_ms": 0.29183272272348404
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 50000,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 68.37504217401147,
+          "tuned_ms": 68.15779116004705
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 50000,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 1.2492500245571136,
+          "tuned_ms": 1.3046669773757458
+        },
+        {
+          "layer": "48-vertex zones",
+          "points": 50000,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 1.2728329747915268,
+          "tuned_ms": 1.2336671352386475
+        },
+        {
+          "layer": "square tiling",
+          "points": 100,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 0.06374996155500412,
+          "tuned_ms": 0.06241584196686745
+        },
+        {
+          "layer": "square tiling",
+          "points": 100,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.1965416595339775,
+          "tuned_ms": 0.15133386477828026
+        },
+        {
+          "layer": "square tiling",
+          "points": 100,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.06412481889128685,
+          "tuned_ms": 0.06479211151599884
+        },
+        {
+          "layer": "square tiling",
+          "points": 100,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 0.056957826018333435,
+          "tuned_ms": 0.057165976613759995
+        },
+        {
+          "layer": "square tiling",
+          "points": 100,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 0.6980840116739273,
+          "tuned_ms": 0.7278746925294399
+        },
+        {
+          "layer": "square tiling",
+          "points": 100,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 0.05854107439517975,
+          "tuned_ms": 0.06225006654858589
+        },
+        {
+          "layer": "square tiling",
+          "points": 200,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 0.07679080590605736,
+          "tuned_ms": 0.07595820352435112
+        },
+        {
+          "layer": "square tiling",
+          "points": 200,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.15154201537370682,
+          "tuned_ms": 0.15970924869179726
+        },
+        {
+          "layer": "square tiling",
+          "points": 200,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.07850024849176407,
+          "tuned_ms": 0.0777500681579113
+        },
+        {
+          "layer": "square tiling",
+          "points": 200,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 0.07020868360996246,
+          "tuned_ms": 0.0700000673532486
+        },
+        {
+          "layer": "square tiling",
+          "points": 200,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 0.7368749938905239,
+          "tuned_ms": 0.6910832598805428
+        },
+        {
+          "layer": "square tiling",
+          "points": 200,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 0.07349997758865356,
+          "tuned_ms": 0.08312519639730453
+        },
+        {
+          "layer": "square tiling",
+          "points": 500,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 0.11195894330739975,
+          "tuned_ms": 0.11187465861439705
+        },
+        {
+          "layer": "square tiling",
+          "points": 500,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.18920795992016792,
+          "tuned_ms": 0.15141628682613373
+        },
+        {
+          "layer": "square tiling",
+          "points": 500,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.11920789256691933,
+          "tuned_ms": 0.11720787733793259
+        },
+        {
+          "layer": "square tiling",
+          "points": 500,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 0.10854192078113556,
+          "tuned_ms": 0.1082499511539936
+        },
+        {
+          "layer": "square tiling",
+          "points": 500,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 0.8757081814110279,
+          "tuned_ms": 0.719582661986351
+        },
+        {
+          "layer": "square tiling",
+          "points": 500,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 0.10979175567626953,
+          "tuned_ms": 0.10629231110215187
+        },
+        {
+          "layer": "square tiling",
+          "points": 1000,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 0.19733421504497528,
+          "tuned_ms": 0.17312495037913322
+        },
+        {
+          "layer": "square tiling",
+          "points": 1000,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.16837473958730698,
+          "tuned_ms": 0.15866709873080254
+        },
+        {
+          "layer": "square tiling",
+          "points": 1000,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.17804186791181564,
+          "tuned_ms": 0.1749172806739807
+        },
+        {
+          "layer": "square tiling",
+          "points": 1000,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 0.16616610810160637,
+          "tuned_ms": 0.1620831899344921
+        },
+        {
+          "layer": "square tiling",
+          "points": 1000,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 0.6958344019949436,
+          "tuned_ms": 0.7650838233530521
+        },
+        {
+          "layer": "square tiling",
+          "points": 1000,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 0.1677079126238823,
+          "tuned_ms": 0.1638750545680523
+        },
+        {
+          "layer": "square tiling",
+          "points": 2000,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 0.295375008136034,
+          "tuned_ms": 0.29675010591745377
+        },
+        {
+          "layer": "square tiling",
+          "points": 2000,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.142666045576334,
+          "tuned_ms": 0.14595920220017433
+        },
+        {
+          "layer": "square tiling",
+          "points": 2000,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.29729213565588,
+          "tuned_ms": 0.29866723343729973
+        },
+        {
+          "layer": "square tiling",
+          "points": 2000,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 0.27858419343829155,
+          "tuned_ms": 0.2739592455327511
+        },
+        {
+          "layer": "square tiling",
+          "points": 2000,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 0.7283338345587254,
+          "tuned_ms": 0.7042079232633114
+        },
+        {
+          "layer": "square tiling",
+          "points": 2000,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 0.2819159999489784,
+          "tuned_ms": 0.2769157290458679
+        },
+        {
+          "layer": "square tiling",
+          "points": 5000,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 0.7197908125817776,
+          "tuned_ms": 0.6397911347448826
+        },
+        {
+          "layer": "square tiling",
+          "points": 5000,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.14687469229102135,
+          "tuned_ms": 0.154959037899971
+        },
+        {
+          "layer": "square tiling",
+          "points": 5000,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.14954200014472008,
+          "tuned_ms": 0.15637511387467384
+        },
+        {
+          "layer": "square tiling",
+          "points": 5000,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 0.6397501565515995,
+          "tuned_ms": 0.6501246243715286
+        },
+        {
+          "layer": "square tiling",
+          "points": 5000,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 0.7503340020775795,
+          "tuned_ms": 0.7393336854875088
+        },
+        {
+          "layer": "square tiling",
+          "points": 5000,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 0.6454167887568474,
+          "tuned_ms": 0.6384160369634628
+        },
+        {
+          "layer": "square tiling",
+          "points": 10000,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 1.304958015680313,
+          "tuned_ms": 1.2828749604523182
+        },
+        {
+          "layer": "square tiling",
+          "points": 10000,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.163292046636343,
+          "tuned_ms": 0.15649991109967232
+        },
+        {
+          "layer": "square tiling",
+          "points": 10000,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.1522088423371315,
+          "tuned_ms": 0.15679188072681427
+        },
+        {
+          "layer": "square tiling",
+          "points": 10000,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 1.248207874596119,
+          "tuned_ms": 1.1857911013066769
+        },
+        {
+          "layer": "square tiling",
+          "points": 10000,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 0.7503330707550049,
+          "tuned_ms": 0.8508330211043358
+        },
+        {
+          "layer": "square tiling",
+          "points": 10000,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 0.7785828784108162,
+          "tuned_ms": 0.8585830219089985
+        },
+        {
+          "layer": "square tiling",
+          "points": 50000,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 6.504124961793423,
+          "tuned_ms": 6.554749794304371
+        },
+        {
+          "layer": "square tiling",
+          "points": 50000,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.1888340339064598,
+          "tuned_ms": 0.1964997500181198
+        },
+        {
+          "layer": "square tiling",
+          "points": 50000,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.20316708832979202,
+          "tuned_ms": 0.21033408120274544
+        },
+        {
+          "layer": "square tiling",
+          "points": 50000,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 6.140208803117275,
+          "tuned_ms": 6.229708902537823
+        },
+        {
+          "layer": "square tiling",
+          "points": 50000,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 0.8090827614068985,
+          "tuned_ms": 0.873916782438755
+        },
+        {
+          "layer": "square tiling",
+          "points": 50000,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 0.8702920749783516,
+          "tuned_ms": 0.8822907693684101
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 100,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 5.415165796875954,
+          "tuned_ms": 5.532292183488607
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 100,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.29129208996891975,
+          "tuned_ms": 0.3409581258893013
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 100,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.29795803129673004,
+          "tuned_ms": 0.31075021252036095
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 100,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 5.4137916304171085,
+          "tuned_ms": 5.483499728143215
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 100,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 0.9147501550614834,
+          "tuned_ms": 0.826041679829359
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 100,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 0.7895831950008869,
+          "tuned_ms": 0.8167498745024204
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 200,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 11.335582938045263,
+          "tuned_ms": 11.391457635909319
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 200,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.378292053937912,
+          "tuned_ms": 0.34787505865097046
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 200,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.40349969640374184,
+          "tuned_ms": 0.391415785998106
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 200,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 11.327249929308891,
+          "tuned_ms": 11.353583075106144
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 200,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 1.0698330588638783,
+          "tuned_ms": 1.042666845023632
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 200,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 1.0003326460719109,
+          "tuned_ms": 0.8663330227136612
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 500,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 27.78612496331334,
+          "tuned_ms": 27.76916604489088
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 500,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.39025023579597473,
+          "tuned_ms": 0.3936667926609516
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 500,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.3881668671965599,
+          "tuned_ms": 0.37229200825095177
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 500,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 28.16691668704152,
+          "tuned_ms": 27.624541893601418
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 500,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 1.1221659369766712,
+          "tuned_ms": 0.9974581189453602
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 500,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 1.1732918210327625,
+          "tuned_ms": 0.9826668538153172
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 1000,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 55.005292408168316,
+          "tuned_ms": 54.604167118668556
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 1000,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.34458283334970474,
+          "tuned_ms": 0.35229185596108437
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 1000,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.34633371978998184,
+          "tuned_ms": 0.3470410592854023
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 1000,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 54.78445906192064,
+          "tuned_ms": 54.80200005695224
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 1000,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 1.1160420253872871,
+          "tuned_ms": 1.1278330348432064
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 1000,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 1.0469579137861729,
+          "tuned_ms": 1.0996670462191105
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 2000,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 110.87254201993346,
+          "tuned_ms": 110.6094173155725
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 2000,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.3492920659482479,
+          "tuned_ms": 0.3758752718567848
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 2000,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.36287494003772736,
+          "tuned_ms": 0.40558306500315666
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 2000,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 112.637999933213,
+          "tuned_ms": 112.05041594803333
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 2000,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 1.0856250301003456,
+          "tuned_ms": 1.1165831238031387
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 2000,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 1.0562497191131115,
+          "tuned_ms": 1.07645895332098
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 5000,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 284.83125008642673,
+          "tuned_ms": 282.0035829208791
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 5000,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.45495806261897087,
+          "tuned_ms": 0.5128341726958752
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 5000,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.41512493044137955,
+          "tuned_ms": 0.46737492084503174
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 5000,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 284.060874953866,
+          "tuned_ms": 286.1246671527624
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 5000,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 1.3574170880019665,
+          "tuned_ms": 1.3188333250582218
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 5000,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 1.348000019788742,
+          "tuned_ms": 1.378332730382681
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 10000,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 576.0707091540098,
+          "tuned_ms": 573.5824587754905
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 10000,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.5539995618164539,
+          "tuned_ms": 0.5373749881982803
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 10000,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.4903748631477356,
+          "tuned_ms": 0.5255001597106457
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 10000,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 572.8805842809379,
+          "tuned_ms": 570.2470000833273
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 10000,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 1.666999887675047,
+          "tuned_ms": 1.842666883021593
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 10000,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 1.700541004538536,
+          "tuned_ms": 1.8534157425165176
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 50000,
+          "all_matches": false,
+          "line": 388,
+          "before_ms": 2844.8113752529025,
+          "tuned_ms": 2844.1792922094464
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 50000,
+          "all_matches": false,
+          "line": 392,
+          "before_ms": 0.5607921630144119,
+          "tuned_ms": 0.5935421213507652
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 50000,
+          "all_matches": false,
+          "line": 393,
+          "before_ms": 0.5964171141386032,
+          "tuned_ms": 0.5412502214312553
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 50000,
+          "all_matches": true,
+          "line": 388,
+          "before_ms": 2839.707041159272,
+          "tuned_ms": 2833.370874635875
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 50000,
+          "all_matches": true,
+          "line": 392,
+          "before_ms": 1.3044998049736023,
+          "tuned_ms": 1.3124588876962662
+        },
+        {
+          "layer": "2048-vertex zones",
+          "points": 50000,
+          "all_matches": true,
+          "line": 393,
+          "before_ms": 1.3073342852294445,
+          "tuned_ms": 1.2827496975660324
+        }
+      ],
+      "reports": 12,
+      "crossover_timings": 144,
+      "total_timings": 208,
+      "exceptions": [],
+      "missing": []
+    },
+    "tests": "825 passed, 1 skipped in 22.10s",
+    "public_pip": [
+      {
+        "points": 1024,
+        "before_cold_ms": 0.71,
+        "tuned_cold_ms": 0.59,
+        "before_warm_ms": 1.25,
+        "tuned_warm_ms": 0.6
+      },
+      {
+        "points": 2048,
+        "before_cold_ms": 0.47,
+        "tuned_cold_ms": 0.5,
+        "before_warm_ms": 0.53,
+        "tuned_warm_ms": 0.55
+      },
+      {
+        "points": 4096,
+        "before_cold_ms": 0.46,
+        "tuned_cold_ms": 0.48,
+        "before_warm_ms": 0.54,
+        "tuned_warm_ms": 0.55
+      },
+      {
+        "points": 4097,
+        "before_cold_ms": 0.43,
+        "tuned_cold_ms": 0.47,
+        "before_warm_ms": 0.54,
+        "tuned_warm_ms": 0.53
+      },
+      {
+        "points": 8192,
+        "before_cold_ms": 0.48,
+        "tuned_cold_ms": 0.53,
+        "before_warm_ms": 0.52,
+        "tuned_warm_ms": 0.53
+      },
+      {
+        "points": 16384,
+        "before_cold_ms": 0.58,
+        "tuned_cold_ms": 0.63,
+        "before_warm_ms": 0.52,
+        "tuned_warm_ms": 0.55
+      },
+      {
+        "points": 32768,
+        "before_cold_ms": 0.74,
+        "tuned_cold_ms": 0.8,
+        "before_warm_ms": 0.53,
+        "tuned_warm_ms": 0.57
+      },
+      {
+        "points": 50000,
+        "before_cold_ms": 1.0,
+        "tuned_cold_ms": 1.04,
+        "before_warm_ms": 0.56,
+        "tuned_warm_ms": 0.61
+      },
+      {
+        "points": 65536,
+        "before_cold_ms": 24.0,
+        "tuned_cold_ms": 1.23,
+        "before_warm_ms": 2.11,
+        "tuned_warm_ms": 0.7
+      }
+    ],
+    "other_public_workloads": [
+      {
+        "operation": "sjoin 1M x 260 (48v, narrow, inner, all) cold",
+        "before_ms": 33.3,
+        "tuned_ms": 29.2
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, narrow, inner, all) prepare",
+        "before_ms": 0.8,
+        "tuned_ms": 0.8
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, narrow, inner, all) first prepared",
+        "before_ms": 26.3,
+        "tuned_ms": 27.6
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, narrow, inner, all) warm",
+        "before_ms": 26.8,
+        "tuned_ms": 29.0
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, narrow, left, all) cold",
+        "before_ms": 57.0,
+        "tuned_ms": 56.4
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, narrow, left, all) prepare",
+        "before_ms": 0.8,
+        "tuned_ms": 0.9
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, narrow, left, all) first prepared",
+        "before_ms": 55.8,
+        "tuned_ms": 59.9
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, narrow, left, all) warm",
+        "before_ms": 55.5,
+        "tuned_ms": 55.1
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, wide, inner, all) cold",
+        "before_ms": 51.6,
+        "tuned_ms": 51.8
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, wide, inner, all) prepare",
+        "before_ms": 1.2,
+        "tuned_ms": 1.1
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, wide, inner, all) first prepared",
+        "before_ms": 52.4,
+        "tuned_ms": 53.2
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, wide, inner, all) warm",
+        "before_ms": 54.2,
+        "tuned_ms": 54.7
+      },
+      {
+        "operation": "sjoin 1M x 260 (2048v, narrow, inner, all) cold",
+        "before_ms": 87.5,
+        "tuned_ms": 92.0
+      },
+      {
+        "operation": "sjoin 1M x 260 (2048v, narrow, inner, all) prepare",
+        "before_ms": 5.5,
+        "tuned_ms": 5.7
+      },
+      {
+        "operation": "sjoin 1M x 260 (2048v, narrow, inner, all) first prepared",
+        "before_ms": 94.1,
+        "tuned_ms": 79.2
+      },
+      {
+        "operation": "sjoin 1M x 260 (2048v, narrow, inner, all) warm",
+        "before_ms": 34.5,
+        "tuned_ms": 33.8
+      },
+      {
+        "operation": "sjoin 100k x 260 (2048v, narrow, inner, all) cold",
+        "before_ms": 52.3,
+        "tuned_ms": 53.4
+      },
+      {
+        "operation": "sjoin 100k x 260 (2048v, narrow, inner, all) prepare",
+        "before_ms": 5.6,
+        "tuned_ms": 5.6
+      },
+      {
+        "operation": "sjoin 100k x 260 (2048v, narrow, inner, all) first prepared",
+        "before_ms": 44.0,
+        "tuned_ms": 47.4
+      },
+      {
+        "operation": "sjoin 100k x 260 (2048v, narrow, inner, all) warm",
+        "before_ms": 6.7,
+        "tuned_ms": 7.0
+      },
+      {
+        "operation": "sjoin 1M x 10k (48v, narrow, inner, all) cold",
+        "before_ms": 71.7,
+        "tuned_ms": 69.8
+      },
+      {
+        "operation": "sjoin 1M x 10k (48v, narrow, inner, all) prepare",
+        "before_ms": 17.0,
+        "tuned_ms": 17.3
+      },
+      {
+        "operation": "sjoin 1M x 10k (48v, narrow, inner, all) first prepared",
+        "before_ms": 60.7,
+        "tuned_ms": 65.0
+      },
+      {
+        "operation": "sjoin 1M x 10k (48v, narrow, inner, all) warm",
+        "before_ms": 37.9,
+        "tuned_ms": 37.2
+      },
+      {
+        "operation": "sjoin 1M x 260 (2048v, narrow, inner, first) cold",
+        "before_ms": 74.2,
+        "tuned_ms": 76.6
+      },
+      {
+        "operation": "sjoin 1M x 260 (2048v, narrow, inner, first) prepare",
+        "before_ms": 5.9,
+        "tuned_ms": 6.1
+      },
+      {
+        "operation": "sjoin 1M x 260 (2048v, narrow, inner, first) first prepared",
+        "before_ms": 75.5,
+        "tuned_ms": 68.8
+      },
+      {
+        "operation": "sjoin 1M x 260 (2048v, narrow, inner, first) warm",
+        "before_ms": 26.1,
+        "tuned_ms": 26.4
+      },
+      {
+        "operation": "kNN 1 raw",
+        "before_ms": 29.66,
+        "tuned_ms": 30.53
+      },
+      {
+        "operation": "kNN 1 prepared",
+        "before_ms": 4.05,
+        "tuned_ms": 3.93
+      },
+      {
+        "operation": "kNN 10 raw",
+        "before_ms": 29.37,
+        "tuned_ms": 28.57
+      },
+      {
+        "operation": "kNN 10 prepared",
+        "before_ms": 3.08,
+        "tuned_ms": 3.23
+      },
+      {
+        "operation": "kNN 100 raw",
+        "before_ms": 5.5,
+        "tuned_ms": 5.82
+      },
+      {
+        "operation": "kNN 100 prepared",
+        "before_ms": 2.9,
+        "tuned_ms": 2.98
+      },
+      {
+        "operation": "kNN 500 raw",
+        "before_ms": 5.85,
+        "tuned_ms": 5.7
+      },
+      {
+        "operation": "kNN 500 prepared",
+        "before_ms": 3.42,
+        "tuned_ms": 3.57
+      },
+      {
+        "operation": "kNN 1,000 raw",
+        "before_ms": 8.66,
+        "tuned_ms": 8.89
+      },
+      {
+        "operation": "kNN 1,000 prepared",
+        "before_ms": 6.41,
+        "tuned_ms": 6.43
+      },
+      {
+        "operation": "kNN 4,096 raw",
+        "before_ms": 26.47,
+        "tuned_ms": 27.21
+      },
+      {
+        "operation": "kNN 4,096 prepared",
+        "before_ms": 23.7,
+        "tuned_ms": 23.56
+      },
+      {
+        "operation": "all-match cap default",
+        "before_ms": 1.81,
+        "tuned_ms": 1.92
+      },
+      {
+        "operation": "all-match cap 65,536",
+        "before_ms": 3.3,
+        "tuned_ms": 2.85
+      },
+      {
+        "operation": "all-match cap 8,192",
+        "before_ms": 11.01,
+        "tuned_ms": 11.25
+      },
+      {
+        "operation": "all-match cap 2,048",
+        "before_ms": 26.38,
+        "tuned_ms": 25.81
+      }
+    ],
+    "dispatch_ab_cases": 96,
+    "dispatch_changed_cases": 36,
+    "dispatch_changed_speedup_median": 2.1395557403628747,
+    "dispatch_changed_largest_slowdowns": [
+      {
+        "layer": "16 x 2048",
+        "route": "first",
+        "n": 262144,
+        "before_ms": 2.0827294792979956,
+        "tuned_ms": 2.867854433134198,
+        "before_build": [
+          true,
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "tuned_build": [
+          false,
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        "equality": true,
+        "samples_ms": {
+          "before": [
+            2.048041671514511,
+            2.061250153928995,
+            2.302041742950678,
+            2.104208804666996,
+            2.2380417212843895,
+            2.0505841821432114
+          ],
+          "tuned": [
+            2.795542124658823,
+            2.8444170020520687,
+            2.8024576604366302,
+            2.9282919131219387,
+            2.906584180891514,
+            2.8912918642163277
+          ]
+        }
+      },
+      {
+        "layer": "16 x 2048",
+        "route": "exact-first",
+        "n": 65536,
+        "before_ms": 2.998604439198971,
+        "tuned_ms": 2.6789794210344553,
+        "before_build": [
+          true,
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "tuned_build": [
+          false,
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        "equality": true,
+        "samples_ms": {
+          "before": [
+            3.0144168995320797,
+            2.9685827903449535,
+            2.967457752674818,
+            2.982791978865862,
+            3.1162910163402557,
+            3.2325838692486286
+          ],
+          "tuned": [
+            2.587708178907633,
+            2.700166776776314,
+            2.828709315508604,
+            2.657792065292597,
+            2.5037089362740517,
+            3.598541021347046
+          ]
+        }
+      },
+      {
+        "layer": "16 x 2048",
+        "route": "first",
+        "n": 100000,
+        "before_ms": 1.8422296270728111,
+        "tuned_ms": 1.4609582722187042,
+        "before_build": [
+          true,
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "tuned_build": [
+          false,
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        "equality": true,
+        "samples_ms": {
+          "before": [
+            1.8528341315686703,
+            1.8323748372495174,
+            1.8291249871253967,
+            1.8520844168961048,
+            1.8308344297111034,
+            1.9848328083753586
+          ],
+          "tuned": [
+            1.4583747833967209,
+            1.445541623979807,
+            1.477207988500595,
+            1.4491667971014977,
+            1.4635417610406876,
+            1.471084076911211
+          ]
+        }
+      }
+    ],
+    "exact_join_followup": [
+      {
+        "case": "1M \u00d7 260",
+        "vertices": 2048,
+        "before_ms": 163.02343737334013,
+        "tuned_ms": 161.96872969157994,
+        "before_samples_ms": [
+          160.93129105865955,
+          173.6515830270946,
+          159.99108320102096,
+          165.1155836880207,
+          158.1996656022966,
+          166.3542496971786,
+          158.63054199144244,
+          167.4243751913309
+        ],
+        "tuned_samples_ms": [
+          170.13408290222287,
+          161.3305420614779,
+          162.60691732168198,
+          155.64308315515518,
+          172.0619169063866,
+          155.98837472498417,
+          164.6666657179594,
+          155.15495790168643
+        ],
+        "equality": true
+      },
+      {
+        "case": "1M \u00d7 1",
+        "vertices": 150000,
+        "before_ms": 89.95885448530316,
+        "tuned_ms": 91.5355202741921,
+        "before_samples_ms": [
+          94.83545878902078,
+          114.77270815521479,
+          93.6705837957561,
+          86.6092499345541,
+          88.6597502976656,
+          91.05516690760851,
+          88.58254086226225,
+          88.86254206299782
+        ],
+        "tuned_samples_ms": [
+          91.01424971595407,
+          98.19958405569196,
+          100.91704176738858,
+          88.02483417093754,
+          92.93641708791256,
+          92.05679083243012,
+          87.60770875960588,
+          90.45845828950405
+        ],
+        "equality": true
+      }
+    ]
+  },
+  "m1": {
+    "exact_cases": [
+      {
+        "points": 100000,
+        "polygons": 260,
+        "vertices": 48,
+        "rows": 109267,
+        "before_mlx_ms": 21.516039967536926,
+        "tuned_mlx_ms": 24.666456505656242,
+        "before_geopandas_ms": 84.65083502233028,
+        "tuned_geopandas_ms": 89.5603746175766,
+        "mlx_elapsed_change_percent": 14.642176454740818,
+        "tuned_speedup_over_geopandas": 3.630856933059663
+      },
+      {
+        "points": 1000000,
+        "polygons": 260,
+        "vertices": 48,
+        "rows": 1076307,
+        "before_mlx_ms": 150.08820965886116,
+        "tuned_mlx_ms": 148.84908311069012,
+        "before_geopandas_ms": 1666.2910431623459,
+        "tuned_geopandas_ms": 1627.8974991291761,
+        "mlx_elapsed_change_percent": -0.8255988601552966,
+        "tuned_speedup_over_geopandas": 10.936563834381207
+      },
+      {
+        "points": 10000000,
+        "polygons": 260,
+        "vertices": 48,
+        "rows": 10689126,
+        "before_mlx_ms": 2566.126376390457,
+        "tuned_mlx_ms": 2216.205667704344,
+        "before_geopandas_ms": 22466.58987365663,
+        "tuned_geopandas_ms": 21536.79408505559,
+        "mlx_elapsed_change_percent": -13.636144809762484,
+        "tuned_speedup_over_geopandas": 9.717867975387174
+      },
+      {
+        "points": 1000000,
+        "polygons": 10000,
+        "vertices": 48,
+        "rows": 1121558,
+        "before_mlx_ms": 283.35729241371155,
+        "tuned_mlx_ms": 246.31433375179768,
+        "before_geopandas_ms": 1782.330835238099,
+        "tuned_geopandas_ms": 1563.8741683214903,
+        "mlx_elapsed_change_percent": -13.072879948270344,
+        "tuned_speedup_over_geopandas": 6.349099317530386
+      },
+      {
+        "points": 1000000,
+        "polygons": 260,
+        "vertices": 2048,
+        "rows": 1076107,
+        "before_mlx_ms": 253.8154162466526,
+        "tuned_mlx_ms": 233.0577913671732,
+        "before_geopandas_ms": 1744.641626253724,
+        "tuned_geopandas_ms": 1571.669915691018,
+        "mlx_elapsed_change_percent": -8.17823644695702,
+        "tuned_speedup_over_geopandas": 6.743691796233129
+      },
+      {
+        "points": 1000000,
+        "polygons": 1,
+        "vertices": 150000,
+        "rows": 217315,
+        "before_mlx_ms": 151.7921630293131,
+        "tuned_mlx_ms": 143.97083409130573,
+        "before_geopandas_ms": 2838.656334206462,
+        "tuned_geopandas_ms": 2717.609668150544,
+        "mlx_elapsed_change_percent": -5.1526566206826825,
+        "tuned_speedup_over_geopandas": 18.876112549483786
+      }
+    ],
+    "exact_median_speedup": 8.23077988581015,
+    "components": {
+      "workload_deltas": [],
+      "crossover_deltas": [],
+      "reports": 12,
+      "crossover_timings": 144,
+      "total_timings": 208,
+      "exceptions": [],
+      "missing": []
+    },
+    "tests": "825 passed, 1 skipped in 36.33s",
+    "public_pip": [
+      {
+        "points": 1024,
+        "before_cold_ms": 0.87,
+        "tuned_cold_ms": 0.86,
+        "before_warm_ms": 1.26,
+        "tuned_warm_ms": 1.23
+      },
+      {
+        "points": 2048,
+        "before_cold_ms": 0.9,
+        "tuned_cold_ms": 0.87,
+        "before_warm_ms": 0.99,
+        "tuned_warm_ms": 0.97
+      },
+      {
+        "points": 4096,
+        "before_cold_ms": 0.91,
+        "tuned_cold_ms": 0.87,
+        "before_warm_ms": 0.99,
+        "tuned_warm_ms": 0.97
+      },
+      {
+        "points": 4097,
+        "before_cold_ms": 0.89,
+        "tuned_cold_ms": 0.88,
+        "before_warm_ms": 1.04,
+        "tuned_warm_ms": 0.99
+      },
+      {
+        "points": 8192,
+        "before_cold_ms": 0.94,
+        "tuned_cold_ms": 0.94,
+        "before_warm_ms": 1.03,
+        "tuned_warm_ms": 1.1
+      },
+      {
+        "points": 16384,
+        "before_cold_ms": 1.05,
+        "tuned_cold_ms": 1.04,
+        "before_warm_ms": 1.04,
+        "tuned_warm_ms": 1.06
+      },
+      {
+        "points": 32768,
+        "before_cold_ms": 1.3,
+        "tuned_cold_ms": 1.25,
+        "before_warm_ms": 1.15,
+        "tuned_warm_ms": 1.13
+      },
+      {
+        "points": 50000,
+        "before_cold_ms": 1.52,
+        "tuned_cold_ms": 1.52,
+        "before_warm_ms": 1.22,
+        "tuned_warm_ms": 1.22
+      },
+      {
+        "points": 65536,
+        "before_cold_ms": 32.69,
+        "tuned_cold_ms": 1.78,
+        "before_warm_ms": 1.72,
+        "tuned_warm_ms": 1.28
+      }
+    ],
+    "other_public_workloads": [
+      {
+        "operation": "sjoin 1M x 260 (48v, narrow, inner, all) cold",
+        "before_ms": 52.6,
+        "tuned_ms": 50.1
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, narrow, inner, all) prepare",
+        "before_ms": 1.2,
+        "tuned_ms": 1.1
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, narrow, inner, all) first prepared",
+        "before_ms": 47.8,
+        "tuned_ms": 51.3
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, narrow, inner, all) warm",
+        "before_ms": 46.3,
+        "tuned_ms": 47.0
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, narrow, left, all) cold",
+        "before_ms": 84.8,
+        "tuned_ms": 84.7
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, narrow, left, all) prepare",
+        "before_ms": 1.1,
+        "tuned_ms": 1.1
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, narrow, left, all) first prepared",
+        "before_ms": 80.7,
+        "tuned_ms": 84.5
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, narrow, left, all) warm",
+        "before_ms": 81.9,
+        "tuned_ms": 83.0
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, wide, inner, all) cold",
+        "before_ms": 80.0,
+        "tuned_ms": 81.4
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, wide, inner, all) prepare",
+        "before_ms": 1.4,
+        "tuned_ms": 1.4
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, wide, inner, all) first prepared",
+        "before_ms": 83.5,
+        "tuned_ms": 80.9
+      },
+      {
+        "operation": "sjoin 1M x 260 (48v, wide, inner, all) warm",
+        "before_ms": 79.8,
+        "tuned_ms": 80.9
+      },
+      {
+        "operation": "sjoin 1M x 260 (2048v, narrow, inner, all) cold",
+        "before_ms": 130.6,
+        "tuned_ms": 125.3
+      },
+      {
+        "operation": "sjoin 1M x 260 (2048v, narrow, inner, all) prepare",
+        "before_ms": 8.6,
+        "tuned_ms": 8.4
+      },
+      {
+        "operation": "sjoin 1M x 260 (2048v, narrow, inner, all) first prepared",
+        "before_ms": 122.6,
+        "tuned_ms": 118.8
+      },
+      {
+        "operation": "sjoin 1M x 260 (2048v, narrow, inner, all) warm",
+        "before_ms": 63.3,
+        "tuned_ms": 61.0
+      },
+      {
+        "operation": "sjoin 100k x 260 (2048v, narrow, inner, all) cold",
+        "before_ms": 72.6,
+        "tuned_ms": 70.7
+      },
+      {
+        "operation": "sjoin 100k x 260 (2048v, narrow, inner, all) prepare",
+        "before_ms": 8.5,
+        "tuned_ms": 8.5
+      },
+      {
+        "operation": "sjoin 100k x 260 (2048v, narrow, inner, all) first prepared",
+        "before_ms": 62.1,
+        "tuned_ms": 61.7
+      },
+      {
+        "operation": "sjoin 100k x 260 (2048v, narrow, inner, all) warm",
+        "before_ms": 9.8,
+        "tuned_ms": 9.9
+      },
+      {
+        "operation": "sjoin 1M x 10k (48v, narrow, inner, all) cold",
+        "before_ms": 108.0,
+        "tuned_ms": 108.3
+      },
+      {
+        "operation": "sjoin 1M x 10k (48v, narrow, inner, all) prepare",
+        "before_ms": 24.4,
+        "tuned_ms": 23.6
+      },
+      {
+        "operation": "sjoin 1M x 10k (48v, narrow, inner, all) first prepared",
+        "before_ms": 88.6,
+        "tuned_ms": 83.7
+      },
+      {
+        "operation": "sjoin 1M x 10k (48v, narrow, inner, all) warm",
+        "before_ms": 60.8,
+        "tuned_ms": 59.3
+      },
+      {
+        "operation": "sjoin 1M x 260 (2048v, narrow, inner, first) cold",
+        "before_ms": 113.4,
+        "tuned_ms": 111.0
+      },
+      {
+        "operation": "sjoin 1M x 260 (2048v, narrow, inner, first) prepare",
+        "before_ms": 8.8,
+        "tuned_ms": 8.6
+      },
+      {
+        "operation": "sjoin 1M x 260 (2048v, narrow, inner, first) first prepared",
+        "before_ms": 102.3,
+        "tuned_ms": 102.8
+      },
+      {
+        "operation": "sjoin 1M x 260 (2048v, narrow, inner, first) warm",
+        "before_ms": 45.3,
+        "tuned_ms": 44.7
+      },
+      {
+        "operation": "kNN 1 raw",
+        "before_ms": 47.87,
+        "tuned_ms": 46.77
+      },
+      {
+        "operation": "kNN 1 prepared",
+        "before_ms": 6.27,
+        "tuned_ms": 6.53
+      },
+      {
+        "operation": "kNN 10 raw",
+        "before_ms": 46.71,
+        "tuned_ms": 45.43
+      },
+      {
+        "operation": "kNN 10 prepared",
+        "before_ms": 5.66,
+        "tuned_ms": 5.5
+      },
+      {
+        "operation": "kNN 100 raw",
+        "before_ms": 8.96,
+        "tuned_ms": 8.74
+      },
+      {
+        "operation": "kNN 100 prepared",
+        "before_ms": 5.61,
+        "tuned_ms": 5.58
+      },
+      {
+        "operation": "kNN 500 raw",
+        "before_ms": 8.84,
+        "tuned_ms": 8.85
+      },
+      {
+        "operation": "kNN 500 prepared",
+        "before_ms": 5.62,
+        "tuned_ms": 5.53
+      },
+      {
+        "operation": "kNN 1,000 raw",
+        "before_ms": 11.99,
+        "tuned_ms": 11.89
+      },
+      {
+        "operation": "kNN 1,000 prepared",
+        "before_ms": 8.68,
+        "tuned_ms": 8.55
+      },
+      {
+        "operation": "kNN 4,096 raw",
+        "before_ms": 46.24,
+        "tuned_ms": 46.19
+      },
+      {
+        "operation": "kNN 4,096 prepared",
+        "before_ms": 42.59,
+        "tuned_ms": 44.16
+      },
+      {
+        "operation": "all-match cap default",
+        "before_ms": 4.1,
+        "tuned_ms": 3.74
+      },
+      {
+        "operation": "all-match cap 65,536",
+        "before_ms": 5.64,
+        "tuned_ms": 5.37
+      },
+      {
+        "operation": "all-match cap 8,192",
+        "before_ms": 20.93,
+        "tuned_ms": 23.01
+      },
+      {
+        "operation": "all-match cap 2,048",
+        "before_ms": 60.72,
+        "tuned_ms": 80.48
+      }
+    ],
+    "dispatch_ab_cases": 96,
+    "dispatch_changed_cases": 36,
+    "dispatch_changed_speedup_median": 1.832243756510162,
+    "dispatch_changed_largest_slowdowns": [
+      {
+        "layer": "260 x 4096",
+        "route": "all",
+        "n": 262144,
+        "before_ms": 65.85187371820211,
+        "tuned_ms": 72.57237564772367,
+        "before_build": [
+          true,
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "tuned_build": [
+          false,
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        "equality": true,
+        "samples_ms": {
+          "before": [
+            65.6307078897953,
+            66.17958098649979,
+            65.419752150774,
+            66.37375056743622,
+            65.15845842659473,
+            66.07303954660892
+          ],
+          "tuned": [
+            67.0058336108923,
+            78.57008278369904,
+            71.45200110971928,
+            74.80454072356224,
+            68.70758160948753,
+            73.69275018572807
+          ]
+        }
+      },
+      {
+        "layer": "16 x 2048",
+        "route": "first",
+        "n": 262144,
+        "before_ms": 3.4046247601509094,
+        "tuned_ms": 3.9582280442118645,
+        "before_build": [
+          true,
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "tuned_build": [
+          false,
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        "equality": true,
+        "samples_ms": {
+          "before": [
+            3.457041457295418,
+            3.3227503299713135,
+            3.4777484834194183,
+            3.381039947271347,
+            3.428209573030472,
+            3.3050812780857086
+          ],
+          "tuned": [
+            3.972915932536125,
+            3.934251144528389,
+            4.007624462246895,
+            3.910291939973831,
+            3.9435401558876038,
+            3.9852503687143326
+          ]
+        }
+      },
+      {
+        "layer": "16 x 2048",
+        "route": "first",
+        "n": 100000,
+        "before_ms": 2.921021543443203,
+        "tuned_ms": 2.285917289555073,
+        "before_build": [
+          true,
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "tuned_build": [
+          false,
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        "equality": true,
+        "samples_ms": {
+          "before": [
+            2.9206257313489914,
+            2.92850099503994,
+            2.8998740017414093,
+            2.9214173555374146,
+            3.0549559742212296,
+            2.8913356363773346
+          ],
+          "tuned": [
+            2.285623922944069,
+            2.309083938598633,
+            2.2862106561660767,
+            2.3904144763946533,
+            2.279834821820259,
+            2.2844597697257996
+          ]
+        }
+      }
+    ]
+  }
+}

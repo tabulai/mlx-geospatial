@@ -1,0 +1,46 @@
+machine: Apple M1 Ultra, 20 cores (16 performance + 4 efficiency), macOS 26.5.1, mlx 0.32.4, Python 3.14.2
+package: mlx_geospatial/__init__.py; seed: 0
+
+### 1. First-match detailed polygons (260 zones x 2,048 vertices)
+     points     cold edge cache   warm edge cache  cold route
+      1,024             0.86 ms           1.23 ms  traverse
+      2,048             0.87 ms           0.97 ms  traverse
+      4,096             0.87 ms           0.97 ms  traverse
+      4,097             0.88 ms           0.99 ms  traverse
+      8,192             0.94 ms           1.10 ms  traverse
+     16,384             1.04 ms           1.06 ms  traverse
+     32,768             1.25 ms           1.13 ms  traverse
+     50,000             1.52 ms           1.22 ms  traverse
+     65,536             1.78 ms           1.28 ms  traverse
+    100,000            10.43 ms           1.58 ms  traverse
+    262,144            23.16 ms           2.91 ms  traverse
+    524,288            38.24 ms           4.79 ms  build index
+  1,000,000            43.82 ms           8.85 ms  build index
+  96 × 32,768 points: 146.56 ms total, index built on batch 80 (31.86 ms); last 10 median 1.04 ms; equality=PASS
+
+### 2. Public ms.sjoin & PreparedJoin (exact_boundary=True, predicate='within')
+  case                                          cold     prep     warm1      warm   ratio        gpd
+  1M x 260 (48v, narrow, inner, all)         50.1 ms   1.1 ms   51.3 ms   47.0 ms   1.07x  1608.1 ms  1,078,621 rows, equality=PASS
+  1M x 260 (48v, narrow, left, all)          84.7 ms   1.1 ms   84.5 ms   83.0 ms   1.02x        n/a  1,431,644 rows, equality=PASS
+  1M x 260 (48v, wide, inner, all)           81.4 ms   1.4 ms   80.9 ms   80.9 ms   1.01x        n/a  1,087,428 rows, equality=PASS
+  1M x 260 (2048v, narrow, inner, all)      125.3 ms   8.4 ms  118.8 ms   61.0 ms   2.05x  1510.7 ms  1,094,998 rows, equality=PASS
+  100k x 260 (2048v, narrow, inner, all)     70.7 ms   8.5 ms   61.7 ms    9.9 ms   7.18x   106.4 ms  107,059 rows, equality=PASS
+  1M x 10k (48v, narrow, inner, all)        108.3 ms  23.6 ms   83.7 ms   59.3 ms   1.82x  1418.2 ms  1,120,151 rows, equality=PASS
+  1M x 260 (2048v, narrow, inner, first)    111.0 ms   8.6 ms  102.8 ms   44.7 ms   2.49x        n/a  673,018 rows, equality=PASS
+
+### 3. haversine_knn with HaversineReference (m=1,000,000 refs, k=10)
+  prepare HaversineReference (1M): 3.75 ms
+  BallTree build (1M): 442.7 ms
+   queries     raw knn    prepared   speedup    BallTree
+         1    46.77 ms     6.53 ms     7.16x     0.10 ms  equality=PASS
+        10    45.43 ms     5.50 ms     8.26x     0.20 ms  equality=PASS
+       100     8.74 ms     5.58 ms     1.57x     1.44 ms  equality=PASS
+       500     8.85 ms     5.53 ms     1.60x     8.69 ms  equality=PASS
+     1,000    11.89 ms     8.55 ms     1.39x    17.55 ms  equality=PASS
+     4,096    46.19 ms    44.16 ms     1.05x    73.55 ms  equality=PASS
+
+### 4. All-match batching (100k points x 260 zones, 48 vertices)
+  cap default:   3.74 ms, 108,585 pairs, equality=PASS
+  cap  65,536:   5.37 ms, 108,585 pairs, equality=PASS
+  cap   8,192:  23.01 ms, 108,585 pairs, equality=PASS
+  cap   2,048:  80.48 ms, 108,585 pairs, equality=PASS

@@ -14,9 +14,11 @@ All examples use `import mlx_geospatial as ms`.
 | `point_in_polygon(points, polygons, all_matches=True)` | Two int64 arrays, `(point_indices, polygon_indices)`, sorted by point and then polygon. |
 | `contains_matrix(points, polygons)` | An `(N, M)` boolean matrix. Best for small polygon collections. |
 | `sjoin(left, right)` | Left table rows with `index_right` and the right table's non-geometry columns. At most one match per point by default; `all_matches=True` returns every matching polygon. |
+| `PreparedJoin(right)` | Reusable right-hand layer caching the index, labels, and right attributes for repeated `sjoin` calls. |
 | `haversine(a, b)` | Elementwise or broadcast distances. |
 | `haversine_cross(a, b)` | An `(N, M)` distance matrix. |
 | `haversine_knn(query, reference, k)` | `(distances, indices)`, each `(N, k)`, sorted by increasing distance per row. |
+| `HaversineReference(reference)` | Precomputed GPU reference set (radians, unit vectors, bounds) for repeated `haversine_knn` searches. |
 
 Polygon indices are zero-based positions in the input collection, not
 GeoDataFrame index labels. If polygons overlap, first-match queries choose
@@ -141,6 +143,20 @@ with missing right-side values. `predicate="intersects"` is the default;
 `predicate="within"` excludes boundary points when `exact_boundary=True`.
 Use `point_in_polygon(..., all_matches=True)` when only pair arrays are needed.
 
+When joining repeated point batches against the same polygon table, prepare the
+right-hand layer once with `PreparedJoin` so the `PolygonSet`, `GridIndex`,
+exact-boundary caches, row labels, and attributes are reused across calls:
+
+```python
+prepared = ms.PreparedJoin(polygons_df)
+joined_a = ms.sjoin(batch_a, prepared, all_matches=True, exact_boundary=True)
+joined_b = prepared.sjoin(batch_b, all_matches=True, exact_boundary=True)
+```
+
+`PreparedJoin` snapshots the right table's geometries, index labels, and
+attribute arrays at construction time, so later edits to `polygons_df` do not
+affect subsequent joins.
+
 ## Boundaries and precision
 
 GPU containment uses float32 arithmetic. To preserve useful precision,
@@ -264,6 +280,21 @@ large reference sets. `k` must be an integer from 1 through the reference
 count. Near-ties at float32 distance resolution can select either neighbor.
 NaN reference rows are excluded; unfillable slots, including NaN query
 rows, return index `-1` and distance `inf`.
+
+For repeated nearest-neighbor searches against the same landmarks, construct a
+`HaversineReference` once to cache the float32 radians, unit-sphere vectors,
+latitude cosines, and coordinate bounds on the GPU:
+
+```python
+ref = ms.HaversineReference(landmarks)          # degrees=True by default
+dist, idx = ms.haversine_knn(queries, ref, k=10)
+dist, idx = ref.knn(queries, k=10)              # equivalent shorthand
+```
+
+The reference coordinates are snapshotted at construction time. When passing a
+`HaversineReference` to `haversine_knn`, `degrees=` applies only
+to `query` (the reference coordinates were already converted when the
+`HaversineReference` was created).
 
 ## Other helpers
 

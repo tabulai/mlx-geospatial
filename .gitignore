@@ -11,5 +11,6 @@ venv/
 bench/results/*
 !bench/results/2026-10-19-full-e2e/
 !bench/results/2026-10-19-opus-speedups/
+!bench/results/2026-11-21-cold-edge/
 bench/data/
 docs/site/
